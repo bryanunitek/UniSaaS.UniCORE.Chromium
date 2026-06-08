@@ -1,21 +1,89 @@
-# ![Logo](chrome/app/theme/chromium/product_logo_64.png) Chromium
+# UniSaaS.UniCORE.Chromium
 
-Chromium is an open-source browser project that aims to build a safer, faster,
-and more stable way for all users to experience the web.
+**SCAFFOLD-ANCHOR repository — initial scaffold 2026-06-04.**
 
-The project's web site is https://www.chromium.org.
+Full scaffolding, upstream-fork integration, and source-code work all pending a fresh dedicated kickoff arc. This initial commit exists to lock the repository's identity, licence position, and place in the UniCORE Sanity Check fleet so the work cannot be forgotten.
 
-To check out the source code locally, don't use `git clone`! Instead,
-follow [the instructions on how to get the code](docs/get_the_code.md).
+Author: **Bryan Fred, Unitek Systems Limited, Bedford, United Kingdom.**
+First commit: **2026-06-04 17:45 UTC.**
 
-Documentation in the source is rooted in [docs/README.md](docs/README.md).
+---
 
-Learn how to [Get Around the Chromium Source Code Directory
-Structure](https://www.chromium.org/developers/how-tos/getting-around-the-chrome-source-code).
+## What this repository is
 
-For historical reasons, there are some small top level directories. Now the
-guidance is that new top level directories are for product (e.g. Chrome,
-Android WebView, Ash). Even if these products have multiple executables, the
-code should be in subdirectories of the product.
+`bryanunitek/UniSaaS.UniCORE.Chromium` is the **Chromium** family member: SaaS-deployment-shape public gift surface. Documentation today; source code at certification.
 
-If you found a bug, please file it at https://crbug.com/new.
+**Family purpose:** Open-source browser engine — Chromium fork for UniCORE.Desktop hardened browser provisioning.
+
+**Deployment shape:** This is the **SaaS-shape** member of the family. It tracks the same upstream codebase as [`UniCORE.Chromium`](https://github.com/bryanunitek/UniCORE.Chromium) (on-prem shape) but carries SaaS-specific configuration, multi-tenant isolation patterns, and cloud-native deployment artefacts.
+
+---
+
+## Upstream
+
+- **Upstream project:** https://github.com/chromium/chromium
+- **Upstream licence:** BSD-3-Clause
+- **Our relationship:** Fork-and-extend. Upstream codebase is consumed verbatim under its original licence; our additions sit on top under CC BY 4.0.
+
+The merge discipline that governs how this repository absorbs upstream changes is documented in [`UPSTREAM-MERGE-DISCIPLINE.md`](UPSTREAM-MERGE-DISCIPLINE.md).
+
+---
+
+## Platforms
+
+Windows · Linux · macOS · iOS · Android
+
+---
+
+## Family — the four-repo pattern
+
+UniCORE.Chromium is published as a **four-repo family**:
+
+- `bryanunitek/UniCORE.Chromium` — public on-prem-deployment-shape gift surface
+- `bryanunitek/UniSaaS.UniCORE.Chromium` — public SaaS-deployment-shape gift surface ← **this repo**
+- `bryanunitek/UniCORE.Chromium-Claw` (private) — on-prem-shape working repository
+- `bryanunitek/UniSaaS.UniCORE.Chromium-Claw` (private) — SaaS-shape working repository
+
+---
+
+## Status
+
+**SCAFFOLD-ANCHOR** as of 2026-06-04. See [`STATUS.md`](STATUS.md) for the full status breakdown.
+
+---
+
+## Files in this scaffold commit
+
+- [`README.md`](README.md) — this file
+- [`LICENSE.md`](LICENSE.md) — UniCORE additions licence
+- [`STATUS.md`](STATUS.md) — scaffold-anchor status
+- [`UPSTREAM-MERGE-DISCIPLINE.md`](UPSTREAM-MERGE-DISCIPLINE.md) — canonical merge discipline
+- [`AI-AUTHORSHIP.md`](AI-AUTHORSHIP.md) — AI authorship disclosure
+
+---
+
+## Related repositories — UniCORE programme
+
+**Foundation triad (gift, public, CC BY 4.0):**
+- [`UniVERSE`](https://github.com/bryanunitek/UniVERSE) — programme
+- [`TrueAI`](https://github.com/bryanunitek/TrueAI) — Foundation (Nine Invariants)
+- [`UniCORE-AI`](https://github.com/bryanunitek/UniCORE-AI) — reference architecture (12 Levels)
+
+**Implementation reference (deployment-shape pair):**
+- [`UniCORE`](https://github.com/bryanunitek/UniCORE) — on-prem-shape
+- [`UniSaaS.UniCORE`](https://github.com/bryanunitek/UniSaaS.UniCORE) — SaaS-shape
+
+**Substrate-services layer (deployment-shape pair):**
+- [`UniCORE.GVB`](https://github.com/bryanunitek/UniCORE.GVB) — on-prem-shape
+- [`UniSaaS.UniCORE.GVB`](https://github.com/bryanunitek/UniSaaS.UniCORE.GVB) — SaaS-shape
+
+---
+
+## Contact
+
+- **Public discussion:** [GitHub Discussions](https://github.com/bryanunitek/UniSaaS.UniCORE.Chromium/discussions)
+- **Private contact / connection request:** [LinkedIn — Bryan Fred](https://www.linkedin.com/in/bryan-fred-02209753/)
+
+---
+
+*Author: Bryan Fred, Unitek Systems Limited, Bedford, United Kingdom. Public. Given, not sold. Irrevocable.*
