@@ -7,10 +7,10 @@ This repository is a **forward-only fork-anchor** of upstream `chromium/chromium
 | Field | Value |
 |---|---|
 | Upstream | https://github.com/chromium/chromium |
-| Anchor tag | `151.0.7882.0` |
-| Upstream tag SHA | `0851a16cd98e24e49d354a87632d7900368aedc3` |
+| Anchor tag | `152.0.7947.0` |
+| Upstream tag SHA | `18aeeb51dd7e909510d599bee93599bf91ef9ef9` |
 | Anchor commit on `main` | re-rooted as orphan (single-commit anchor) |
-| Reshape date | 2026-06-08 UTC |
+| Reshape date | 2026-07-13 UTC |
 
 ## Why an anchor, not full history
 
@@ -30,4 +30,4 @@ See `UPSTREAM-MERGE-DISCIPLINE.md` for the full canonical procedure.
 
 ## Pre-anchor history
 
-Pre-anchor history (every commit upstream produced before tag `151.0.7882.0`) is available at https://github.com/chromium/chromium and is not redundantly stored in this repository.
+Pre-anchor history (every commit upstream produced before tag `152.0.7947.0`) is available at https://github.com/chromium/chromium and is not redundantly stored in this repository.
