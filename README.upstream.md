@@ -6,9 +6,9 @@ and more stable way for all users to experience the web.
 The project's web site is https://www.chromium.org.
 
 To check out the source code locally, don't use `git clone`! Instead,
-follow [the instructions on how to get the code](docs/get_the_code.md).
+follow [the instructions on how to get the code](https://git.unitek-systems.com/UniCORE/UniSaaS.UniCORE.Chromium/src/branch/main/docs/get_the_code.md) (mirror: [GitHub](https://github.com/bryanunitek/UniSaaS.UniCORE.Chromium/blob/main/docs/get_the_code.md)).
 
-Documentation in the source is rooted in [docs/README.md](docs/README.md).
+Documentation in the source is rooted in [docs/README.md](https://git.unitek-systems.com/UniCORE/UniSaaS.UniCORE.Chromium/src/branch/main/docs/README.md) (mirror: [GitHub](https://github.com/bryanunitek/UniSaaS.UniCORE.Chromium/blob/main/docs/README.md)).
 
 Learn how to [Get Around the Chromium Source Code Directory
 Structure](https://www.chromium.org/developers/how-tos/getting-around-the-chrome-source-code).
