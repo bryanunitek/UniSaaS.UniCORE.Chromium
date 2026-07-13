@@ -14,6 +14,10 @@
 
 class GURL;
 
+namespace optimization_guide::proto {
+class RequestContextMetadata;
+}  // namespace optimization_guide::proto
+
 namespace multistep_filter {
 
 class ExtractTaskAttributesRequest;
@@ -43,6 +47,11 @@ GetTaskExecutionStrategiesRequest ToGetTaskExecutionStrategiesRequest(
     const GURL& url,
     base::span<const FilterAnnotation> filter_annotations);
 
+// Converts a list of `FilterAnnotation`s into a
+// `RequestContextMetadata` proto.
+optimization_guide::proto::RequestContextMetadata ToRequestContextMetadata(
+    base::span<const FilterAnnotation> filter_annotations);
+
 // Converts a `GetTaskExecutionStrategiesResponse` proto into a list of
 // `FilterSuggestionCandidate` data models.
 std::vector<FilterSuggestionCandidate> ToFilterSuggestionCandidates(
@@ -51,9 +60,10 @@ std::vector<FilterSuggestionCandidate> ToFilterSuggestionCandidates(
 // Converts a URL into an `ExtractTaskAttributesRequest` proto.
 ExtractTaskAttributesRequest ToExtractTaskAttributesRequest(const GURL& url);
 
-// Converts an `ExtractTaskAttributesResponse` proto into a `FilterAnnotation`
-// data model.
+// Converts a URL and an `ExtractTaskAttributesResponse` proto into a
+// `FilterAnnotation` data model.
 std::optional<FilterAnnotation> ToFilterAnnotation(
+    const GURL& url,
     const ExtractTaskAttributesResponse& response);
 
 }  // namespace multistep_filter

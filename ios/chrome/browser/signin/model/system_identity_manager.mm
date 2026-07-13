@@ -125,11 +125,9 @@ bool SystemIdentityManager::IsScopeLimitedError(
   return false;
 }
 
-// TODO(crbug.com/512029456): Remove.
-void SystemIdentityManager::FetchCapabilitiesWithPartial(
+bool SystemIdentityManager::DisplayMDMNotification(
     id<SystemIdentity> identity,
-    const std::vector<std::string>& names,
-    FetchCapabilitiesCompletion completion,
-    FetchPartialCapabilitiesCallback partial_callback) {
-  NOTREACHED();
+    const GoogleServiceAuthError& error,
+    HandleMDMCallback callback) {
+  return false;
 }

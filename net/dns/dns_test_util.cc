@@ -47,6 +47,9 @@
 #include "url/scheme_host_port.h"
 
 namespace net {
+
+class NetworkAnonymizationKey;
+
 namespace {
 
 constexpr auto kMalformedResponseHeader = std::to_array<uint8_t>({
@@ -86,7 +89,11 @@ class MockAddressSorter : public AddressSorter {
  public:
   ~MockAddressSorter() override = default;
   void Sort(const std::vector<IPEndPoint>& endpoints,
+            const NetworkAnonymizationKey& anonymization_key,
+            handles::NetworkHandle target_network,
             CallbackType callback) const override {
+    // This is used only for testing in scenarios that do not involve multiple
+    // networks. With that in mind, it's safe to ignore `target_network`.
     // Do nothing.
     std::move(callback).Run(true, endpoints);
   }

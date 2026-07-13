@@ -45,25 +45,10 @@ BASE_FEATURE(kApproximateGeolocationPermission,
 #endif
 );
 
-BASE_FEATURE(kUserBypassUI, base::FEATURE_ENABLED_BY_DEFAULT);
-
-const base::FeatureParam<base::TimeDelta> kUserBypassUIExceptionExpiration{
-    &kUserBypassUI, "expiration", base::Days(90)};
-
-const base::FeatureParam<int> kUserBypassUIReloadCount{&kUserBypassUI,
-                                                       "reload-count", 2};
-
-const base::FeatureParam<base::TimeDelta> kUserBypassUIReloadTime{
-    &kUserBypassUI, "reload-time", base::Seconds(30)};
-
-const base::FeatureParam<base::TimeDelta> kUserBypassUIReloadBubbleTimeout{
-    &kUserBypassUI, "reload-bubble-timeout", base::Seconds(5)};
-
-BASE_FEATURE(kUserBypassFeedback, base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kUserBypassUxSimplification, base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kLeftHandSideActivityIndicators, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLeftHandSideSensorActivityIndicators,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace features
 }  // namespace content_settings

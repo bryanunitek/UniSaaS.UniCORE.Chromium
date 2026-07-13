@@ -17,6 +17,7 @@
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
+#include "base/types/pass_key.h"
 #include "components/variations/client_filterable_state.h"
 #include "components/variations/entropy_provider.h"
 #include "components/variations/service/safe_seed_manager.h"
@@ -52,6 +53,10 @@ namespace variations {
 struct StudyGroupNames;
 class VariationsSeed;
 }  // namespace variations
+
+namespace metrics {
+class RuntimeMutableFeaturesHandlerBase;
+}
 
 namespace variations {
 
@@ -175,6 +180,10 @@ class VariationsService
   // Exposed for testing.
   static std::string GetDefaultVariationsServerURLForTesting();
 
+  static base::PassKey<VariationsService> CreatePassKeyForTesting() {
+    return base::PassKey<VariationsService>();
+  }
+
   // Register Variations related prefs in Local State.
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
@@ -241,6 +250,14 @@ class VariationsService
   VariationsSource GetVariationsSource() const;
 
   int request_count() const { return request_count_; }
+
+  // Pauses or resumes variations seed fetching.
+  void SetSeedFetchingPaused(
+      base::PassKey<metrics::RuntimeMutableFeaturesHandlerBase> pass_key,
+      bool paused);
+
+  // Returns true if variations seed fetching is paused.
+  bool IsSeedFetchingPaused() const;
 
   // Cancels the currently pending fetch request.
   void CancelCurrentRequestForTesting();
@@ -471,6 +488,9 @@ class VariationsService
   // When not empty, contains an override for the os name in the variations
   // server url.
   std::string osname_server_param_override_;
+
+  // True if variations seed fetching is paused.
+  bool seed_fetching_paused_ = false;
 
 #if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<DeviceVariationsRestrictionByPolicyApplicator>

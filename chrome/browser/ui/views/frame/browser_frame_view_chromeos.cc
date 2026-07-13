@@ -23,7 +23,6 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/ash/session/session_util.h"
-#include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -31,9 +30,9 @@
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/profiles/profile_indicator_icon.h"
@@ -56,7 +55,6 @@
 #include "chromeos/ui/wm/window_util.h"
 #include "components/services/app_service/public/cpp/app_update.h"
 #include "content/public/browser/render_view_host.h"
-#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -75,7 +73,6 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/animation/animation_builder.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/layout/box_layout.h"
@@ -93,30 +90,6 @@ namespace {
 // The indicator for teleported windows has 8 DIPs before and below it.
 constexpr int kProfileIndicatorPadding = 8;
 
-// Returns the layer for the specified `web_view`'s native view.
-ui::Layer* GetNativeViewLayer(views::WebView* web_view) {
-  if (web_view) {
-    if (views::NativeViewHost* holder = web_view->holder(); holder) {
-      if (aura::Window* native_view = holder->native_view(); native_view) {
-        return native_view->layer();
-      }
-    }
-  }
-  return nullptr;
-}
-
-// Returns the render widget host for the specified `web_view`.
-content::RenderWidgetHost* GetRenderWidgetHost(views::WebView* web_view) {
-  if (web_view) {
-    if (auto* web_contents = web_view->GetWebContents(); web_contents) {
-      if (auto* rvh = web_contents->GetRenderViewHost(); rvh) {
-        return rvh->GetWidget();
-      }
-    }
-  }
-  return nullptr;
-}
-
 DEFINE_UI_CLASS_PROPERTY_KEY(BrowserFrameViewChromeOS*,
                              kBrowserFrameViewChromeOSKey,
                              nullptr)
@@ -125,7 +98,8 @@ DEFINE_UI_CLASS_PROPERTY_KEY(BrowserFrameViewChromeOS*,
 // the header used for packaged apps.
 bool UsePackagedAppHeaderStyle(const Browser* browser) {
   if (browser->is_type_normal() ||
-      (browser->is_type_popup() && !browser->is_trusted_source())) {
+      (browser->is_type_popup() &&
+       !WindowFeatureController::From(browser)->IsTrustedSource())) {
     return false;
   }
 
@@ -234,21 +208,28 @@ void BrowserFrameViewChromeOS::Init() {
   window_observation_.Observe(GetFrameWindow());
 
   if (apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(
-          browser->profile())) {
+          browser->GetProfile())) {
     app_registry_cache_observation_.Observe(
-        &apps::AppServiceProxyFactory::GetForProfile(browser->profile())
+        &apps::AppServiceProxyFactory::GetForProfile(browser->GetProfile())
              ->AppRegistryCache());
   }
 
   // To preserve privacy, tag incognito windows so that they won't be included
   // in screenshot sent to assistant server.
-  if (browser->profile()->IsOffTheRecord()) {
+  if (browser->GetProfile()->IsOffTheRecord()) {
     browser_widget()->GetNativeWindow()->SetProperty(
         chromeos::kBlockedForAssistantSnapshotKey, true);
   }
 
   display_observer_.emplace(this);
   frame_header_ = CreateFrameHeader();
+
+  // BrowserFrameViewChromeOS should not paint titles for Web Apps given that
+  // client view (BrowserView) paints/manages the window title for Web Apps.
+  // (See `BrowserView::web_app_window_title_`)
+  if (GetBrowserView()->GetIsWebAppType()) {
+    frame_header_->SetPaintTitleBar(false);
+  }
 
   if (AppIsPwaWithUnframedDisplayMode()) {
     UpdateUnframedModeEnabled();
@@ -279,17 +260,12 @@ BrowserLayoutParams BrowserFrameViewChromeOS::GetBrowserLayoutParams() const {
     params.trailing_exclusion.content =
         gfx::SizeF(width() - caption_bounds.x(), height);
   }
+  MaybeAddAppIconToLayoutParams(params);
   return params;
 }
 
 bool BrowserFrameViewChromeOS::ShouldShowWebAppFrameToolbar() const {
   if (!GetShowCaptionButtons()) {
-    return false;
-  }
-
-  if (GetBrowserView()->browser()->is_type_app_popup() &&
-      !GetBrowserView()->AppUsesWindowControlsOverlay() &&
-      !GetBrowserView()->AppUsesUnframedMode()) {
     return false;
   }
 
@@ -523,9 +499,10 @@ void BrowserFrameViewChromeOS::Layout(PassKey) {
 
 gfx::Size BrowserFrameViewChromeOS::GetMinimumSize() const {
   // System web apps (e.g. Settings) may have a fixed minimum size.
-  Browser* browser = GetBrowserView()->browser();
-  if (ash::IsSystemWebApp(browser)) {
-    gfx::Size minimum_size = ash::GetSystemWebAppMinimumWindowSize(browser);
+  const auto* const swa_delegate =
+      web_app::GetSystemWebAppDelegate(GetBrowserView()->browser());
+  if (swa_delegate) {
+    gfx::Size minimum_size = swa_delegate->GetMinimumWindowSize();
     if (!minimum_size.IsEmpty()) {
       return minimum_size;
     }
@@ -574,7 +551,6 @@ void BrowserFrameViewChromeOS::OnThemeChanged() {
       GetBrowserView()->IsWindowControlsOverlayEnabled(),
       GetFrameHeaderColor(GetBrowserView()->IsActive()));
   BrowserFrameView::OnThemeChanged();
-  MaybeAnimateThemeChanged();
 }
 
 void BrowserFrameViewChromeOS::ChildPreferredSizeChanged(views::View* child) {
@@ -999,7 +975,7 @@ bool BrowserFrameViewChromeOS::GetShowProfileIndicatorIcon() const {
   // between multi-user sessions. Note that you can't teleport an incognito
   // window.
   Browser* browser = GetBrowserView()->browser();
-  if (browser->profile()->IsIncognitoProfile()) {
+  if (browser->GetProfile()->IsIncognitoProfile()) {
     return false;
   }
 
@@ -1027,10 +1003,20 @@ void BrowserFrameViewChromeOS::UpdateProfileIcons() {
     if (needs_layout && root_view) {
       // Adding a child does not invalidate the layout.
       InvalidateLayout();
+      if (GetBrowserView()->GetIsWebAppType()) {
+        // We must invalidate the BrowserView layout as it is responsible for
+        // painting the window title in web apps (See
+        // `BrowserView::web_app_window_title_`).
+        GetBrowserView()->InvalidateLayout();
+      }
       root_view->DeprecatedLayoutImmediately();
     }
   } else if (profile_indicator_icon_) {
     RemoveChildViewT(std::exchange(profile_indicator_icon_, nullptr));
+    InvalidateLayout();
+    if (GetBrowserView()->GetIsWebAppType()) {
+      GetBrowserView()->InvalidateLayout();
+    }
     if (root_view) {
       root_view->DeprecatedLayoutImmediately();
     }
@@ -1066,10 +1052,30 @@ void BrowserFrameViewChromeOS::UpdateWindowRoundedCorners() {
   GetWidget()->client_view()->UpdateWindowRoundedCorners(window_radii);
 }
 
+void BrowserFrameViewChromeOS::MaybeAddAppIconToLayoutParams(
+    BrowserLayoutParams& params) const {
+  if (GetBrowserView()->ShouldShowWindowIcon() && window_icon_) {
+    const auto icon_bounds = window_icon_->bounds();
+    const float icon_right = icon_bounds.right();
+    const float icon_bottom = icon_bounds.bottom();
+
+    // The icon may extend the size of the exclusion area.
+    params.leading_exclusion.content.set_width(
+        std::max(params.leading_exclusion.content.width(), icon_right));
+    params.leading_exclusion.content.set_height(
+        std::max(params.leading_exclusion.content.height(), icon_bottom));
+
+    // Default space between window icon and title text for ChromeOS.
+    // (See `kTitleIconOffsetX` in chromeos/ui/frame/frame_header.cc).
+    params.leading_exclusion.horizontal_padding = 5.f;
+  }
+}
+
 void BrowserFrameViewChromeOS::LayoutProfileIndicator() {
   DCHECK(profile_indicator_icon_);
   const int frame_height =
-      GetTopInset(false) + GetClientFrameElementInfo().top_area_height();
+      GetTopInset(false) +
+      GetClientFrameElementInfo().tabstrip_preferred_height;
   profile_indicator_icon_->SetPosition(
       gfx::Point(kProfileIndicatorPadding,
                  (frame_height - profile_indicator_icon_->height()) / 2));
@@ -1105,78 +1111,6 @@ void BrowserFrameViewChromeOS::OnUpdateFrameColor() {
                       GetFrameColor(BrowserFrameActiveState::kInactive));
 
   frame_header_->UpdateFrameColors();
-}
-
-void BrowserFrameViewChromeOS::MaybeAnimateThemeChanged() {
-  if (!GetBrowserView()) {
-    return;
-  }
-
-  Browser* browser = GetBrowserView()->browser();
-
-  // Theme change events are only animated for system web apps which explicitly
-  // request the behavior.
-  bool animate_theme_change_for_swa =
-      ash::IsSystemWebApp(browser) &&
-      web_app::AppBrowserController::From(browser)
-          ->system_app()
-          ->ShouldAnimateThemeChanges();
-  if (!animate_theme_change_for_swa) {
-    return;
-  }
-
-  views::WebView* web_view = GetBrowserView()->contents_web_view();
-  ui::Layer* layer = GetNativeViewLayer(web_view);
-  content::RenderWidgetHost* render_widget_host = GetRenderWidgetHost(web_view);
-  if (!layer || !render_widget_host) {
-    return;
-  }
-
-  // Immediately hide the layer associated with the `contents_web_view()` native
-  // view so that repainting of the web contents (which is janky) is hidden from
-  // user. Note that opacity is set just above `0.f` to pass a DCHECK that
-  // exists in `aura::Window` that might otherwise be tripped when changing
-  // window visibility (see https://crbug.com/41094269).
-  layer->SetOpacity(std::nextafter(0.f, 1.f));
-
-  // Cache a callback to invoke to animate the layer back in. Note that because
-  // this is a cancelable callback, any previously created callback will be
-  // cancelled.
-  theme_changed_animation_callback_.Reset(base::BindOnce(
-      [](const base::WeakPtr<BrowserFrameViewChromeOS>& self,
-         base::TimeTicks theme_changed_time, bool success) {
-        if (!self || !self->GetBrowserView()) {
-          return;
-        }
-
-        views::WebView* web_view = self->GetBrowserView()->contents_web_view();
-        ui::Layer* layer = GetNativeViewLayer(web_view);
-        if (!layer) {
-          return;
-        }
-
-        // Delay animating the layer back in at least until the
-        // `chromeos::DefaultFrameHeader` has had a chance to complete its own
-        // color change animation.
-        const base::TimeDelta offset =
-            chromeos::kDefaultFrameColorChangeAnimationDuration -
-            (base::TimeTicks::Now() - theme_changed_time);
-
-        views::AnimationBuilder()
-            .SetPreemptionStrategy(ui::LayerAnimator::PreemptionStrategy::
-                                       IMMEDIATELY_ANIMATE_TO_NEW_TARGET)
-            .Once()
-            .Offset(std::max(offset, base::TimeDelta()))
-            .SetDuration(chromeos::kDefaultFrameColorChangeAnimationDuration)
-            .SetOpacity(layer, 1.f);
-      },
-      weak_ptr_factory_.GetWeakPtr(), base::TimeTicks::Now()));
-
-  // Animate the layer back in only after a round trip through the renderer and
-  // compositor pipelines. This should ensure that the web contents has finished
-  // repainting theme changes.
-  render_widget_host->InsertVisualStateCallback(
-      theme_changed_animation_callback_.callback());
 }
 
 bool BrowserFrameViewChromeOS::IsFloated() const {

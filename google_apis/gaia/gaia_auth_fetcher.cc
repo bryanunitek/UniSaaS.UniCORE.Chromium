@@ -182,6 +182,9 @@ std::string GaiaSource::ToString() {
     case Type::kChromeGlic:
       source_string = "ChromiumGlic";
       break;
+    case Type::kAccountReconcilorDiceCookieUpgrade:
+      source_string = "ChromiumAccountReconcilorDiceCookieUpgrade";
+      break;
   }
 
   // All sources should start with Chromium or chromeos for better server logs.
@@ -547,6 +550,21 @@ void GaiaAuthFetcher::StartOAuthMultilogin(
       break;
     case gaia::MultiloginCookieBindingParams::Mode::kEnabledEnforced:
       url = net::AppendQueryParameter(url, kCookieBindingModeParameter, "2");
+      break;
+  }
+
+  constexpr std::string_view kYoutubeCookieBindingModeParameter =
+      "yt_cookie_binding";
+  switch (cookie_binding_params.youtube_mode) {
+    case gaia::MultiloginCookieBindingParams::Mode::kDisabled:
+      break;
+    case gaia::MultiloginCookieBindingParams::Mode::kEnabledUnenforced:
+      url = net::AppendQueryParameter(url, kYoutubeCookieBindingModeParameter,
+                                      "1");
+      break;
+    case gaia::MultiloginCookieBindingParams::Mode::kEnabledEnforced:
+      url = net::AppendQueryParameter(url, kYoutubeCookieBindingModeParameter,
+                                      "2");
       break;
   }
 

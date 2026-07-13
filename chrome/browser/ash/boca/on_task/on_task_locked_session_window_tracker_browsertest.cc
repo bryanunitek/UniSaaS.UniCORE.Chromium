@@ -21,6 +21,7 @@
 #include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #include "chrome/browser/ash/boca/on_task/on_task_locked_session_window_tracker.h"
 #include "chrome/browser/ash/boca/on_task/on_task_system_web_app_manager_impl.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
@@ -28,8 +29,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/webui_url_constants.h"
@@ -142,7 +143,10 @@ class OnTaskLockedSessionWindowTrackerBrowserTestBase
   }
 
   Browser* FindBocaSystemWebAppBrowser() {
-    return ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA);
+    ash::BrowserDelegate* delegate = ash::FindSystemWebAppBrowser(
+        profile(), ash::SystemWebAppType::BOCA, ash::BrowserType::kApp);
+    return delegate ? delegate->GetBrowser().GetBrowserForMigrationOnly()
+                    : nullptr;
   }
 
   Profile* profile() { return browser()->profile(); }
@@ -905,7 +909,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskLockedSessionWindowTrackerBrowserTest,
       LockedSessionWindowTrackerFactory::GetInstance()->GetForBrowserContext(
           profile());
   EXPECT_FALSE(window_tracker->CanOpenNewPopup());
-  popup_browser->window()->Close();
+  popup_browser->GetWindow()->Close();
   content::RunAllTasksUntilIdle();
   EXPECT_TRUE(window_tracker->CanOpenNewPopup());
 }
@@ -941,7 +945,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskLockedSessionWindowTrackerBrowserTest,
   EXPECT_CALL(window_observer, OnWindowTrackerCleanedup).Times(1);
 
   // Close the app and verify the window tracker stops tracking it.
-  boca_app_browser->window()->Close();
+  boca_app_browser->GetWindow()->Close();
   content::RunAllTasksUntilIdle();
 
   auto* const window_tracker =
@@ -1004,8 +1008,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskLockedSessionWindowTrackerBrowserTest,
   const GURL parent_tab_url =
       embedded_test_server()->GetURL(kTabUrl1Host, "/title1.html");
   Sequence s;
-  EXPECT_CALL(window_observer,
-              OnTabAdded(SessionID::InvalidValue(), _, _))
+  EXPECT_CALL(window_observer, OnTabAdded(SessionID::InvalidValue(), _, _))
       .Times(1)
       .InSequence(s);
   const SessionID parent_tab_id = CreateBackgroundTabAndWait(

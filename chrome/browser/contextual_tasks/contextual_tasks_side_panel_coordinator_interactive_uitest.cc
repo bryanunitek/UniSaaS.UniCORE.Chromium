@@ -31,7 +31,9 @@
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/url_loader_interceptor.h"
 #include "content/public/test/web_contents_tester.h"
+#include "net/dns/mock_host_resolver.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/views/widget/widget_deletion_observer.h"
 
@@ -111,7 +113,7 @@ class ContextualTasksSidePanelCoordinatorInteractiveUiTest
     chrome::AddTabAt(browser(), GURL(chrome::kChromeUISettingsURL), -1, false);
 
     ContextualTasksService* contextual_tasks_service =
-        ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+        ContextualTasksServiceFactory::GetForProfile(browser()->GetProfile());
 
     // Create task1 and associate with tab0 and tab2, create task2 and associate
     // with tab1. Left tab3 with no task associated with.
@@ -144,6 +146,27 @@ class ContextualTasksSidePanelCoordinatorInteractiveUiTest
 
   void SetUpOnMainThread() override {
     InteractiveBrowserTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+    ASSERT_TRUE(embedded_test_server()->Start());
+    url_loader_interceptor_ = std::make_unique<content::URLLoaderInterceptor>(
+        base::BindLambdaForTesting(
+            [&](content::URLLoaderInterceptor::RequestParams* params) {
+              const GURL& url = params->url_request.url;
+              LOG(INFO) << "URLLoaderInterceptor intercepted URL: "
+                        << url.spec();
+              if (url.host() == "www.google.com") {
+                content::URLLoaderInterceptor::WriteResponse(
+                    "chrome/test/data/mock_aim_page.html",
+                    params->client.get());
+                return true;
+              }
+              return false;
+            }));
+  }
+
+  void TearDownOnMainThread() override {
+    url_loader_interceptor_.reset();
+    InteractiveBrowserTest::TearDownOnMainThread();
   }
 
   ContextualTasksUI* GetContextualTasksUI() {
@@ -171,6 +194,7 @@ class ContextualTasksSidePanelCoordinatorInteractiveUiTest
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
+  std::unique_ptr<content::URLLoaderInterceptor> url_loader_interceptor_;
 };
 
 MATCHER(IsNullSuggestedTabContext, "is a null TabContextPtr") {
@@ -408,7 +432,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
   EXPECT_EQ(4, detach_index);
   ContextualTasksSidePanelCoordinator* coordinator = GetCoordinator();
   ContextualTasksService* contextual_tasks_service =
-      ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+      ContextualTasksServiceFactory::GetForProfile(browser()->GetProfile());
 
   content::WebContents* tab_web_contents;
   ContextualTask task3 = contextual_tasks_service->CreateTask();
@@ -535,7 +559,7 @@ IN_PROC_BROWSER_TEST_F(
 
   ContextualTasksSidePanelCoordinator* coordinator = GetCoordinator();
   ContextualTasksService* contextual_tasks_service =
-      ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+      ContextualTasksServiceFactory::GetForProfile(browser()->GetProfile());
 
   content::WebContents* tab_web_contents;
   ContextualTask task3 = contextual_tasks_service->CreateTask();
@@ -598,7 +622,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
         TabListInterface* tab_list = TabListInterface::From(browser());
         // Change current task from task1 to a new task.
         ContextualTasksService* contextual_tasks_service =
-            ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+            ContextualTasksServiceFactory::GetForProfile(
+                browser()->GetProfile());
         ContextualTask new_task = contextual_tasks_service->CreateTask();
         contextual_tasks_service->AssociateTabWithTask(
             new_task.GetTaskId(), sessions::SessionTabHelper::IdForTab(
@@ -634,7 +659,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
         TabListInterface* tab_list = TabListInterface::From(browser());
         // Change current task from task1 to task2.
         ContextualTasksService* contextual_tasks_service =
-            ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+            ContextualTasksServiceFactory::GetForProfile(
+                browser()->GetProfile());
         contextual_tasks_service->AssociateTabWithTask(
             task_id2_, sessions::SessionTabHelper::IdForTab(
                            tab_list->GetActiveTab()->GetContents()));
@@ -681,7 +707,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
 
   auto mock_composebox_handler =
       std::make_unique<testing::NiceMock<MockContextualTasksComposeboxHandler>>(
-          ui, browser()->profile(),
+          ui, browser()->GetProfile(),
           TabListInterface::From(browser())->GetTab(0)->GetContents(),
           std::move(composebox_handler_receiver),
           std::move(composebox_page_remote),
@@ -745,7 +771,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
         content::WebContents* web_contents1 =
             coordinator->GetActiveWebContents();
         ContextualTasksService* contextual_tasks_service =
-            ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+            ContextualTasksServiceFactory::GetForProfile(
+                browser()->GetProfile());
 
         TabListInterface* tab_list = TabListInterface::From(browser());
         SessionID tab_id0 = sessions::SessionTabHelper::IdForTab(
@@ -830,7 +857,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
   // Tab4 will not inherit the task from tab1 as it is not created through link
   // click.
   ContextualTasksService* contextual_tasks_service =
-      ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+      ContextualTasksServiceFactory::GetForProfile(browser()->GetProfile());
   std::optional<ContextualTask> task1 =
       contextual_tasks_service->GetContextualTaskForTab(
           sessions::SessionTabHelper::IdForTab(
@@ -856,7 +883,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
   // Since tab1 is associated with task1, verify tab 2 is associated with the
   // same task.
   ContextualTasksService* contextual_tasks_service =
-      ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+      ContextualTasksServiceFactory::GetForProfile(browser()->GetProfile());
   std::optional<ContextualTask> task1 =
       contextual_tasks_service->GetContextualTaskForTab(
           sessions::SessionTabHelper::IdForTab(
@@ -874,7 +901,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
                        MoveTabToNewWindowKeepTaskAssociation) {
   SetUpTasks();
   ContextualTasksService* contextual_tasks_service =
-      ContextualTasksServiceFactory::GetForProfile(browser()->profile());
+      ContextualTasksServiceFactory::GetForProfile(browser()->GetProfile());
 
   // Verify tab0 is associated to a task.
   content::WebContents* web_contents =
@@ -1027,6 +1054,136 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
         if (deletion_observer && deletion_observer->IsWidgetAlive()) {
           dialog_widget->CloseNow();
         }
+      }));
+}
+
+DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kElementExistsEvent);
+DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kFrameLoadedEvent);
+DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kComposeboxFocusedEvent);
+
+IN_PROC_BROWSER_TEST_F(ContextualTasksSidePanelCoordinatorInteractiveUiTest,
+                       ComposeboxFocusOnBoundsUpdateWhenComposeboxHidden) {
+  SetUpTasks();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+  ContextualTasksSidePanelCoordinator* coordinator = GetCoordinator();
+
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSidePanelWebContentsId);
+
+  StateChange contextual_tasks_app_exists;
+  contextual_tasks_app_exists.type = StateChange::Type::kExists;
+  contextual_tasks_app_exists.where = {"contextual-tasks-app"};
+  contextual_tasks_app_exists.event = kElementExistsEvent;
+
+  StateChange frame_loaded;
+  frame_loaded.type = StateChange::Type::kExistsAndConditionTrue;
+  frame_loaded.where = {"contextual-tasks-app"};
+  frame_loaded.test_function = "(app) => !app.isFrameLoading";
+  frame_loaded.event = kFrameLoadedEvent;
+
+  StateChange composebox_focused;
+  composebox_focused.type = StateChange::Type::kExistsAndConditionTrue;
+  composebox_focused.where = {"contextual-tasks-app"};
+  composebox_focused.test_function =
+      "(app) => app.shadowRoot.activeElement && "
+      "app.shadowRoot.activeElement.id === 'composebox'";
+  composebox_focused.event = kComposeboxFocusedEvent;
+
+  RunTestSequence(
+      Do([&]() {
+        coordinator->Show(
+            false, omnibox::ChromeAimEntryPoint::UNKNOWN_AIM_ENTRY_POINT);
+      }),
+      WaitForShow(kContextualTasksSidePanelWebViewElementId),
+      InstrumentNonTabWebView(kSidePanelWebContentsId,
+                              kContextualTasksSidePanelWebViewElementId),
+      FocusWebContents(kSidePanelWebContentsId),
+      WaitForStateChange(kSidePanelWebContentsId, contextual_tasks_app_exists),
+      Do([&]() {
+        content::WebContents* side_panel_contents =
+            coordinator->GetActiveWebContents();
+        ASSERT_NE(side_panel_contents, nullptr);
+        // Use Object.defineProperty to mock the app's state properties. This
+        // freezes the values for the duration of the test and prevents
+        // asynchronous Mojo callbacks or page-load event handlers from
+        // overwriting them in the background, which would cause flakiness.
+        EXPECT_TRUE(content::ExecJs(
+            side_panel_contents,
+            "(() => {"
+            "  const app = document.querySelector('contextual-tasks-app');"
+            "  Object.defineProperty(app, 'isErrorDialogVisible_', {"
+            "    get() { return false; },"
+            "    set() {}"
+            "  });"
+            "  Object.defineProperty(app, 'isAimEligible_', {"
+            "    get() { return true; },"
+            "    set() {}"
+            "  });"
+            "  Object.defineProperty(app, 'isZeroState_', {"
+            "    get() { return false; },"
+            "    set() {}"
+            "  });"
+            "  Object.defineProperty(app, 'isAiPage_', {"
+            "    get() { return true; },"
+            "    set() {}"
+            "  });"
+            "  Object.defineProperty(app, 'enableComposeboxJumpFix_', {"
+            "    get() { return true; },"
+            "    set() {}"
+            "  });"
+            "  Object.defineProperty(app, 'isInputHidden_', {"
+            "    get() { return false; },"
+            "    set() {}"
+            "  });"
+            "  Object.defineProperty(app, 'enableBasicMode_', {"
+            "    get() { return false; },"
+            "    set() {}"
+            "  });"
+            "  Object.defineProperty(app, 'inNlm_', {"
+            "    get() { return false; },"
+            "    set() {}"
+            "  });"
+            "  app.forcedComposeboxBounds_ = null;"
+            "})()"));
+      }),
+      WaitForStateChange(kSidePanelWebContentsId, frame_loaded), Do([&]() {
+        content::WebContents* side_panel_contents =
+            coordinator->GetActiveWebContents();
+        ASSERT_NE(side_panel_contents, nullptr);
+        EXPECT_EQ(
+            true,
+            content::EvalJs(
+                side_panel_contents,
+                "(() => {"
+                "  const app = document.querySelector('contextual-tasks-app');"
+                "  return app.isComposeboxHidden_();"
+                "})()"));
+      }),
+      Do([&]() {
+        content::WebContents* side_panel_contents =
+            coordinator->GetActiveWebContents();
+        ASSERT_NE(side_panel_contents, nullptr);
+        EXPECT_TRUE(content::ExecJs(
+            side_panel_contents,
+            "(() => {"
+            "  const app = document.querySelector('contextual-tasks-app');"
+            "  const mockRect = {top: 10, left: 10, width: 200, height: "
+            "50, right: 210, bottom: 60};"
+            "  app.onInputPlateBoundsUpdateForTesting(mockRect, []);"
+            "})()"));
+      }),
+      WaitForStateChange(kSidePanelWebContentsId, composebox_focused),
+      Do([&]() {
+        content::WebContents* side_panel_contents =
+            coordinator->GetActiveWebContents();
+        ASSERT_NE(side_panel_contents, nullptr);
+        EXPECT_EQ(
+            false,
+            content::EvalJs(
+                side_panel_contents,
+                "(() => {"
+                "  const app = document.querySelector('contextual-tasks-app');"
+                "  return app.isComposeboxHidden_();"
+                "})()"));
       }));
 }
 

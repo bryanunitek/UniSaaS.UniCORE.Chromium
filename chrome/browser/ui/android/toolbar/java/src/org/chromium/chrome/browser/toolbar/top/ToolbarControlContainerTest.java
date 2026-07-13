@@ -102,12 +102,14 @@ import org.chromium.ui.resources.dynamics.ViewResourceAdapter;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /** Unit tests for {@link ToolbarControlContainer}. */
 @RunWith(BaseRobolectricTestRunner.class)
+@DisableFeatures({SigninFeatures.SIGNIN_LEVEL_UP_BUTTON})
 public class ToolbarControlContainerTest {
     private static final String BLOCK_NAME = "Android.TopToolbar.BlockCaptureReason";
     private static final String ALLOW_NAME = "Android.TopToolbar.AllowCaptureReason";
@@ -404,10 +406,7 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
-    @DisableFeatures({
-        ChromeFeatureList.TOOLBAR_STALE_CAPTURE_BUG_FIX,
-        ChromeFeatureList.TOOLBAR_CAPTURE_FIX_FOR_SPAS
-    })
+    @DisableFeatures(ChromeFeatureList.TOOLBAR_CAPTURE_FIX_FOR_SPAS)
     public void testIsDirty_InMotion() {
         makeAndInitAdapter();
         mockIsReadyDifference(ToolbarSnapshotDifference.URL_TEXT);
@@ -426,7 +425,6 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.TOOLBAR_STALE_CAPTURE_BUG_FIX)
     public void testIsDirty_InMotion2() {
         makeAndInitAdapter();
         mockIsReadyDifference(ToolbarSnapshotDifference.URL_TEXT);
@@ -460,10 +458,7 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
-    @DisableFeatures({
-        ChromeFeatureList.RECORD_SUPPRESSION_METRICS,
-        ChromeFeatureList.TOOLBAR_STALE_CAPTURE_BUG_FIX
-    })
+    @DisableFeatures(ChromeFeatureList.RECORD_SUPPRESSION_METRICS)
     public void testIsDirty_InMotion2_NoMetrics() {
         assertFalse(ToolbarFeatures.shouldRecordSuppressionMetrics());
 
@@ -485,7 +480,6 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.TOOLBAR_STALE_CAPTURE_BUG_FIX)
     public void testIsDirty_InMotion3() {
         makeAndInitAdapter();
         when(mToolbar.isReadyForTextureCapture())
@@ -515,7 +509,6 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.TOOLBAR_STALE_CAPTURE_BUG_FIX)
     public void testInMotion_viewNotVisible() {
         makeAndInitAdapter();
         mockIsReadyDifference(ToolbarSnapshotDifference.URL_TEXT);
@@ -599,10 +592,7 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
-    @DisableFeatures({
-        ChromeFeatureList.TOOLBAR_STALE_CAPTURE_BUG_FIX,
-        ChromeFeatureList.TOOLBAR_CAPTURE_FIX_FOR_SPAS
-    })
+    @DisableFeatures(ChromeFeatureList.TOOLBAR_CAPTURE_FIX_FOR_SPAS)
     public void testIsDirty_InMotionAndToolbarSwipe() {
         makeAndInitAdapter();
         verifyRequestsOnInMotionChange(true, false);
@@ -693,6 +683,86 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
+    public void testToolbarRightOffsetInDesktopWindow() {
+        // Mock the inner layout of the toolbar since mToolbarView is mocked.
+        View tabletLayout = mock(View.class);
+        MarginLayoutParams lp = new MarginLayoutParams(100, 100);
+        when(tabletLayout.getLayoutParams()).thenReturn(lp);
+        when(mToolbarView.findViewById(R.id.toolbar_tablet_layout)).thenReturn(tabletLayout);
+
+        initControlContainer(R.layout.toolbar_tablet);
+
+        // Set app header with 10px padding on left, 20px on right, and 100px height.
+        var appHeaderState =
+                new AppHeaderState(new Rect(0, 0, 100, 100), new Rect(10, 0, 80, 100), true);
+        when(mDesktopWindowStateManager.getAppHeaderState()).thenReturn(appHeaderState);
+
+        // Initially, tab strip is visible (height 80). Margin should be 0.
+        mControlContainer.onHeightChanged(80, 20, false);
+        assertEquals(
+                "Toolbar right margin should be 0 when tab strip is visible.", 0, lp.rightMargin);
+
+        // Suppress tab strip (height 0). Margin should be right padding (20).
+        mControlContainer.onHeightChanged(0, 20, false);
+        assertEquals(
+                "Toolbar right margin should be equal to right padding when tab strip is hidden.",
+                20,
+                lp.rightMargin);
+
+        // Exit desktop window. Margin should be reset to 0.
+        var appHeaderState2 =
+                new AppHeaderState(new Rect(0, 0, 100, 100), new Rect(10, 0, 80, 100), false);
+        when(mDesktopWindowStateManager.getAppHeaderState()).thenReturn(appHeaderState2);
+        mControlContainer.onAppHeaderStateChanged(appHeaderState2);
+        assertEquals(
+                "Toolbar right margin should be reset to 0 when exiting desktop window.",
+                0,
+                lp.rightMargin);
+    }
+
+    @Test
+    public void testSystemGestureExclusionsInDesktopWindow() {
+        initControlContainer(R.layout.toolbar_tablet);
+
+        // Layout the control container to have a non-zero width.
+        mControlContainer.layout(0, 0, 200, 100);
+
+        // Set app header with 10px padding on left, 20px on right, and 100px height.
+        var appHeaderState =
+                new AppHeaderState(new Rect(0, 0, 100, 100), new Rect(10, 0, 80, 100), true);
+        when(mDesktopWindowStateManager.getAppHeaderState()).thenReturn(appHeaderState);
+
+        // Initially tab strip is visible (height 80). Passes through exclusions.
+        mControlContainer.onHeightChanged(80, 20, false);
+        List<Rect> inputRects = List.of(new Rect(1, 2, 3, 4));
+        mControlContainer.setSystemGestureExclusionRects(inputRects);
+        assertEquals(
+                "System gesture exclusions should pass through when tab strip is visible.",
+                inputRects,
+                mControlContainer.getSystemGestureExclusionRects());
+
+        // Suppress tab strip (height 0). Overrides with toolbar exclusion rect.
+        // Left padding = 10, right padding = 20.
+        // Caption controls height = 100. Top offset = 0.
+        // Expected exclusion rect: Rect(10, 0, 200 - 20, 100).
+        mControlContainer.onHeightChanged(0, 20, false);
+        List<Rect> expected = List.of(new Rect(0, 0, 180, 100));
+        assertEquals(
+                "System gesture exclusions should be overridden when tab strip is hidden.",
+                expected,
+                mControlContainer.getSystemGestureExclusionRects());
+
+        // Exit desktop window. Overrides should be cleared.
+        var appHeaderState2 =
+                new AppHeaderState(new Rect(0, 0, 100, 100), new Rect(10, 0, 80, 100), false);
+        when(mDesktopWindowStateManager.getAppHeaderState()).thenReturn(appHeaderState2);
+        mControlContainer.onAppHeaderStateChanged(appHeaderState2);
+        assertTrue(
+                "System gesture exclusions should be cleared when exiting desktop window.",
+                mControlContainer.getSystemGestureExclusionRects().isEmpty());
+    }
+
+    @Test
     public void testTempDrawableAfterCompositorInitialized() {
         initControlContainer(R.layout.toolbar_tablet);
         mControlContainer.setCompositorBackgroundInitialized();
@@ -735,6 +805,34 @@ public class ToolbarControlContainerTest {
                         /* isInDesktopWindow= */ true,
                         /* isActivityFocused= */ false),
                 stripBackgroundColorDrawable.getColor());
+    }
+
+    @Test
+    public void testTopLeftCornerOverlayPositionWithRtl() {
+        initControlContainer(R.layout.toolbar_tablet);
+
+        var appHeaderState =
+                new AppHeaderState(new Rect(0, 0, 100, 100), new Rect(10, 0, 80, 100), true);
+        when(mDesktopWindowStateManager.getAppHeaderState()).thenReturn(appHeaderState);
+        mControlContainer.onAppHeaderStateChanged(appHeaderState);
+
+        SettableNonNullObservableSupplier<Boolean> isVerticalTabsActiveSupplier =
+                ObservableSuppliers.createNonNull(true);
+        mControlContainer.setIsVerticalTabsActiveSupplier(isVerticalTabsActiveSupplier);
+
+        View overlayView = mControlContainer.getTopLeftCornerOverlayViewForTesting();
+        assertNotNull(overlayView);
+        assertEquals(View.VISIBLE, overlayView.getVisibility());
+
+        // Test in LTR mode.
+        mControlContainer.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        mControlContainer.layout(0, 0, 500, 100);
+        assertEquals("Corner overlay should be on the left in LTR mode", 0, overlayView.getLeft());
+
+        // Test in RTL mode.
+        mControlContainer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        mControlContainer.layout(0, 0, 500, 100);
+        assertEquals("Corner overlay should be on the left in RTL mode", 0, overlayView.getLeft());
     }
 
     @Test
@@ -1065,6 +1163,7 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
     public void testUpdateButtonVisibility_TransitionsNtp() {
         initControlContainer(R.layout.toolbar_phone);
         ToolbarPhone toolbarPhone = mControlContainer.findViewById(R.id.toolbar);
@@ -1082,6 +1181,7 @@ public class ToolbarControlContainerTest {
     }
 
     @Test
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
     public void testUpdateOptionalButton_TransitionsNtp() {
         initControlContainer(R.layout.toolbar_phone);
         ToolbarPhone toolbarPhone = mControlContainer.findViewById(R.id.toolbar);

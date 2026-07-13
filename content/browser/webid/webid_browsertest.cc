@@ -30,6 +30,7 @@
 #include "content/browser/webid/delegation/sd_jwt.h"
 #include "content/browser/webid/fake_identity_request_dialog_controller.h"
 #include "content/browser/webid/identity_registry.h"
+#include "content/browser/webid/request.h"
 #include "content/browser/webid/request_service.h"
 #include "content/browser/webid/test/mock_digital_identity_provider.h"
 #include "content/browser/webid/test/mock_identity_request_dialog_controller.h"
@@ -65,25 +66,25 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/webid/login_status_account.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
-using net::EmbeddedTestServer;
-using net::HttpStatusCode;
-using net::test_server::BasicHttpResponse;
-using net::test_server::HttpMethod;
-using net::test_server::HttpRequest;
-using net::test_server::HttpResponse;
-using DigitalCredential = content::DigitalIdentityProvider::DigitalCredential;
+namespace content {
+
 using ::testing::_;
 using ::testing::Eq;
 using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::WithArg;
 using ::testing::WithArgs;
-
-namespace content {
+using DigitalCredential = DigitalIdentityProvider::DigitalCredential;
+using net::EmbeddedTestServer;
+using net::HttpStatusCode;
+using net::test_server::BasicHttpResponse;
+using net::test_server::HttpMethod;
+using net::test_server::HttpRequest;
+using net::test_server::HttpResponse;
 
 namespace {
 
@@ -2306,7 +2307,6 @@ IN_PROC_BROWSER_TEST_F(WebIdMetricsBrowserTest, IdpLoginClosed) {
             return modal->web_contents();
           }));
   EXPECT_CALL(*controller, ShowLoadingDialog).WillOnce(Return(true));
-  EXPECT_CALL(*controller, DidShowUi).WillRepeatedly(Return(true));
 
   // Now run the actual test.
   base::RunLoop run_loop;
@@ -2449,9 +2449,9 @@ class WebIdNavigationInterceptionTest : public WebIdBrowserTest {
 IN_PROC_BROWSER_TEST_F(WebIdNavigationInterceptionTest, resolveWithRedirect) {
   // For this test, we just want to test redirects without having to also
   // trigger interception, so override the check.
-  auto* request_service = webid::RequestService::GetOrCreateForCurrentDocument(
-      shell()->web_contents()->GetPrimaryMainFrame());
-  request_service->SetForceAllowRedirectToForTesting(true);
+  webid::RequestService::GetOrCreateForCurrentDocument(
+      shell()->web_contents()->GetPrimaryMainFrame())
+      ->SetForceAllowRedirectToForTesting(true);
 
   IdpTestServer::ConfigDetails config_details = BuildValidConfigDetails();
 
@@ -2578,9 +2578,9 @@ IN_PROC_BROWSER_TEST_F(WebIdNavigationInterceptionTest, resolveWithRedirect) {
 IN_PROC_BROWSER_TEST_F(WebIdNavigationInterceptionTest, redirectPOST) {
   // For this test, we just want to test redirects without having to also
   // trigger interception, so override the check.
-  auto* request_service = webid::RequestService::GetOrCreateForCurrentDocument(
-      shell()->web_contents()->GetPrimaryMainFrame());
-  request_service->SetForceAllowRedirectToForTesting(true);
+  webid::RequestService::GetOrCreateForCurrentDocument(
+      shell()->web_contents()->GetPrimaryMainFrame())
+      ->SetForceAllowRedirectToForTesting(true);
 
   IdpTestServer::ConfigDetails config_details = BuildValidConfigDetails();
 

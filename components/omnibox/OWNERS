@@ -14,7 +14,10 @@ mpearson@chromium.org
 orinj@chromium.org
 pauladedeji@google.com
 pnoland@chromium.org
+ryanakiyama@chromium.org
 skym@chromium.org
+julietlevesque@google.com
+jamesleung@google.com
 
 per-file *.mojom=set noparent
 per-file *.mojom=file://ipc/SECURITY_OWNERS

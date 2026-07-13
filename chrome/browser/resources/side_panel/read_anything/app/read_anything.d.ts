@@ -80,10 +80,6 @@ declare namespace chrome {
     let highContrastTheme: number;
     let lowContrastLightTheme: number;
     let lowContrastDarkTheme: number;
-    let undefinedPresentationState: number;
-    let inHiddenPresentationState: number;
-    let inSidePanelPresentationState: number;
-    let inImmersiveOverlayPresentationState: number;
     let autoHighlighting: number;
     let wordHighlighting: number;
     let phraseHighlighting: number;
@@ -115,6 +111,9 @@ declare namespace chrome {
     // Whether the Improved Read Aloud feature flag is enabled.
     let isImprovedReadAloudEnabled: boolean;
 
+    // Whether the Read Anything Translate Entry Point feature flag is enabled.
+    let isReadAnythingTranslateEntryPointEnabled: boolean;
+
     // Whether Read Anything is pinned to the toolbar.
     let isReadAnythingPinned: boolean;
 
@@ -132,6 +131,9 @@ declare namespace chrome {
 
     // Indicates if this page is a Google doc.
     let isGoogleDocs: boolean;
+
+    // Indicates if this page is a PDF.
+    let isPdf: boolean;
 
     // Fonts supported by the user's current language.
     let supportedFonts: string[];
@@ -181,6 +183,12 @@ declare namespace chrome {
     // The constant value representing the Readability (HTML string)
     // distillation method.
     let distillationTypeReadability: number;
+
+    // The active presentation state of Reading mode.
+    let activePresentationState: number;
+    let inHiddenPresentationState: number;
+    let inSidePanelPresentationState: number;
+    let inImmersiveOverlayPresentationState: number;
 
     // Returns the AXTree mapping segments for the distilled block at the given
     // index. A segment links a character range within the block to its AXnode.
@@ -241,6 +249,12 @@ declare namespace chrome {
     // Returns true if the element is a leaf node.
     function isLeafNode(nodeId: number): boolean;
 
+    // Returns true if the original page has a section with key points.
+    function maybeHasKeyPointsSection(): boolean;
+
+    // Returns a regex string of keywords used to identify a key points section.
+    function getKeyPointsRegex(): string;
+
     // Connects to the browser process. Called by ts when the read anything
     // element is added to the document.
     function onConnected(): void;
@@ -272,6 +286,9 @@ declare namespace chrome {
 
     // Called when a user toggles links via the webui toolbar.
     function onLinksEnabledToggled(): void;
+
+    // Called when a user requests translation via the webui toolbar.
+    function onTranslationRequested(): void;
 
     // Called when a user toggles images via the webui toolbar.
     function onImagesEnabledToggled(): void;
@@ -590,5 +607,9 @@ declare namespace chrome {
     // whereas the other returns a segment (word or phrase) within the sentence.
     function getCurrentTextSegments():
         Array<{nodeId: number, start: number, length: number}>;
+
+    // Called when the main frame undergoes a same document navigation (such as
+    // a fragment navigation).
+    let onMainFrameSameDocumentNavigation: (url: string) => void;
   }
 }

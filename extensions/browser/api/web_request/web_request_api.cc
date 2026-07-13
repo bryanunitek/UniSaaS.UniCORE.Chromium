@@ -280,18 +280,15 @@ void WebRequestAPI::ProxySet::RemoveProxy(Proxy* proxy) {
   proxies_.erase(proxy_it);
 }
 
-bool WebRequestAPI::ProxySet::AssociateProxyWithRequestId(
+void WebRequestAPI::ProxySet::AssociateProxyWithRequestId(
     Proxy* proxy,
     const content::GlobalRequestID& id) {
   DCHECK(proxy);
   DCHECK(proxies_.count(proxy));
   DCHECK(id.request_id);
   auto result = request_id_to_proxy_map_.emplace(id, proxy);
-  if (!result.second) {
-    return false;
-  }
+  DCHECK(result.second) << "Unexpected request ID collision.";
   proxy_to_request_id_map_[proxy].insert(id);
-  return true;
 }
 
 void WebRequestAPI::ProxySet::DisassociateProxyWithRequestId(
@@ -863,7 +860,8 @@ void WebRequestAPI::ProxyWebSocket(
     const net::SiteForCookies& site_for_cookies,
     const std::optional<std::string>& user_agent,
     mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
-        handshake_client) {
+        handshake_client,
+    mojo::PendingRemote<network::mojom::TrustedHeaderClient> header_client) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(MayHaveProxiesForFrame(frame));
 
@@ -879,9 +877,10 @@ void WebRequestAPI::ProxyWebSocket(
   WebRequestProxyingWebSocket::StartProxying(
       std::move(factory), url, site_for_cookies, user_agent,
       std::move(handshake_client), has_extra_headers, has_security_info,
-      frame->GetProcess()->GetDeprecatedID(), frame->GetRoutingID(),
-      &request_id_generator_, frame->GetLastCommittedOrigin(),
-      frame->GetProcess()->GetBrowserContext(), proxies_.get());
+      std::move(header_client), frame->GetProcess()->GetDeprecatedID(),
+      frame->GetRoutingID(), &request_id_generator_,
+      frame->GetLastCommittedOrigin(), frame->GetProcess()->GetBrowserContext(),
+      proxies_.get());
 }
 
 void WebRequestAPI::ProxyWebTransport(
@@ -1326,18 +1325,34 @@ WebRequestInternalAddEventListenerFunction::Run() {
   return RespondNow(NoArguments());
 }
 
-void WebRequestInternalEventHandledFunction::OnError(
+void WebRequestInternalEventHandledFunction::RouteEventResponse(
     const std::string& event_name,
     const std::string& sub_event_name,
     uint64_t request_id,
     int render_process_id,
     int web_view_instance_id,
+    int extra_info_spec,
     std::unique_ptr<WebRequestEventRouter::EventResponse> response) {
-  WebRequestEventRouter::Get(browser_context())
-      ->OnEventHandled(browser_context(), extension_id_safe(), event_name,
-                       sub_event_name, request_id, render_process_id,
-                       web_view_instance_id, worker_thread_id(),
-                       service_worker_version_id(), std::move(response));
+  WebRequestEventRouter* router = WebRequestEventRouter::Get(browser_context());
+  if (base::FeatureList::IsEnabled(
+          extensions_features::kWebRequestPerContextEventDispatch)) {
+    // Per-context dispatch: the renderer sends the parent event name.
+    // Append this listener's response to the pending dispatch target without
+    // resolving it; the target is resolved by a separate `eventHandlingDone`
+    // signal.
+    router->OnEventHandledForTarget(
+        browser_context(), extension_id_safe(), event_name, request_id,
+        render_process_id, web_view_instance_id, worker_thread_id(),
+        service_worker_version_id(), extra_info_spec, std::move(response));
+    return;
+  }
+
+  // Legacy per-listener dispatch: the sub-event name identifies the single
+  // responding listener.
+  router->OnEventHandled(browser_context(), extension_id_safe(), event_name,
+                         sub_event_name, request_id, render_process_id,
+                         web_view_instance_id, worker_thread_id(),
+                         service_worker_version_id(), std::move(response));
 }
 
 ExtensionFunction::ResponseAction
@@ -1356,11 +1371,27 @@ WebRequestInternalEventHandledFunction::Run() {
   std::string request_id_str = request_id_str_value.GetString();
   int web_view_instance_id = web_view_instance_id_value.GetInt();
 
+  bool per_context_dispatch = base::FeatureList::IsEnabled(
+      extensions_features::kWebRequestPerContextEventDispatch);
+  EXTENSION_FUNCTION_VALIDATE(EventRouter::IsSubEventName(sub_event_name) !=
+                              per_context_dispatch);
+
   uint64_t request_id;
   EXTENSION_FUNCTION_VALIDATE(
       base::StringToUint64(request_id_str, &request_id));
 
   int render_process_id = source_process_id();
+
+  // For per-context dispatch the renderer also sends the responding
+  // listener's `extraInfoSpec` as an optional argument: the response
+  // delta must be computed with the listener's own spec.
+  // Legacy callers omit it (the sub-event name identifies the listener,
+  // for which we can use the registered spec).
+  int extra_info_spec = 0;
+  if (HasOptionalArgument(5)) {
+    EXTENSION_FUNCTION_VALIDATE(
+        ExtraInfoSpec::InitFromValue(args()[5], &extra_info_spec));
+  }
 
   std::unique_ptr<WebRequestEventRouter::EventResponse> response;
   if (HasOptionalArgument(4)) {
@@ -1386,8 +1417,9 @@ WebRequestInternalEventHandledFunction::Run() {
     if (cancel_value) {
       // Don't allow cancel mixed with other keys.
       if (dict_value.size() != 1) {
-        OnError(event_name, sub_event_name, request_id, render_process_id,
-                web_view_instance_id, std::move(response));
+        RouteEventResponse(event_name, sub_event_name, request_id,
+                           render_process_id, web_view_instance_id,
+                           extra_info_spec, std::move(response));
         return RespondNow(Error(keys::kInvalidBlockingResponse));
       }
 
@@ -1400,8 +1432,9 @@ WebRequestInternalEventHandledFunction::Run() {
       std::string new_url_str = redirect_url_value->GetString();
       response->new_url = GURL(new_url_str);
       if (!response->new_url.is_valid()) {
-        OnError(event_name, sub_event_name, request_id, render_process_id,
-                web_view_instance_id, std::move(response));
+        RouteEventResponse(event_name, sub_event_name, request_id,
+                           render_process_id, web_view_instance_id,
+                           extra_info_spec, std::move(response));
         return RespondNow(Error(keys::kInvalidRedirectUrl, new_url_str));
       }
     }
@@ -1411,8 +1444,9 @@ WebRequestInternalEventHandledFunction::Run() {
     if (has_request_headers || has_response_headers) {
       if (has_request_headers && has_response_headers) {
         // Allow only one of the keys, not both.
-        OnError(event_name, sub_event_name, request_id, render_process_id,
-                web_view_instance_id, std::move(response));
+        RouteEventResponse(event_name, sub_event_name, request_id,
+                           render_process_id, web_view_instance_id,
+                           extra_info_spec, std::move(response));
         return RespondNow(Error(keys::kInvalidHeaderKeyCombination));
       }
 
@@ -1436,18 +1470,21 @@ WebRequestInternalEventHandledFunction::Run() {
         if (!FromHeaderDictionary(header_value, &name, &value)) {
           std::string serialized_header =
               base::WriteJson(header_value).value_or("");
-          OnError(event_name, sub_event_name, request_id, render_process_id,
-                  web_view_instance_id, std::move(response));
+          RouteEventResponse(event_name, sub_event_name, request_id,
+                             render_process_id, web_view_instance_id,
+                             extra_info_spec, std::move(response));
           return RespondNow(Error(keys::kInvalidHeader, serialized_header));
         }
         if (!net::HttpUtil::IsValidHeaderName(name)) {
-          OnError(event_name, sub_event_name, request_id, render_process_id,
-                  web_view_instance_id, std::move(response));
+          RouteEventResponse(event_name, sub_event_name, request_id,
+                             render_process_id, web_view_instance_id,
+                             extra_info_spec, std::move(response));
           return RespondNow(Error(keys::kInvalidHeaderName));
         }
         if (!net::HttpUtil::IsValidHeaderValue(value)) {
-          OnError(event_name, sub_event_name, request_id, render_process_id,
-                  web_view_instance_id, std::move(response));
+          RouteEventResponse(event_name, sub_event_name, request_id,
+                             render_process_id, web_view_instance_id,
+                             extra_info_spec, std::move(response));
           return RespondNow(Error(keys::kInvalidHeaderValue, name));
         }
         if (has_request_headers) {
@@ -1478,11 +1515,37 @@ WebRequestInternalEventHandledFunction::Run() {
     }
   }
 
+  RouteEventResponse(event_name, sub_event_name, request_id, render_process_id,
+                     web_view_instance_id, extra_info_spec,
+                     std::move(response));
+  return RespondNow(NoArguments());
+}
+
+ExtensionFunction::ResponseAction
+WebRequestInternalEventHandlingDoneFunction::Run() {
+  // Per-context dispatch completion signal: all of this renderer context's
+  // matching listeners have finished handling the blocking event. Carries no
+  // response (each listener's response arrived via `eventHandled`).
+  EXTENSION_FUNCTION_VALIDATE(base::FeatureList::IsEnabled(
+      extensions_features::kWebRequestPerContextEventDispatch));
+  EXTENSION_FUNCTION_VALIDATE(args().size() >= 3);
+  EXTENSION_FUNCTION_VALIDATE(args()[0].is_string());
+  EXTENSION_FUNCTION_VALIDATE(args()[1].is_string());
+  EXTENSION_FUNCTION_VALIDATE(args()[2].is_int());
+  std::string event_name = args()[0].GetString();
+  std::string request_id_str = args()[1].GetString();
+  int web_view_instance_id = args()[2].GetInt();
+  EXTENSION_FUNCTION_VALIDATE(!EventRouter::IsSubEventName(event_name));
+
+  uint64_t request_id;
+  EXTENSION_FUNCTION_VALIDATE(
+      base::StringToUint64(request_id_str, &request_id));
+
   WebRequestEventRouter::Get(browser_context())
-      ->OnEventHandled(browser_context(), extension_id_safe(), event_name,
-                       sub_event_name, request_id, render_process_id,
-                       web_view_instance_id, worker_thread_id(),
-                       service_worker_version_id(), std::move(response));
+      ->OnEventHandlingDone(browser_context(), extension_id_safe(), event_name,
+                            request_id, source_process_id(),
+                            web_view_instance_id, worker_thread_id(),
+                            service_worker_version_id());
 
   return RespondNow(NoArguments());
 }

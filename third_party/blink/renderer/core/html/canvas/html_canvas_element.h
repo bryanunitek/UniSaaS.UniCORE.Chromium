@@ -195,6 +195,7 @@ class CORE_EXPORT HTMLCanvasElement final
   HTMLCanvasAccessibilityManager* GetAccessibilityManagerForTesting() {
     return accessibility_manager_.Get();
   }
+
   void ClearCanvas2DLayerTexture() override;
 
   void SetNeedsPushProperties();
@@ -228,8 +229,6 @@ class CORE_EXPORT HTMLCanvasElement final
   CanvasResourceDispatcher* GetOrCreateResourceDispatcher() override;
   void DiscardResourceDispatcher() override { frame_dispatcher_ = nullptr; }
 
-  bool PushFrame(scoped_refptr<CanvasResource>&& image) override;
-
   // ExecutionContextLifecycleObserver and PageVisibilityObserver implementation
   void ContextDestroyed() override;
 
@@ -252,11 +251,9 @@ class CORE_EXPORT HTMLCanvasElement final
 
   bool IsPageVisible() const override;
 
-  // CanvasResourceProvider::Delegate implementation
+  // CanvasResourceProviderDelegate implementation
   void NotifyGpuContextLost() override;
   bool IsPrinting() const override;
-  scoped_refptr<const cc::AnimatedImageFrameIndexMap>
-  GetAnimatedImageFrameIndexes() const override;
 
   // CanvasRenderingContextHost implementation
   bool ShouldAccelerate2dContext() const override;
@@ -274,6 +271,22 @@ class CORE_EXPORT HTMLCanvasElement final
   // OffscreenCanvasPlaceholder implementation.
   void SetOffscreenCanvasResource(
       scoped_refptr<ExportedCanvasResource>&&) override;
+
+  // Accessibility support related functions.
+  void OnAxObjectIgnoredStateChanged(bool is_ignored);
+  bool GetNeedsAccessibilitySupportHeuristic();
+  void EnsureAccessibilityManager();
+  void RecordRenderedText(const String& text,
+                          const gfx::RectF& bounds,
+                          float font_height) override;
+  void ClearRenderedText(const gfx::RectF& rect) override;
+  void ClearRenderedText() override;
+  void UpdateCaptureRenderedText(bool capture);
+  bool ShouldCaptureRenderedText() override;
+  String CanvasAnnotation() const;
+  bool HasRequestedOCR() const;
+  void ClearHasRequestedOCR();
+
   void Trace(Visitor*) const override;
 
   static void RegisterRenderingContextFactory(
@@ -369,8 +382,6 @@ class CORE_EXPORT HTMLCanvasElement final
       ExceptionState& exception_state) const;
 
   ElementImage* captureElementImage(Element* element, ExceptionState&);
-
-  void OnAxObjectCreated(bool is_ignored);
 
  protected:
   void DidMoveToNewDocument(Document& old_document) override;

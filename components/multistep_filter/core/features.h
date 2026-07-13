@@ -27,7 +27,8 @@ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kMultistepFilterSessionDuration);
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta,
                            kSameDomainSuggestionSuppressionDuration);
 
-BASE_DECLARE_FEATURE_PARAM(std::string, kCueTemplatesMap);
+BASE_DECLARE_FEATURE(kMultistepFilterSendFeedback);
+BASE_DECLARE_FEATURE_PARAM(std::string, kMultistepFilterSendFeedbackUrl);
 
 }  // namespace multistep_filter
 

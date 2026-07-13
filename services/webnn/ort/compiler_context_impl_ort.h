@@ -17,14 +17,19 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/webnn/graph_builder_context.h"
 #include "services/webnn/public/cpp/context_properties.h"
-#include "services/webnn/public/mojom/ep_package_info.mojom.h"
 #include "services/webnn/public/mojom/webnn_compiler_context.mojom.h"
 #include "services/webnn/public/mojom/webnn_context_provider.mojom.h"
 #include "services/webnn/public/mojom/webnn_error.mojom.h"
 #include "services/webnn/public/mojom/webnn_graph_builder.mojom.h"
 #include "services/webnn/public/mojom/webnn_model_loader.mojom.h"
 
+namespace base {
+class FilePath;
+}
+
 namespace webnn {
+
+struct EpDeviceInfo;
 
 class WebNNTensorImpl;
 class WebNNConstantOperand;
@@ -40,12 +45,14 @@ class CompilerContextImplOrt final : public GraphBuilderContext,
                                      public mojom::WebNNCompilerContext {
  public:
   static std::unique_ptr<CompilerContextImplOrt> Create(
-      base::flat_map<std::string, mojom::EpPackageInfoPtr> ep_package_info,
+      const base::FilePath& ep_library_path,
+      const EpDeviceInfo& target_device,
       mojom::CreateContextOptionsPtr options,
       ContextProperties properties,
       mojo::PendingRemote<mojom::WebNNModelLoader> model_loader);
 
   CompilerContextImplOrt(
+      const EpDeviceInfo& target_device,
       scoped_refptr<Environment> env,
       mojom::CreateContextOptionsPtr options,
       ContextProperties properties,
@@ -65,7 +72,6 @@ class CompilerContextImplOrt final : public GraphBuilderContext,
   const ContextProperties& properties() const override;
   const mojom::CreateContextOptions& options() const override;
   void BuildGraph(
-      mojo::PendingReceiver<mojom::WebNNGraph> receiver,
       mojom::GraphInfoPtr graph_info,
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
@@ -88,8 +94,7 @@ class CompilerContextImplOrt final : public GraphBuilderContext,
           constant_operands);
 
   // Called on the main thread after compilation completes.
-  void DidCompile(mojo::PendingReceiver<mojom::WebNNGraph> graph_receiver,
-                  WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
+  void DidCompile(WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
                   BuildGraphCallback callback,
                   base::expected<std::unique_ptr<CompilationResult>,
                                  mojom::ErrorPtr> result);

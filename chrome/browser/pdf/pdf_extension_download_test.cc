@@ -84,7 +84,7 @@ void TriggerDownloadButton(content::RenderFrameHost* extension_host) {
 // cases that saving takes more than the 1s delay.
 void CompareFileContent(const base::FilePath& test_file_path,
                         const base::FilePath& save_path,
-                        base::OnceCallback<void(void)> callback,
+                        base::OnceClosure callback,
                         bool wait_before_compare) {
   if (!wait_before_compare && base::ContentsEqual(test_file_path, save_path)) {
     std::move(callback).Run();
@@ -145,7 +145,7 @@ class PDFExtensionDownloadTest : public base::test::WithFeatureOverride,
 
     file_activity_observer_ =
         std::make_unique<DownloadTestFileActivityObserver>(
-            browser()->profile());
+            browser()->GetProfile());
     file_activity_observer_->EnableFileChooser(true);
   }
 

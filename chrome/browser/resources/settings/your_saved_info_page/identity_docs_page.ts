@@ -8,7 +8,7 @@
  * Users can add, edit, or delete their saved document details, as well as opt
  * out of the autofill functionality entirely.
  */
-
+import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
 import '/shared/settings/controls/extension_controlled_indicator.js';
 import '/shared/settings/prefs/prefs.js';
 import '../autofill_page/autofill_ai_entries_list.js';
@@ -28,6 +28,8 @@ import type {EntityDataManagerProxy} from '../autofill_page/entity_data_manager_
 import {EntityDataManagerProxyImpl} from '../autofill_page/entity_data_manager_proxy.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {loadTimeData} from '../i18n_setup.js';
+import {routes} from '../route.js';
+import {Router} from '../router.js';
 import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
 
 import {getTemplate} from './identity_docs_page.html.js';
@@ -120,19 +122,24 @@ export class SettingsIdentityDocsPageElement extends
         If true, Autofill AI does not depend on whether Autofill for addresses
         is enabled.
       */
-      // TODO(crbug.com/466345561): remove when enhanced autofill will stop
-      // depending on addresses autofill
-      autofillAddOtherDatatypesPrefIsEnabled_: {
+      autofillSettingsEnterprisePolicyEnabled_: {
         type: Boolean,
         value() {
           return loadTimeData.getBoolean(
-              'AutofillAddOtherDatatypesPrefIsEnabled');
+              'AutofillSettingsEnterprisePolicyEnabled');
         },
       },
 
       prefsInitialized_: {
         type: Boolean,
         value: false,
+      },
+
+      showSuggestionsFromGeminiSettings_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('showSuggestionsFromGeminiSettings');
+        },
       },
     };
   }
@@ -148,8 +155,9 @@ export class SettingsIdentityDocsPageElement extends
   declare private autofillAiAvailableByDefault_: boolean;
   declare private canEnableOrDisableAutofillAi_: boolean;
   declare private identityDocsOptedIn_: chrome.settingsPrivate.PrefObject;
-  declare private autofillAddOtherDatatypesPrefIsEnabled_: boolean;
+  declare private autofillSettingsEnterprisePolicyEnabled_: boolean;
   declare private prefsInitialized_: boolean;
+  declare private showSuggestionsFromGeminiSettings_: boolean;
 
   private entityDataManager_: EntityDataManagerProxy =
       EntityDataManagerProxyImpl.getInstance();
@@ -169,7 +177,7 @@ export class SettingsIdentityDocsPageElement extends
 
     const addressAutofillOptInStatus =
         this.getPref<boolean>('autofill.profile_enabled').value;
-    const ignoreAddressAutofill = this.autofillAddOtherDatatypesPrefIsEnabled_;
+    const ignoreAddressAutofill = this.autofillSettingsEnterprisePolicyEnabled_;
     if (this.autofillAiAvailableByDefault_) {
       return !this.canEnableOrDisableAutofillAi_ ||
           (!ignoreAddressAutofill && !addressAutofillOptInStatus);
@@ -261,6 +269,11 @@ export class SettingsIdentityDocsPageElement extends
 
     return !!addressAutofillEnabled.extensionId &&
         !addressAutofillEnabled.value;
+  }
+
+  private onSuggestionsFromGeminiClick_() {
+    // TODO(crbug.com/512204278): Add metrics.
+    Router.getInstance().navigateTo(routes.SUGGESTIONS_FROM_GEMINI);
   }
 
   // SettingsViewMixin implementation.

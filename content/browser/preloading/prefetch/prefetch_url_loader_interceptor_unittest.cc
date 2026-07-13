@@ -224,8 +224,7 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
         PrefetchServiceWorkerState::kDisallowed,
         /*service_worker_handle=*/nullptr,
         web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId(),
-        std::move(initiator_document_token),
-        /*serving_page_metrics_container=*/nullptr);
+        std::move(initiator_document_token));
   }
 
   void MaybeCreateLoaderAndWait(const GURL& test_url) {
@@ -287,8 +286,6 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
         ->navigation_request();
   }
 
-
-
   void SetOnIsolatedCookieCopyStartForTesting(const GURL& prefetch_url,
                                               const GURL& redirect_url,
                                               base::OnceClosure closure) {
@@ -309,8 +306,6 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
     ASSERT_TRUE(itr->second);
     std::move(itr->second).Run();
   }
-
-  const base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
   ScopedMockContentBrowserClient* test_content_browser_client() {
     return test_content_browser_client_.get();
@@ -403,8 +398,6 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
   base::ScopedMockElapsedTimersForTest scoped_test_timer_;
 
   std::unique_ptr<PrefetchURLLoaderInterceptor> interceptor_;
-
-  base::HistogramTester histogram_tester_;
 
   std::map<GURL, bool> was_intercepted_;
   std::map<GURL, base::OnceClosure> on_loader_callback_closure_;

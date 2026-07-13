@@ -27,11 +27,13 @@
 #include "chrome/browser/android/compositor/tab_content_manager.h"
 #include "chrome/browser/android/media_state_observer.h"
 #include "chrome/browser/android/selection/chrome_selection_dropdown_menu_delegate.h"
+#include "chrome/browser/android/tab_android_conversions.h"
 #include "chrome/browser/android/tab_features.h"
 #include "chrome/browser/android/tab_web_contents_delegate_android.h"
 #include "chrome/browser/android/web_contents_theme_client.h"
 #include "chrome/browser/browser_about_handler.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/notifications/notification_permission_context.h"
 #include "chrome/browser/profiles/profile.h"
@@ -127,34 +129,12 @@ TabAndroid* TabAndroid::FromWebContents(content::WebContents* web_contents) {
 
 // static
 TabAndroid* TabAndroid::FromTabHandle(tabs::TabHandle handle) {
-  return static_cast<TabAndroid*>(handle.Get());
+  return tabs::ToTabAndroidOrNull(handle.Get());
 }
 
 // static
 TabAndroid* TabAndroid::GetNativeTab(JNIEnv* env, const JavaRef<jobject>& obj) {
   return reinterpret_cast<TabAndroid*>(Java_TabImpl_getNativePtr(env, obj));
-}
-
-// static
-std::vector<raw_ptr<TabAndroid, VectorExperimental>>
-TabAndroid::GetAllNativeTabs(
-    JNIEnv* env,
-    const ScopedJavaLocalRef<jobjectArray>& obj_array) {
-  std::vector<raw_ptr<TabAndroid, VectorExperimental>> tab_native_ptrs;
-  ScopedJavaLocalRef<jlongArray> j_tabs_ptr =
-      Java_TabImpl_getAllNativePtrs(env, obj_array);
-  if (j_tabs_ptr.is_null()) {
-    return tab_native_ptrs;
-  }
-
-  std::vector<int64_t> tab_ptr;
-  JavaLongArrayToLongVector(env, j_tabs_ptr, &tab_ptr);
-
-  for (size_t i = 0; i < tab_ptr.size(); ++i) {
-    tab_native_ptrs.push_back(reinterpret_cast<TabAndroid*>(tab_ptr[i]));
-  }
-
-  return tab_native_ptrs;
 }
 
 // static
@@ -170,7 +150,8 @@ TabAndroid::TabAndroid(JNIEnv* env,
     : tab_id_(tab_id),
       session_window_id_(SessionID::InvalidValue()),
       content_layer_(cc::slim::Layer::Create()),
-      synced_tab_delegate_(new browser_sync::SyncedTabDelegateAndroid(this)),
+      synced_tab_delegate_(
+          std::make_unique<browser_sync::SyncedTabDelegateAndroid>(this)),
       profile_(profile->GetWeakPtr()) {
   Java_TabImpl_setNativePtr(env, obj, reinterpret_cast<intptr_t>(this));
 }
@@ -190,7 +171,7 @@ std::unique_ptr<TabAndroid> TabAndroid::CreateForTesting(
     int tab_id,
     std::unique_ptr<content::WebContents> web_contents) {
   night_mode::WebContentsThemeClient::CreateForWebContents(web_contents.get());
-  std::unique_ptr<TabAndroid> tab(new TabAndroid(profile, tab_id));
+  auto tab = base::WrapUnique(new TabAndroid(profile, tab_id));
   tab->web_contents_ = std::move(web_contents);
   return tab;
 }
@@ -263,12 +244,11 @@ sync_sessions::SyncedTabDelegate* TabAndroid::GetSyncedTabDelegate() const {
 }
 
 bool TabAndroid::IsIncognito() const {
-  JNIEnv* env = AttachCurrentThread();
-  const bool is_incognito = Java_TabImpl_isIncognito(env, GetJavaObject(env));
   if (Profile* p = profile()) {
-    CHECK_EQ(is_incognito, p->IsOffTheRecord());
+    return p->IsOffTheRecord();
   }
-  return is_incognito;
+  JNIEnv* env = AttachCurrentThread();
+  return Java_TabImpl_isIncognito(env, GetJavaObject(env));
 }
 
 base::Time TabAndroid::GetLastShownTimestamp() const {
@@ -468,7 +448,7 @@ void TabAndroid::GetMemoryUsageBytes(
             }
             base::android::RunLongCallbackAndroid(callback, bytes_used);
           },
-          global_callback));
+          std::move(global_callback)));
 }
 
 void TabAndroid::InitializeAutofillIfNecessary() {
@@ -539,57 +519,105 @@ void WillRemoveWebContentsFromTab(content::WebContents* contents,
     contents->SetDelegate(nullptr);
   }
 }
+
+class TabWebContentsDestroyer : public content::WebContentsDelegate {
+ public:
+  explicit TabWebContentsDestroyer(
+      std::unique_ptr<content::WebContents> web_contents)
+      : web_contents_(std::move(web_contents)) {
+    web_contents_->SetDelegate(this);
+    web_contents_->ClosePage();
+    // 2 seconds was chosen to give sufficient time for unload handlers to run
+    // during window closure (see DEFAULT_SHUTDOWN_TIMEOUT_MS in
+    // GracefulShutdownServiceImpl which matches this duration).
+    // Fallback timer in case the renderer never responds.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(&TabWebContentsDestroyer::Destroy,
+                       weak_ptr_factory_.GetWeakPtr()),
+        base::Seconds(2));
+  }
+
+  ~TabWebContentsDestroyer() override = default;
+
+  void CloseContents(content::WebContents* source) override {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&TabWebContentsDestroyer::Destroy,
+                                  weak_ptr_factory_.GetWeakPtr()));
+  }
+
+ private:
+  void Destroy() { delete this; }
+
+  std::unique_ptr<content::WebContents> web_contents_;
+  base::WeakPtrFactory<TabWebContentsDestroyer> weak_ptr_factory_{this};
+};
 }  // namespace
 
-void TabAndroid::DestroyWebContents() {
+tabs::TabDestroyStatus TabAndroid::DestroyWebContents() {
   WillRemoveWebContentsFromTab(web_contents(), /*clear_delegate=*/false);
 
-  // Terminate the renderer process if this is the last tab.
-  // If there's no unload listener, FastShutdownIfPossible kills the
-  // renderer process. Otherwise, we go with the slow path where renderer
-  // process shuts down itself when ref count becomes 0.
-  // This helps the render process exit quickly which avoids some issues
-  // during shutdown. See https://codereview.chromium.org/146693011/
-  // and http://crbug.com/41086630 for details.
   content::RenderProcessHost* process =
-      web_contents()->GetPrimaryMainFrame()->GetProcess();
-  if (process) {
-    process->FastShutdownIfPossible(1, false);
+      web_contents() ? web_contents()->GetPrimaryMainFrame()->GetProcess()
+                     : nullptr;
+  bool enable_graceful_shutdown = base::FeatureList::IsEnabled(
+      chrome::android::kTabAndroidGracefulShutdown);
+  bool fast_shutdown_succeeded =
+      process && process->FastShutdownIfPossible(1, false);
+
+  if (!fast_shutdown_succeeded && enable_graceful_shutdown && web_contents()) {
+    std::unique_ptr<content::WebContents> contents =
+        ReleaseWebContentsInternal(/*keep_session_id=*/true,
+                                   /*clear_delegate=*/true);
+    new TabWebContentsDestroyer(std::move(contents));
+    return tabs::TabDestroyStatus::SLOW_SHUTDOWN;
   }
 
   tab_features_.reset();
   web_contents_.reset();
-
   synced_tab_delegate_->ResetWebContents();
+
+  return tabs::TabDestroyStatus::FAST_SHUTDOWN;
 }
 
 void TabAndroid::ReleaseWebContents() {
-  WillRemoveWebContentsFromTab(web_contents(), /*clear_delegate=*/true);
-
-  // Ownership of |released_contents| is assumed by the code that initiated the
-  // release.
-  tab_features_.reset();
-  content::WebContents* released_contents = web_contents_.release();
-  if (released_contents) {
-    released_contents->SetOwnerLocationForDebug(std::nullopt);
-  }
-
-  // Remove the link from the native WebContents to |this|, since the
-  // lifetimes of the two objects are no longer intertwined.
-  released_contents->RemoveUserData(
-      tabs::TabLookupFromWebContents::UserDataKey());
-  ClearSessionId();
-
-  synced_tab_delegate_->ResetWebContents();
+  ReleaseWebContentsInternal(/*keep_session_id=*/false,
+                             /*clear_delegate=*/true)
+      .release();
 }
 
+std::unique_ptr<content::WebContents> TabAndroid::ReleaseWebContentsInternal(
+    bool keep_session_id,
+    bool clear_delegate) {
+  WillRemoveWebContentsFromTab(web_contents(), clear_delegate);
+
+  tab_features_.reset();
+  std::unique_ptr<content::WebContents> released_contents =
+      std::move(web_contents_);
+  if (released_contents) {
+    released_contents->SetOwnerLocationForDebug(std::nullopt);
+    released_contents->RemoveUserData(
+        tabs::TabLookupFromWebContents::UserDataKey());
+  }
+
+  if (!keep_session_id) {
+    ClearSessionId();
+  }
+
+  synced_tab_delegate_->ResetWebContents();
+  return released_contents;
+}
+
+// static
 std::unique_ptr<content::WebContents> TabAndroid::TakeWebContentsAndDestroyTab(
+    TabAndroid* tab,
     base::PassKey<TabModelJniBridge>) {
-  content::WebContents* raw_contents = web_contents();
+  DCHECK(tab);
+  content::WebContents* raw_contents = tab->web_contents();
   JNIEnv* env = base::android::AttachCurrentThread();
-  // Destroy the Tab object from both native and Java sides and release the
-  // WebContents.
-  Java_TabImpl_destroyInternal(env, GetJavaObject(),
+  // WARNING: This call synchronously deletes `tab`. Do not access `tab` after
+  // this line.
+  Java_TabImpl_destroyInternal(env, tab->GetJavaObject(),
                                /*deleteNativeWebContents=*/false);
 
   // Wrap and return the WebContents as a unique_ptr.
@@ -614,9 +642,8 @@ void TabAndroid::OnPhysicalBackingSizeChanged(
   web_contents->GetNativeView()->OnPhysicalBackingSizeChanged(size);
 }
 
-void TabAndroid::SetActiveNavigationEntryTitleForUrl(
-    const std::string& url,
-    const std::u16string& title) {
+void TabAndroid::SetActiveNavigationEntryTitleForUrl(const std::string& url,
+                                                     std::u16string title) {
   DCHECK(web_contents());
 
   content::NavigationEntry* entry =
@@ -680,7 +707,7 @@ void TabAndroid::OnDraggingStateChanged(bool is_dragging) {
 }
 
 base::CallbackListSubscription TabAndroid::RegisterDraggingChanged(
-    base::RepeatingCallback<void(TabInterface*, bool)> callback) {
+    DraggingChangedCallback callback) {
   return dragging_changed_callback_list_.Add(std::move(callback));
 }
 
@@ -925,7 +952,8 @@ TabAndroid::TabAndroid(Profile* profile, int tab_id)
     : tab_id_(tab_id),
       session_window_id_(SessionID::InvalidValue()),
       content_layer_(cc::slim::Layer::Create()),
-      synced_tab_delegate_(new browser_sync::SyncedTabDelegateAndroid(this)),
+      synced_tab_delegate_(
+          std::make_unique<browser_sync::SyncedTabDelegateAndroid>(this)),
       profile_(profile->GetWeakPtr()) {
   CHECK_IS_TEST();
 }

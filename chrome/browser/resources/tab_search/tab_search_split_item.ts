@@ -58,7 +58,10 @@ export class TabSearchSplitItemElement extends TabSearchSplitItemBase {
   });
   protected accessor buttonRipples_: boolean =
       loadTimeData.getBoolean('useRipples');
-  accessor closeButtonIcon: string = 'tab-search:close';
+  accessor closeButtonIcon: string =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+      'tab-search:close' :
+      'tab-search:close-old';
   protected accessor tabGroupColorRefresh_: boolean =
       loadTimeData.getBoolean('useTabGroupColorRefresh');
 
@@ -76,8 +79,12 @@ export class TabSearchSplitItemElement extends TabSearchSplitItemBase {
     return this.data.tabGroup ? 'block' : 'none';
   }
 
-  protected getFaviconUrl_(url: string): string {
-    return getFaviconForPageURL(url, false);
+  protected getFaviconUrl_(url: string, index: number): string {
+    const tab = this.data.tabs ? this.data.tabs[index] : null;
+    return tab && tab.faviconUrl ?
+        `url("${tab.faviconUrl}")` :
+        getFaviconForPageURL(
+            tab && tab.isDefaultFavicon ? 'chrome://newtab' : url, false);
   }
 
   get domainTexts_(): string[] {

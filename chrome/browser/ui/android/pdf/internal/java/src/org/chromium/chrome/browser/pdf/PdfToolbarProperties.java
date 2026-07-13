@@ -56,9 +56,10 @@ class PdfToolbarProperties {
     static final WritableBooleanPropertyKey DOWNLOAD_BUTTON_VISIBLE =
             new WritableBooleanPropertyKey();
 
-    /** Whether the rotate button is visible. */
-    static final WritableBooleanPropertyKey ROTATE_BUTTON_VISIBLE =
-            new WritableBooleanPropertyKey();
+    /** Whether edit mode is active. */
+    static final WritableBooleanPropertyKey EDIT_MODE_ACTIVE = new WritableBooleanPropertyKey();
+
+
 
     /** Whether the fit to page button is visible. */
     static final WritableBooleanPropertyKey FIT_TO_PAGE_BUTTON_VISIBLE =
@@ -72,20 +73,24 @@ class PdfToolbarProperties {
     static final WritableBooleanPropertyKey PAGE_NAV_AND_EDIT_VISIBLE =
             new WritableBooleanPropertyKey();
 
+    /** Whether the done button is visible. */
+    static final WritableBooleanPropertyKey DONE_BUTTON_VISIBLE = new WritableBooleanPropertyKey();
+
     static final PropertyKey[] ALL_KEYS = {
         CURRENT_PAGE_NUMBER,
         TITLE,
         TOTAL_PAGE_COUNT,
         ZOOM_LEVEL,
         ON_CLICK_LISTENER,
+        EDIT_MODE_ACTIVE,
         TWO_PAGES_PER_ROW_ACTIVE,
         ZOOM_DECREASE_BUTTON_ENABLED,
         ZOOM_INCREASE_BUTTON_ENABLED,
         PAGE_NUMBER_EDIT_LISTENER,
         SHOW_FIT_TO_HEIGHT_ICON,
         DOWNLOAD_BUTTON_VISIBLE,
-        ROTATE_BUTTON_VISIBLE,
         FIT_TO_PAGE_BUTTON_VISIBLE,
+        DONE_BUTTON_VISIBLE,
         ZOOM_CONTROLS_VISIBLE,
         PAGE_NAV_AND_EDIT_VISIBLE
     };

@@ -69,6 +69,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
+#include "third_party/blink/renderer/platform/graphics/bitmap_image.h"
 #include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -330,8 +331,7 @@ void ImageLoader::SetImageWithoutConsideringPendingLoadEvent(
     }
   }
 
-  if (LayoutImageResource* image_resource = GetLayoutImageResource())
-    image_resource->ResetAnimation();
+  ResetAnimation();
 }
 
 static void ConfigureRequest(
@@ -638,8 +638,9 @@ void ImageLoader::DoUpdateFromElement(const DOMWrapperWorld* world,
     }
   }
 
-  if (LayoutImageResource* image_resource = GetLayoutImageResource())
-    image_resource->ResetAnimation();
+  ResetAnimation(update_behavior == kUpdateForcedReload
+                     ? ResetTimeline::kAll
+                     : ResetTimeline::kSharedOnly);
 }
 
 void ImageLoader::UpdateFromElement(UpdateFromElementBehavior update_behavior,
@@ -899,6 +900,31 @@ void ImageLoader::OnAttachLayoutTree() {
   image_resource->SetImageResource(image_content_);
 }
 
+void ImageLoader::ResetAnimation(ResetTimeline timeline) {
+  if (!RuntimeEnabledFeatures::SvgImageAnimationResetEnabled()) {
+    if (LayoutImageResource* image_resource = GetLayoutImageResource()) {
+      image_resource->ResetAnimation(timeline);
+    }
+    return;
+  }
+
+  if (!image_content_ || !image_content_->HasImage()) {
+    return;
+  }
+
+  if (auto* image = DynamicTo<BitmapImage>(image_content_->GetImage());
+      image && timeline == ImageLoader::ResetTimeline::kSharedOnly) {
+    image->ResetAnimationSharedTimelineOnly();
+  } else {
+    image_content_->GetImage()->ResetAnimation();
+  }
+
+  if (LayoutImageResource* image_resource = GetLayoutImageResource();
+      image_resource && image_resource->CachedImage() == image_content_) {
+    image_resource->InvalidatePaint();
+  }
+}
+
 void ImageLoader::UpdateLayoutObject() {
   LayoutImageResource* image_resource = GetLayoutImageResource();
 
@@ -914,34 +940,28 @@ void ImageLoader::UpdateLayoutObject() {
     image_resource->SetImageResource(image_content_.Get());
 }
 
-gfx::Size ImageLoader::AccessNaturalSize() const {
+gfx::Size ImageLoader::DensityCorrectedNaturalSize(
+    float inverse_density) const {
   if (!image_content_ || !image_content_->HasImage() ||
       image_content_->ErrorOccurred()) {
     return gfx::Size();
   }
   Image& image = *image_content_->GetImage();
-  gfx::Size size = image.Size(kRespectImageOrientation);
-
   if (auto* svg_image = DynamicTo<SVGImage>(image)) {
-    gfx::Size concrete_object_size;
-    if (std::optional<NaturalSizingInfo> sizing_info =
-            SVGImageForContainer::GetNaturalDimensions(*svg_image, nullptr)) {
-      concrete_object_size =
-          ToRoundedSize(PhysicalSize::FromSizeFFloor(blink::ConcreteObjectSize(
-              *sizing_info, gfx::SizeF(LayoutReplaced::kDefaultWidth,
-                                       LayoutReplaced::kDefaultHeight))));
-      size = ToRoundedSize(PhysicalSize::FromSizeFFloor(
-          blink::ConcreteObjectSize(*sizing_info, gfx::SizeF())));
+    std::optional<NaturalSizingInfo> sizing_info =
+        SVGImageForContainer::GetNaturalDimensions(*svg_image, nullptr);
+    if (!sizing_info) {
+      return gfx::Size();
     }
-    if (size != concrete_object_size) {
-      element_->GetDocument().CountUse(
-          WebFeature::kHTMLImageElementNaturalSizeDiffersForSvgImage);
-    }
-    if (!RuntimeEnabledFeatures::HTMLImageElementActualNaturalSizeEnabled()) {
-      size = concrete_object_size;
-    }
+    sizing_info->size.Scale(inverse_density);
+
+    static constexpr gfx::SizeF kDefaultObjectSize{300, 150};
+    return ToRoundedSize(PhysicalSize::FromSizeFFloor(
+        blink::ConcreteObjectSize(*sizing_info, kDefaultObjectSize)));
   }
-  return size;
+  PhysicalSize natural_size(image.Size(kRespectImageOrientation));
+  natural_size.Scale(inverse_density);
+  return {natural_size.width.ToInt(), natural_size.height.ToInt()};
 }
 
 ResourcePriority ImageLoader::ComputeResourcePriority() const {

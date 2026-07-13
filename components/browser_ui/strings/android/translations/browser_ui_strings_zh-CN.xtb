@@ -194,6 +194,7 @@
 <translation id="2874939134665556319">上一首</translation>
 <translation id="2891975107962658722">禁止某个网站将数据保存在您的设备上</translation>
 <translation id="2903493209154104877">地址</translation>
+<translation id="2903764741244499151">网站可以自动进入画中画模式。这样，您就可以继续观看视频，同时腾出屏幕空间来处理其他任务。</translation>
 <translation id="2918484639460781603">前往“设置”</translation>
 <translation id="2932883381142163287">举报滥用行为</translation>
 <translation id="2939338015096024043">开启此设置后，网站可以请求跟踪您的摄像头位置并了解您周围的环境。关闭此设置后，网站无法跟踪您的摄像头位置，也无法了解您周围的环境。</translation>
@@ -369,7 +370,7 @@
 <translation id="4663373278480897665">已允许使用摄像头</translation>
 <translation id="4670064810192446073">虚拟现实</translation>
 <translation id="4672315773691449562">点按“浏览器应用”，然后点按“Chrome”</translation>
-<translation id="4676059169848868271">若要允许 <ph name="APP_NAME" /> 使用手部跟踪功能，您还需在<ph name="BEGIN_LINK" />系统设置<ph name="END_LINK" />中开启手部跟踪功能。</translation>
+<translation id="4676059169848868271">若要允许 <ph name="APP_NAME" /> 使用手部追踪功能，您还需在<ph name="BEGIN_LINK" />系统设置<ph name="END_LINK" />中开启手部追踪功能。</translation>
 <translation id="4688045258817337666">管理您的卡</translation>
 <translation id="4722332387043141878">网站通常会使用您设备的移动传感器和光传感器来实现虚拟现实或健身跟踪等功能</translation>
 <translation id="4755971844837804407">开启此设置后，网站可以向您展示任何广告。关闭此设置后，网站无法展示侵扰性或误导性广告。</translation>
@@ -460,7 +461,7 @@
 <translation id="5740126560802162366">网站可将数据保存在您的设备上</translation>
 <translation id="5743425052258407233">在您的所有设备上同步历史记录，以便您轻松继续未完成的操作</translation>
 <translation id="5749158352074143502">继续使用此标签页</translation>
-<translation id="5750869797196646528">手部跟踪</translation>
+<translation id="5750869797196646528">手部追踪</translation>
 <translation id="5753570386948603678">从下载记录中删除</translation>
 <translation id="5771720122942595109">已禁用“<ph name="PERMISSION_1" />”权限</translation>
 <translation id="5792627621688759634">使用触控板滑动浏览各个页面</translation>
@@ -690,7 +691,6 @@
 <translation id="8163152278172770963">不允许网站自动进入画中画模式</translation>
 <translation id="8168435359814927499">内容</translation>
 <translation id="818487310457576362">从屏幕边缘拖动即可退出全屏。</translation>
-<translation id="8186479265534291036">网站无法正常运行？这是因为第三方 Cookie 已被屏蔽</translation>
 <translation id="8197286292360124385">已授予“<ph name="PERMISSION_1" />”权限</translation>
 <translation id="8200772114523450471">继续</translation>
 <translation id="8211406090763984747">连接是安全的</translation>
@@ -705,7 +705,7 @@
 <translation id="8324158725704657629">别再询问</translation>
 <translation id="8362795839483915693">您可以放大或缩小所访问网站的内容</translation>
 <translation id="8372893542064058268">允许特定网站进行后台同步。</translation>
-<translation id="8378714024927312812">由贵组织管理</translation>
+<translation id="8378714024927312812">由您的组织管理</translation>
 <translation id="83792324527827022">有一个网站正在使用您的摄像头和麦克风</translation>
 <translation id="8380167699614421159">此网站会展示侵扰性或误导性广告</translation>
 <translation id="8394832520002899662">点按即可返回到网站</translation>
@@ -761,7 +761,6 @@
 <translation id="8805385115381080995">由于网站要求您验证自己是真实用户的情况随之减少，浏览体验将变得更加流畅。</translation>
 <translation id="881644524232657178">开启此设置后，网站可以使用设备的移动传感器和光传感器。关闭此设置后，网站无法使用传感器。</translation>
 <translation id="8847988622838149491">USB</translation>
-<translation id="8874790741333031443">尝试暂时允许使用第三方 Cookie，这样浏览保护会降低，但网站功能更可能正常运行。</translation>
 <translation id="8889294078294184559">随着您继续浏览，所访问的网站可从 Chrome 中获取上一个网站提供的相关信息来验证您可能是真实的用户</translation>
 <translation id="8899807382908246773">侵扰性广告</translation>
 <translation id="8903921497873541725">放大</translation>
@@ -787,7 +786,6 @@
 <translation id="913657688200966289">在 <ph name="BEGIN_LINK" />Android 设置<ph name="END_LINK" />中为 <ph name="APP_NAME" /> 开启这些权限。</translation>
 <translation id="9138037198177304356">已授予通知权限</translation>
 <translation id="9138217887606523162">当前缩放比例为 <ph name="ZOOM_LEVEL" />%%</translation>
-<translation id="915112772806845021">网站会使用此功能自动进入画中画模式。这样，您就可以继续观看视频，同时腾出屏幕空间来处理其他任务。</translation>
 <translation id="9156722768168878035">让 Chrome 在设备的应用列表和搜索结果中显示您近期打开的标签页。您可以随时在 Chrome 设置中关闭此功能。</translation>
 <translation id="9162462602695099906">这是一个危险网页</translation>
 <translation id="9182556968660520230">不允许网站播放受保护内容</translation>

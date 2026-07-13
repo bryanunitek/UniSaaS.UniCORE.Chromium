@@ -32,6 +32,8 @@
 #include "third_party/blink/public/common/switches.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/accessibility/accessibility_switches.h"
+#include "ui/accessibility/ax_tree_id.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace surface_embed {
@@ -774,6 +776,33 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, CrashEarly) {
   EXPECT_TRUE(CheckHasPixelInColor(SkColors::kGray.toSkColor()));
 }
 
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, CrashThenReload) {
+  auto child_contents = SetupHarnessAndChildWithContent(kRedBoxUrl);
+  AttachChildToEmbed(child_contents.get());
+
+  EXPECT_TRUE(CheckHasPixelInColor(SK_ColorRED));
+
+  // Simulate a crash.
+  content::ScopedAllowRendererCrashes testing_crashes_here(
+      child_contents->GetPrimaryMainFrame());
+  child_contents->GetPrimaryMainFrame()->GetProcess()->Shutdown(
+      content::RESULT_CODE_KILLED);
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return child_contents->IsCrashed(); }));
+  // The crashed frame gets drawn with a gray background, with an image
+  // in the middle (which doesn't seem configured for tests). The gray in
+  // question is a bit different than SK_ColorGRAY.
+  EXPECT_TRUE(CheckHasPixelInColor(SkColors::kGray.toSkColor()));
+  EXPECT_FALSE(HasPixelInColor(SK_ColorRED));
+
+  // Reload the child contents.
+  child_contents->GetController().Reload(content::ReloadType::NORMAL, false);
+  EXPECT_TRUE(content::WaitForLoadStop(child_contents.get()));
+
+  EXPECT_FALSE(child_contents->IsCrashed());
+  EXPECT_TRUE(CheckHasPixelInColor(SK_ColorRED));
+}
+
 IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, VisualPropertiesSync) {
   auto child_contents = SetupHarnessAndChild();
   AttachChildToEmbed(child_contents.get());
@@ -964,6 +993,105 @@ IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, FocusByClick) {
   EXPECT_EQ(web_contents(), content::GetFocusedWebContents(web_contents()));
   EXPECT_EQ(web_contents()->GetPrimaryMainFrame(),
             web_contents()->GetFocusedFrame());
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest,
+                       HtmlPopupOnSurfaceEmbeddedPage) {
+  auto child_contents =
+      SetupHarnessAndChildWithContent("/surface_embed/inner_page.html");
+  AttachChildToEmbed(child_contents.get());
+
+  // Replace child page contents with a select element.
+  EXPECT_TRUE(content::ExecJs(child_contents.get(), R"(
+    document.body.innerHTML = "<select><option>option1</option></select>";
+  )"));
+
+  // Ensure visibility and activation of the child WebContents.
+  child_contents->WasShown();
+  child_contents->GetPrimaryMainFrame()->GetRenderWidgetHost()->SetActive(true);
+
+  content::ShowPopupWidgetWaiter waiter(child_contents.get(),
+                                        child_contents->GetPrimaryMainFrame());
+  EXPECT_TRUE(content::ExecJs(child_contents.get(),
+                              "document.querySelector('select').showPicker()"));
+  // Android sometimes times out when waiting for the popup.
+#if !BUILDFLAG(IS_ANDROID)
+  waiter.Wait();
+#endif
+}
+
+// Runs the browser with renderer accessibility forced on so the plugin sends
+// real parent-accessibility info over mojo to the SurfaceEmbedHost.
+class SurfaceEmbedAccessibilityBrowserTest : public SurfaceEmbedBrowserTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    SurfaceEmbedBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(::switches::kForceRendererAccessibility);
+  }
+};
+
+// Verifies the renderer->browser accessibility path. With accessibility
+// enabled, the renderer plugin sends SetParentAccessibilityInfo over mojo and
+// the host receives it.
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedAccessibilityBrowserTest,
+                       PluginSendsParentAccessibilityInfoToHost) {
+  auto child_contents = SetupHarnessAndChild();
+  AttachChildToEmbed(child_contents.get());
+
+  WaitForHostCount(kSingleEmbedCount);
+  ASSERT_EQ(kSingleEmbedCount, GetHostCount());
+  SurfaceEmbedHost* host = GetHost(0);
+  ASSERT_NE(nullptr, host);
+
+  EXPECT_NE(web_contents()->GetPrimaryMainFrame()->GetAXTreeID(),
+            ui::AXTreeIDUnknown());
+
+  // The renderer plugin sends SetParentAccessibilityInfo over mojo; wait until
+  // the host receives it.
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return host->HasReceivedParentAccessibilityInfoForTesting(); }));
+}
+
+IN_PROC_BROWSER_TEST_F(SurfaceEmbedBrowserTest, FocusPreservedAfterNavigation) {
+  NavigateToTestUrl(kFocusHarnessUrl);
+
+  auto child_contents = CreateChildWebContents();
+  NavigateChildToUrl(child_contents.get(), kInnerPageUrl);
+  content::ReadyForInputObserver(web_contents()).Wait();
+
+  AttachChildToEmbedWithId(child_contents.get(), "my_embed");
+
+  // Click/focus the outer page first to ensure the window is focused.
+  content::SimulateMouseClickOrTapElementWithId(web_contents(), "outer1");
+  EXPECT_TRUE(
+      content::EvalJs(web_contents(), "document.hasFocus()").ExtractBool());
+
+  // Focus the child input element.
+  EXPECT_TRUE(content::ExecJs(child_contents.get(),
+                              "document.getElementById('inner').focus()"));
+
+  // Wait for the focus change to propagate.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return content::EvalJs(child_contents.get(), "document.hasFocus()")
+        .ExtractBool();
+  }));
+
+  EXPECT_TRUE(
+      content::EvalJs(web_contents(), "document.hasFocus()").ExtractBool());
+  EXPECT_TRUE(content::EvalJs(child_contents.get(), "document.hasFocus()")
+                  .ExtractBool());
+
+  // Navigate the child to a different site to force a
+  // cross-process/cross-domain navigation.
+  GURL cross_site_url = embedded_test_server()->GetURL("a.test", kInnerPageUrl);
+  ASSERT_TRUE(content::NavigateToURL(child_contents.get(), cross_site_url));
+  ASSERT_TRUE(content::WaitForLoadStop(child_contents.get()));
+
+  // Verify that the focus is preserved on the navigated child page.
+  EXPECT_TRUE(
+      content::EvalJs(web_contents(), "document.hasFocus()").ExtractBool());
+  EXPECT_TRUE(content::EvalJs(child_contents.get(), "document.hasFocus()")
+                  .ExtractBool());
 }
 
 }  // namespace surface_embed

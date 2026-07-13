@@ -44,11 +44,6 @@ class DISABLED_GlicProfileManagerUiTest : public test::InteractiveGlicTest {
     GlicProfileManager::SetPrewarmingEnabledForTesting(false);
     GlicProfileManager::ForceConnectionTypeForTesting(
         net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
-    fre_server_.ServeFilesFromDirectory(
-        base::PathService::CheckedGet(base::DIR_ASSETS)
-            .AppendASCII("gen/chrome/test/data/webui/glic/"));
-    ASSERT_TRUE(fre_server_.Start());
-    fre_url_ = fre_server_.GetURL("/glic/test_client/fre.html");
     test::InteractiveGlicTest::SetUp();
   }
 
@@ -71,17 +66,13 @@ class DISABLED_GlicProfileManagerUiTest : public test::InteractiveGlicTest {
         second_profile_path_);
   }
 
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    command_line->AppendSwitchASCII(switches::kGlicFreURL, fre_url_.spec());
-  }
-
   void TearDownOnMainThread() override {
     test::InteractiveGlicTest::TearDownOnMainThread();
   }
 
   GlicKeyedService* GetService(bool primary) {
     return GlicKeyedServiceFactory::GetGlicKeyedService(
-        primary ? browser()->profile() : GetSecondProfile());
+        primary ? browser()->GetProfile() : GetSecondProfile());
   }
 
   auto CreateAndWarmGlic(bool primary_profile) {
@@ -162,9 +153,7 @@ class DISABLED_GlicProfileManagerUiTest : public test::InteractiveGlicTest {
 
  private:
   base::FilePath second_profile_path_;
-  net::EmbeddedTestServer fre_server_;
   raw_ptr<content::WebContents> web_client_contents_ = nullptr;
-  GURL fre_url_;
   base::test::ScopedFeatureList feature_list_;
 };
 
@@ -175,7 +164,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_GlicProfileManagerUiTest, ConsistentPreload) {
       CheckWarmedAndSized(false, false),
       // Enable preloading again.
       ResetPreloading(), Do([this]() {
-        SetFRECompletion(browser()->profile(), prefs::FreStatus::kCompleted);
+        SetFRECompletion(browser()->GetProfile(), prefs::FreStatus::kCompleted);
       }),
       // Attempt to preload for the primary profile.
       CreateAndWarmGlic(/*primary_profile=*/true),
@@ -199,7 +188,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_GlicProfileManagerUiTest, PreloadMutex) {
       CheckWarmedAndSized(false, false),
       // Re-enable preloading.
       ResetPreloading(), Do([this]() {
-        SetFRECompletion(browser()->profile(), prefs::FreStatus::kCompleted);
+        SetFRECompletion(browser()->GetProfile(), prefs::FreStatus::kCompleted);
       }),
       // Attempt to preload for the primary profile.
       CreateAndWarmGlic(/*primary_profile=*/true),
@@ -229,7 +218,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_GlicProfileManagerUiTest, ShowMutex) {
       CheckWarmedAndSized(false, true),
       // Set primary profile to completed so it can be warmed.
       Do([this]() {
-        SetFRECompletion(browser()->profile(), prefs::FreStatus::kCompleted);
+        SetFRECompletion(browser()->GetProfile(), prefs::FreStatus::kCompleted);
       }),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached),
       // The first service should remain warmed.
@@ -251,7 +240,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_GlicProfileManagerUiTest, FreMutex) {
       CheckWarmedAndSized(false, true),
       // Set primary profile to completed so it can be warmed.
       Do([this]() {
-        SetFRECompletion(browser()->profile(), prefs::FreStatus::kCompleted);
+        SetFRECompletion(browser()->GetProfile(), prefs::FreStatus::kCompleted);
       }),
       ToggleGlicWindow(GlicWindowMode::kAttached),
       // The first service should remain warmed.
@@ -268,7 +257,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_GlicProfileManagerUiTest,
       ResetPreloading(),
       // Set primary profile to completed so it can be warmed.
       Do([this]() {
-        SetFRECompletion(browser()->profile(), prefs::FreStatus::kCompleted);
+        SetFRECompletion(browser()->GetProfile(), prefs::FreStatus::kCompleted);
       }),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached),
       CheckWarmedAndSized(true, false),
@@ -287,7 +276,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_GlicProfileManagerUiTest,
       CheckWarmedAndSized(false, false),
       // Re-enable preloading.
       ResetPreloading(), Do([this]() {
-        SetFRECompletion(browser()->profile(), prefs::FreStatus::kCompleted);
+        SetFRECompletion(browser()->GetProfile(), prefs::FreStatus::kCompleted);
       }),
       // Attempt to preload for the primary profile.
       CreateAndWarmGlic(/*primary_profile=*/true),
@@ -306,7 +295,7 @@ IN_PROC_BROWSER_TEST_F(DISABLED_GlicProfileManagerUiTest,
       CheckWarmedAndSized(false, false),
       // Re-enable preloading.
       ResetPreloading(), Do([this]() {
-        SetFRECompletion(browser()->profile(), prefs::FreStatus::kCompleted);
+        SetFRECompletion(browser()->GetProfile(), prefs::FreStatus::kCompleted);
       }),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached),
       CheckWarmedAndSized(true, false), SendMemoryPressureSignal(),

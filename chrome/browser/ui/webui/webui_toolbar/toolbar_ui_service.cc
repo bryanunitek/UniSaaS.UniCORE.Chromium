@@ -142,6 +142,36 @@ void ToolbarUIService::ShowContentSettingsBubble(
   }
 }
 
+void ToolbarUIService::OnPageActionClick(
+    ::toolbar_ui_api::mojom::PageActionId action_id,
+    ::toolbar_ui_api::mojom::PageActionTrigger trigger,
+    OnPageActionClickCallback callback) {
+  if (delegate_) {
+    delegate_->OnPageActionClick(action_id, trigger, std::move(callback));
+  } else {
+    std::move(callback).Run(base::unexpected(Error::New(
+        Code::kFailedPrecondition,
+        base::StringPrintf("ToolbarUIService: cannot click page action "
+                           "(action_id=%d, trigger=%d) without delegate_",
+                           static_cast<int>(action_id),
+                           static_cast<int>(trigger)))));
+  }
+}
+
+void ToolbarUIService::OnPageActionChipShowingChanged(
+    ::toolbar_ui_api::mojom::PageActionId action_id,
+    OnPageActionChipShowingChangedCallback callback) {
+  if (delegate_) {
+    delegate_->OnPageActionChipShowingChanged(action_id, std::move(callback));
+  } else {
+    std::move(callback).Run(base::unexpected(Error::New(
+        Code::kFailedPrecondition,
+        base::StringPrintf("ToolbarUIService: cannot change page action "
+                           "chip showing (action_id=%d) without delegate_",
+                           static_cast<int>(action_id)))));
+  }
+}
+
 void ToolbarUIService::InvokePinnedToolbarAction(
     toolbar_ui_api::mojom::PinnedToolbarAction action_id) {
   if (delegate_) {
@@ -221,6 +251,7 @@ void ToolbarUIService::OnToolbarDropFile(const gfx::PointF& drop_position) {
 void ToolbarUIService::ShowAvatarMenu(ShowAvatarMenuCallback callback) {
   if (delegate_) {
     delegate_->ShowAvatarMenu();
+    std::move(callback).Run({});
   } else {
     std::move(callback).Run(base::unexpected(Error::New(
         Code::kFailedPrecondition,
@@ -228,4 +259,63 @@ void ToolbarUIService::ShowAvatarMenu(ShowAvatarMenuCallback callback) {
   }
 }
 
+void ToolbarUIService::SetAvatarButtonHovered(
+    bool hovered,
+    SetAvatarButtonHoveredCallback callback) {
+  if (delegate_) {
+    delegate_->SetAvatarButtonHovered(hovered);
+    std::move(callback).Run({});
+  } else {
+    std::move(callback).Run(base::unexpected(Error::New(
+        Code::kFailedPrecondition,
+        "ToolbarUIService: cannot hover on avatar without delegate_")));
+  }
+}
+
+void ToolbarUIService::SetAvatarButtonFocused(
+    bool focused,
+    SetAvatarButtonFocusedCallback callback) {
+  if (delegate_) {
+    delegate_->SetAvatarButtonFocused(focused);
+    std::move(callback).Run({});
+  } else {
+    std::move(callback).Run(base::unexpected(Error::New(
+        Code::kFailedPrecondition,
+        "ToolbarUIService: cannot focus on avatar without delegate_")));
+  }
+}
+
+void ToolbarUIService::SetAvatarButtonIphPromoShowing(
+    bool showing,
+    SetAvatarButtonIphPromoShowingCallback callback) {
+  if (delegate_) {
+    delegate_->SetAvatarButtonIPHPromoShowing(showing);
+    std::move(callback).Run({});
+  } else {
+    std::move(callback).Run(
+        base::unexpected(Error::New(Code::kFailedPrecondition,
+                                    "ToolbarUIService: cannot set IPH promo "
+                                    "showing on avatar without delegate_")));
+  }
+}
+
+void ToolbarUIService::OnAppMenuFocusChanged(bool focused) {
+  if (delegate_) {
+    delegate_->OnAppMenuFocusChanged(focused);
+  }
+}
+
+void ToolbarUIService::ExecuteExtensionAction(const std::string& extension_id) {
+  if (delegate_) {
+    delegate_->ExecuteExtensionAction(extension_id);
+  }
+}
+
+void ToolbarUIService::ShowExtensionContextMenu(
+    const std::string& extension_id,
+    ui::mojom::MenuSourceType source) {
+  if (delegate_) {
+    delegate_->ShowExtensionContextMenu(extension_id, source);
+  }
+}
 }  // namespace toolbar_ui_api

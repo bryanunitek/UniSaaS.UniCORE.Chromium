@@ -89,7 +89,6 @@
 <translation id="3649471731638882002">{TAB_COUNT,plural, =1{ერთეულის დახურვა}other{ერთეულების დახურვა}}</translation>
 <translation id="3652027618765638838"><ph name="CURRENT_RATING" />/<ph name="RATING_BASELINE" /></translation>
 <translation id="374923079891132274">ესკიზი ფურცლის გაზიარების გადახედვისთვის.</translation>
-<translation id="3775705724665058594">გააგზავნეთ თქვენს მოწყობილობებზე</translation>
 <translation id="3776329373944672717">ჩანართების ჯგუფის სათაური „<ph name="TITLE_OF_GROUP" />“</translation>
 <translation id="3810973564298564668">მართვა</translation>
 <translation id="3849789634341518784">{TAB_COUNT,plural, =1{ჩანართის ჩამაგრების მოხსნა}other{ჩანართების ჩამაგრების მოხსნა}}</translation>
@@ -184,7 +183,6 @@
 <translation id="7129458170538955174">ამ მაღაზიის შესახებ ინფორმაცია გახსნილია ნახევარ სიმაღლეზე</translation>
 <translation id="7204204600596740190">რამდენიმეარჩევანიანი რეჟიმი</translation>
 <translation id="7211038039686180558">თქვენი ჩანართების ჯგუფები ავტომატურად შეინახება და განახლდება თქვენს ყველა შესულ მოწყობილობაში</translation>
-<translation id="731648547091221002"><ph name="COLOR_NAME" /> არჩეულია</translation>
 <translation id="7326879924029668159">იხილეთ დაბრუნების წესები და სხვა ინფორმაცია</translation>
 <translation id="7352298686197644113">იხილეთ, რომელ ერთეულს აქვს უფრო დაბალი ფასი თქვენს გახსნილ ჩანართებში</translation>
 <translation id="7369451074646620503">ჩანართების ჯგუფი „<ph name="TAB_GROUP_NAME" />“ აღარაა ხელმისაწვდომი</translation>
@@ -210,7 +208,6 @@
 <translation id="7854360405711302755">{REVIEWS,plural, =1{ შეფასება: <ph name="CURRENT_RATING" />/<ph name="RATING_BASELINE" />, <ph name="REVIEWS_COUNT_ONE" /> მიმოხილვა}other{შეფასება: <ph name="CURRENT_RATING" />/<ph name="RATING_BASELINE" />, <ph name="REVIEWS_COUNT_MANY" /> მიმოხილვა}}</translation>
 <translation id="7885132941432959125">ჩანართის მარჯვნივ გადატანა</translation>
 <translation id="7887334752153342268">დუბლირება</translation>
-<translation id="7939917283308035850"><ph name="COLOR_NAME" /> არ არის არჩეული</translation>
 <translation id="7961015016161918242">არასოდეს</translation>
 <translation id="7966321538264951561">შემოთავაზებების დახურვა.</translation>
 <translation id="796696298310625748">{WINDOW_COUNT,plural, =1{ჩანართის ახალ ფანჯარაში გადატანა}other{ჩანართის გადატანა სხვა ფანჯარაში}}</translation>

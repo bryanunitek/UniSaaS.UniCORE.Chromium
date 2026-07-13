@@ -1,19 +1,26 @@
-// Copyright 2026 The Chromium Authors
+// Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/ai/semantic_embedder.h"
 
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/public/mojom/ai/ai_manager.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_string_stringsequence.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_content_embedding.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_semantic_embedder_create_options.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_semantic_embedder_embed_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_semantic_embedder_result.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_semantic_embedder_task_type.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
+#include "third_party/blink/renderer/modules/ai/ai_context_observer.h"
 #include "third_party/blink/renderer/modules/ai/ai_interface_proxy.h"
 #include "third_party/blink/renderer/modules/ai/ai_metrics.h"
 #include "third_party/blink/renderer/modules/ai/ai_utils.h"
@@ -46,8 +53,8 @@ mojom::blink::AISemanticEmbedderTaskType ToMojoTaskType(
   NOTREACHED();
 }
 
-[[maybe_unused]] mojom::blink::AISemanticEmbedderEmbedOptionsPtr
-EmbedOptionsToMojo(const SemanticEmbedderEmbedOptions* options) {
+mojom::blink::AISemanticEmbedderEmbedOptionsPtr EmbedOptionsToMojo(
+    const SemanticEmbedderEmbedOptions* options) {
   auto mojo_options = mojom::blink::AISemanticEmbedderEmbedOptions::New();
   if (options && options->hasTaskType()) {
     mojo_options->task_type = ToMojoTaskType(options->taskType());
@@ -58,78 +65,87 @@ EmbedOptionsToMojo(const SemanticEmbedderEmbedOptions* options) {
 class CreateSemanticEmbedderClient
     : public GarbageCollected<CreateSemanticEmbedderClient>,
       public mojom::blink::AIManagerCreateSemanticEmbedderClient,
-      public ExecutionContextClient {
+      public ExecutionContextClient,
+      public AIContextObserver<SemanticEmbedder> {
  public:
   CreateSemanticEmbedderClient(
       ScriptState* script_state,
       ScriptPromiseResolver<SemanticEmbedder>* resolver,
+      AbortSignal* signal,
       SemanticEmbedderCreateOptions* options)
       : ExecutionContextClient(ExecutionContext::From(script_state)),
-        script_state_(script_state),
-        resolver_(resolver),
+        AIContextObserver(script_state, this, resolver, signal),
         options_(options),
         receiver_(this, ExecutionContext::From(script_state)),
         task_runner_(ExecutionContext::From(script_state)
                          ->GetTaskRunner(TaskType::kInternalDefault)) {
     HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
-        AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
+        AIInterfaceProxy::GetAIManagerRemote(
+            ExecutionContext::From(GetScriptState()));
 
-    // Stubbed out for DevTrial Phase 1
-    (void)ai_manager_remote;
-    Create(mojom::blink::ModelAvailabilityCheckResult::
-               kUnavailableFeatureNotEnabled);
+    ai_manager_remote->CanCreateSemanticEmbedder(
+        BindOnce(&CreateSemanticEmbedderClient::Create, WrapPersistent(this)));
   }
 
   void Trace(Visitor* visitor) const override {
+    AIContextObserver<SemanticEmbedder>::Trace(visitor);
     ExecutionContextClient::Trace(visitor);
-    visitor->Trace(script_state_);
-    visitor->Trace(resolver_);
     visitor->Trace(options_);
     visitor->Trace(receiver_);
   }
 
+  // mojom::blink::AIManagerCreateSemanticEmbedderClient:
   void OnResult(mojo::PendingRemote<mojom::blink::AISemanticEmbedder>
                     pending_remote) override {
-    if (!resolver_) {
+    if (!GetResolver()) {
       return;
     }
     if (pending_remote) {
-      resolver_->Resolve(MakeGarbageCollected<SemanticEmbedder>(
-          script_state_, task_runner_, std::move(pending_remote), options_));
+      GetResolver()->Resolve(MakeGarbageCollected<SemanticEmbedder>(
+          GetScriptState(), task_runner_, std::move(pending_remote), options_));
     } else {
-      resolver_->RejectWithDOMException(DOMExceptionCode::kInvalidStateError,
-                                        kExceptionMessageUnableToCreateSession);
+      GetResolver()->RejectWithDOMException(
+          DOMExceptionCode::kInvalidStateError,
+          kExceptionMessageUnableToCreateSession);
     }
     Cleanup();
   }
 
   void OnError(mojom::blink::AIManagerCreateClientError error) override {
-    if (!resolver_) {
+    if (!GetResolver()) {
       return;
     }
-    resolver_->RejectWithDOMException(DOMExceptionCode::kInvalidStateError,
-                                      kExceptionMessageUnableToCreateSession);
+    GetResolver()->RejectWithDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        kExceptionMessageUnableToCreateSession);
     Cleanup();
   }
 
+  void OnConnectionError() {
+    OnError(mojom::blink::AIManagerCreateClientError::kUnableToCreateSession);
+  }
+
+ protected:
+  void ResetReceiver() override { receiver_.reset(); }
+
  private:
   void Create(mojom::blink::ModelAvailabilityCheckResult result) {
-    if (!resolver_) {
+    if (!GetResolver()) {
       return;
     }
     auto availability = ConvertModelAvailabilityCheckResult(result);
     if (availability == Availability::kUnavailable) {
-      resolver_->RejectWithDOMException(
+      GetResolver()->RejectWithDOMException(
           DOMExceptionCode::kNotSupportedError,
           ConvertModelAvailabilityCheckResultToDebugString(result));
       Cleanup();
       return;
     }
 
-    LocalDOMWindow* window = LocalDOMWindow::From(script_state_);
+    LocalDOMWindow* window = LocalDOMWindow::From(GetScriptState());
     if (window && RequiresUserActivation(availability) &&
         !MeetsUserActivationRequirements(window)) {
-      resolver_->RejectWithDOMException(
+      GetResolver()->RejectWithDOMException(
           DOMExceptionCode::kNotAllowedError,
           kExceptionMessageUserActivationRequired);
       Cleanup();
@@ -137,33 +153,24 @@ class CreateSemanticEmbedderClient
     }
 
     HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
-        AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
+        AIInterfaceProxy::GetAIManagerRemote(
+            ExecutionContext::From(GetScriptState()));
 
     mojo::PendingRemote<mojom::blink::AIManagerCreateSemanticEmbedderClient>
         client_remote;
     receiver_.Bind(client_remote.InitWithNewPipeAndPassReceiver(),
                    task_runner_);
-    // Stubbed out for DevTrial Phase 1
-    (void)ai_manager_remote;
-    resolver_->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
-                                      "Feature not supported");
-    Cleanup();
+    receiver_.set_disconnect_handler(
+        BindOnce(&CreateSemanticEmbedderClient::OnConnectionError,
+                 WrapWeakPersistent(this)));
+    ai_manager_remote->CreateSemanticEmbedder(std::move(client_remote));
   }
 
-  void Cleanup() {
-    resolver_ = nullptr;
-    receiver_.reset();
-    keep_alive_.Clear();
-  }
-
-  Member<ScriptState> script_state_;
-  Member<ScriptPromiseResolver<SemanticEmbedder>> resolver_;
   Member<SemanticEmbedderCreateOptions> options_;
   HeapMojoReceiver<mojom::blink::AIManagerCreateSemanticEmbedderClient,
                    CreateSemanticEmbedderClient>
       receiver_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
-  SelfKeepAlive<CreateSemanticEmbedderClient> keep_alive_{this};
 };
 
 }  // namespace
@@ -211,9 +218,18 @@ ScriptPromise<V8Availability> SemanticEmbedder::availability(
   HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
       AIInterfaceProxy::GetAIManagerRemote(execution_context);
 
-  // Stubbed out for DevTrial Phase 1
-  (void)ai_manager_remote;
-  resolver->Resolve(AvailabilityToV8(Availability::kUnavailable));
+  ai_manager_remote->CanCreateSemanticEmbedder(
+      BindOnce(
+          [](ScriptPromiseResolver<V8Availability>* resolver,
+             ExecutionContext* execution_context,
+             mojom::blink::ModelAvailabilityCheckResult result) {
+            Availability availability = HandleModelAvailabilityCheckResult(
+                execution_context, AIMetrics::AISessionType::kSemanticEmbedder,
+                result);
+            resolver->Resolve(AvailabilityToV8(availability));
+          },
+          WrapPersistent(resolver), WrapPersistent(execution_context))
+          .Then(RejectOnDestruction(resolver)));
   return promise;
 }
 
@@ -228,7 +244,7 @@ ScriptPromise<SemanticEmbedder> SemanticEmbedder::create(
   }
   CHECK(options);
 
-  AbortSignal* signal = options->getSignalOr(nullptr);
+  AbortSignal* signal = options->hasSignal() ? options->signal() : nullptr;
   if (HandleAbortSignal(signal, script_state, exception_state)) {
     return EmptyPromise();
   }
@@ -249,7 +265,7 @@ ScriptPromise<SemanticEmbedder> SemanticEmbedder::create(
   }
 
   MakeGarbageCollected<CreateSemanticEmbedderClient>(script_state, resolver,
-                                                     options);
+                                                     signal, options);
   return promise;
 }
 
@@ -282,9 +298,42 @@ ScriptPromise<SemanticEmbedderResult> SemanticEmbedder::embed(
       break;
   }
 
-  // Stubbed out
-  resolver->RejectWithDOMException(DOMExceptionCode::kNotSupportedError,
-                                   "Not implemented");
+  if (inputs.empty()) {
+    auto* embedder_result = SemanticEmbedderResult::Create();
+    embedder_result->setEmbeddings(HeapVector<Member<ContentEmbedding>>());
+    resolver->Resolve(embedder_result);
+    return promise;
+  }
+
+  embedder_remote_->Embed(
+      inputs, EmbedOptionsToMojo(options),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          BindOnce(
+              [](ScriptPromiseResolver<SemanticEmbedderResult>* resolver,
+                 mojom::blink::SemanticEmbedderResultPtr result) {
+                if (!result) {
+                  resolver->RejectWithDOMException(
+                      DOMExceptionCode::kInvalidStateError,
+                      kExceptionMessageSessionDestroyed);
+                  return;
+                }
+
+                auto* embedder_result = SemanticEmbedderResult::Create();
+
+                HeapVector<Member<ContentEmbedding>> embeddings;
+                embeddings.ReserveInitialCapacity(result->embeddings.size());
+                for (const auto& embedding : result->embeddings) {
+                  auto* content_embedding = ContentEmbedding::Create();
+                  content_embedding->setValues(NotShared<DOMFloat32Array>(
+                      DOMFloat32Array::Create(embedding->values)));
+                  embeddings.push_back(content_embedding);
+                }
+                embedder_result->setEmbeddings(embeddings);
+
+                resolver->Resolve(embedder_result);
+              },
+              WrapPersistent(resolver)),
+          nullptr));
   return promise;
 }
 

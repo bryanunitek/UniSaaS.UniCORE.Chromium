@@ -434,6 +434,20 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//chrome/browser/ui/signin/chrome_signout_confirmation_prompt.h:ChromeSignoutConfirmationChoice) -->
 
+<!-- LINT.IfChange(CookieBindingUpgradeStatus) -->
+
+<enum name="CookieBindingUpgradeStatus">
+  <int value="0" label="FeatureNotSupported"/>
+  <int value="1" label="FeatureDisabled"/>
+  <int value="2" label="NoWrappedKey"/>
+  <int value="3" label="HasStandardSession"/>
+  <int value="4" label="HasPrototypeSession"/>
+  <int value="5" label="NotFirstRun"/>
+  <int value="6" label="NeedsUpgrade"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/signin/core/browser/account_reconcilor.h:CookieBindingUpgradeStatus) -->
+
 <!-- LINT.IfChange(DeviceBoundSessionCreateSessionsResult) -->
 
 <enum name="DeviceBoundSessionCreateSessionsResult">
@@ -580,6 +594,20 @@ chromium-metrics-reviews@google.com.
   <int value="6" label="Don't show, feature flag is disabled"/>
 </enum>
 
+<!-- LINT.IfChange(IOSAccountMenuAccessPoint) -->
+
+<enum name="IOSAccountMenuAccessPoint">
+  <int value="0" label="New Tab Page"/>
+  <int value="1" label="Settings"/>
+  <int value="2" label="Web"/>
+  <int value="3" label="App Bar"/>
+  <int value="4" label="Page Action Menu"/>
+  <int value="5" label="Gemini Entry Flow"/>
+  <int value="6" label="Overflow Menu"/>
+</enum>
+
+<!-- LINT.ThenChange(//ios/chrome/browser/authentication/account_menu/public/account_menu_constants.h:AccountMenuAccessPoint) -->
+
 <!-- LINT.IfChange(IOSAccountSwitchType) -->
 
 <enum name="IOSAccountSwitchType">
@@ -620,6 +648,8 @@ chromium-metrics-reviews@google.com.
   <int value="7"
       label="User selected an account, in the share extension, different from
              the one used in the app."/>
+  <int value="8"
+      label="User is opening GoogleOne settings for another account"/>
 </enum>
 
 <!-- LINT.ThenChange(//ios/chrome/app/change_profile_commands.h:IOSChangeProfileReason) -->
@@ -765,7 +795,7 @@ chromium-metrics-reviews@google.com.
   <int value="9" label="Add Supervision"/>
   <int value="10" label="Parent Access"/>
   <int value="11" label="Data Sharing"/>
-  <int value="12" label="Launcher item suggest"/>
+  <int value="12" label="Launcher item suggest (deprecated 06/2026)"/>
   <int value="13" label="Marketing backend connector"/>
   <int value="14" label="Password Sync token fetcher"/>
   <int value="15" label="Locale Switch Screen"/>
@@ -857,6 +887,8 @@ chromium-metrics-reviews@google.com.
   <int value="101" label="Context Memory Service"/>
   <int value="102" label="Sync Preview"/>
   <int value="103" label="Fpop Service"/>
+  <int value="104" label="Context Containers Service"/>
+  <int value="105" label="Remote Actor Login Credentials Service"/>
 </enum>
 
 <!-- LINT.ThenChange(//components/signin/public/base/oauth_consumer_id.h:OAuthConsumerId) -->
@@ -888,7 +920,7 @@ chromium-metrics-reviews@google.com.
   <int value="4" label="kInvalidTokens"/>
   <int value="5" label="kError"/>
   <int value="6" label="kRetryWithTokenBindingChallenge"/>
-  <int value="7" label="kNetworkError (not recorded)"/>
+  <int value="7" label="kNetworkError"/>
 </enum>
 
 <!-- LINT.ThenChange(//google_apis/gaia/oauth_multilogin_result.h:OAuthMultiloginResponseStatus) -->
@@ -1094,6 +1126,7 @@ chromium-metrics-reviews@google.com.
   <int value="104" label="Gemini Toolbar button (iOS only)"/>
   <int value="105" label="Indigo"/>
   <int value="106" label="Overflow Menu (iOS only)"/>
+  <int value="107" label="Level Up (iOS only)"/>
 </enum>
 
 <enum name="SigninAccountReconcilorState">
@@ -1141,6 +1174,20 @@ chromium-metrics-reviews@google.com.
   <int value="7" label="Returned and sign-in activity was not destroyed"/>
 </enum>
 
+<!-- LINT.IfChange(SigninCrossDeviceInitialState) -->
+
+<enum name="SigninCrossDeviceInitialState">
+  <int value="0" label="SignedOut_TargetAccountOnDevice"/>
+  <int value="1" label="SignedOut_TargetAccountNotOnDevice"/>
+  <int value="2" label="SignedIn_WithDifferentAccount_TargetAccountOnDevice"/>
+  <int value="3"
+      label="SignedIn_WithDifferentAccount_TargetAccountNotOnDevice"/>
+  <int value="4" label="SignedIn_WithTargetAccount"/>
+  <int value="5" label="FlowForbidden"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/signin/public/base/signin_deep_link_metrics.h:CrossDeviceInitialState) -->
+
 <enum name="SigninDiceResponseHeader">
   <int value="0" label="Signin"/>
   <int value="1" label="SignoutPrimary">
@@ -1157,6 +1204,13 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Abort (deprecated)"/>
   <int value="2" label="Failure">Failed with Gaia error.</int>
   <int value="3" label="Timeout"/>
+</enum>
+
+<enum name="SigninGaiaAuthFetcherIOSCookiesState">
+  <int value="0" label="No Cookies"/>
+  <int value="1" label="All Cookies Insecure"/>
+  <int value="2" label="All Cookies Secure"/>
+  <int value="3" label="Secure and Insecure Cookies"/>
 </enum>
 
 <enum name="SigninGaiaCookieManagerLogout">
@@ -1269,6 +1323,7 @@ chromium-metrics-reviews@google.com.
   <int value="7" label="Cookie setting change"/>
   <int value="8" label="Forced reconcile"/>
   <int value="9" label="Primary account changed"/>
+  <int value="10" label="Device bound sessions fetched"/>
 </enum>
 
 <!-- LINT.ThenChange(//components/signin/core/browser/account_reconcilor.h:Trigger) -->
@@ -1472,6 +1527,12 @@ chromium-metrics-reviews@google.com.
   <int value="45" label="Capability restricts signin">
     A forced sign-out when the account capability CanSignInToChrome restricts
     signin. (iOS only).
+  </int>
+  <int value="46"
+      label="User tapped on undo right after signin through autofill and
+             passwords sign-in promo">
+    User tapped on the 'Undo' button in a snackbar shown right after signin
+    through autofill and passwords promo. (Android only).
   </int>
 </enum>
 

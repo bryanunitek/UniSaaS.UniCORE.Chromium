@@ -430,6 +430,11 @@ const char kEnableWebGLDeveloperExtensions[] =
 // file:///alias/some/path.html into file:///replacement/some/path.html.
 const char kFileUrlPathAlias[] = "file-url-path-alias";
 
+// Forces recording of NavigationTimeline UKM.
+// Useful for testing NavigationTimeline UKM recording in browser tests.
+const char kForceNavigationTimelineUkmRecordingForTesting[] =
+    "force-navigation-timeline-ukm-recording-for-testing";
+
 // This forces pages to be loaded as presentation receivers.  Useful for testing
 // behavior specific to presentation receivers.
 // Spec: https://www.w3.org/TR/presentation-api/#interface-presentationreceiver
@@ -741,6 +746,9 @@ const char kTouchEventFeatureDetectionDisabled[] = "disabled";
 // Since different processes can produce a different value for this due to
 // system clock changes, this allows synchronizing them to a single value.
 const char kTimeTicksAtUnixEpoch[] = "time-ticks-at-unix-epoch";
+
+// Enables debug mode for unbounded windows (draws a red border).
+const char kUnboundedWindowDebug[] = "unbounded-window-debug";
 
 // Replaces the existing codecs supported in peer connection with a single fake
 // codec entry that create a fake video encoder and decoder.

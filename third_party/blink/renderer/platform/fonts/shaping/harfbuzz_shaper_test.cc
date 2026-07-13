@@ -802,8 +802,6 @@ TEST_F(HarfBuzzShaperTest, IdeographicSpace) {
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN)
 TEST_F(HarfBuzzShaperTest, SystemEmojiVS15) {
-  ScopedSystemFallbackEmojiVSSupportForTest scoped_feature_system_emoji_vs(
-      true);
 
   Font* mono_font = CreateNotoEmoji();
   Font* color_font = CreateNotoColorEmoji();
@@ -829,8 +827,6 @@ TEST_F(HarfBuzzShaperTest, SystemEmojiVS15) {
 }
 
 TEST_F(HarfBuzzShaperTest, SystemEmojiVS16) {
-  ScopedSystemFallbackEmojiVSSupportForTest scoped_feature_system_emoji_vs(
-      true);
 
   Font* mono_font = CreateNotoEmoji();
   Font* color_font = CreateNotoColorEmoji();
@@ -861,8 +857,6 @@ INSTANTIATE_TEST_SUITE_P(HarfBuzzShaperTest,
                          testing::ValuesIn(variant_emoji_values));
 
 TEST_P(FontVariantEmojiTest, FontVariantEmojiSystemFallback) {
-  ScopedSystemFallbackEmojiVSSupportForTest scoped_feature_system_emoji_vs(
-      true);
 
   const FontVariantEmoji variant_emoji = GetParam();
 
@@ -899,8 +893,6 @@ TEST_P(FontVariantEmojiTest, FontVariantEmojiSystemFallback) {
 }
 
 TEST_F(HarfBuzzShaperTest, VSOverrideFontVariantEmoji) {
-  ScopedSystemFallbackEmojiVSSupportForTest scoped_feature_system_emoji_vs(
-      true);
 
   String text(u"\u2603\u2614\ufe0e\u2603\ufe0f");
   Font* font = blink::test::CreateTestFont(
@@ -921,8 +913,6 @@ TEST_F(HarfBuzzShaperTest, VSOverrideFontVariantEmoji) {
 }
 
 TEST_F(HarfBuzzShaperTest, FontVariantEmojiTextSystemFallback) {
-  ScopedSystemFallbackEmojiVSSupportForTest scoped_feature_system_emoji_vs(
-      true);
 #if BUILDFLAG(IS_MAC)
   if (base::mac::MacOSVersion() < 13'00'00) {
     GTEST_SKIP();
@@ -1265,6 +1255,69 @@ TEST_F(HarfBuzzShaperTest, CachedOffsetPositionMappingForOffsetLatin) {
   EXPECT_EQ(10u, sr->CachedOffsetForPosition(sr->CachedPositionForOffset(10)));
   EXPECT_EQ(11u, sr->CachedOffsetForPosition(sr->CachedPositionForOffset(11)));
   EXPECT_EQ(12u, sr->CachedOffsetForPosition(sr->CachedPositionForOffset(12)));
+}
+
+TEST_F(HarfBuzzShaperTest, CachedOffsetPositionMappingConstantAdvance) {
+  Font* font = MakeGarbageCollected<Font>(font_description);
+
+  String string = To16Bit("XXXXXXXXXXXX");  // 12 identical glyphs.
+  const unsigned length = string.length();
+  TextDirection direction = TextDirection::kLtr;
+
+  HarfBuzzShaper shaper(string);
+  const ShapeResult* sr = shaper.Shape(font, direction);
+  sr->EnsurePositionData();
+
+  // offset -> position -> offset must round-trip for every offset.
+  for (unsigned i = 0; i <= length; ++i) {
+    EXPECT_EQ(i, sr->CachedOffsetForPosition(sr->CachedPositionForOffset(i)))
+        << "offset " << i;
+  }
+
+  // Positions form a strictly increasing ladder starting at 0.
+  EXPECT_EQ(LayoutUnit(), sr->CachedPositionForOffset(0));
+  LayoutUnit previous = sr->CachedPositionForOffset(0);
+  for (unsigned i = 1; i <= length; ++i) {
+    const LayoutUnit position = sr->CachedPositionForOffset(i);
+    EXPECT_GT(position, previous) << "offset " << i;
+    previous = position;
+  }
+
+  // Every character boundary in a constant-advance run is safe to break.
+  for (unsigned i = 0; i < length; ++i) {
+    EXPECT_EQ(i, sr->CachedNextSafeToBreakOffset(i)) << "next " << i;
+    EXPECT_EQ(i, sr->CachedPreviousSafeToBreakOffset(i)) << "previous " << i;
+  }
+}
+
+TEST_F(HarfBuzzShaperTest, CachedPositionForOffsetLigatureNotMonospace) {
+  FontDescription::VariantLigatures ligatures;
+  ligatures.common = FontDescription::kEnabledLigaturesState;
+
+  // MEgalopolis Extra forms an "ffi" ligature (3 characters -> 1 glyph).
+  Font* font = blink::test::CreateTestFont(
+      AtomicString("MEgalopolis"),
+      blink::test::PlatformTestDataPath(
+          "third_party/MEgalopolis/MEgalopolisExtra.woff"),
+      16, &ligatures);
+
+  String string = To16Bit("ffi");
+  HarfBuzzShaper shaper(string);
+  const ShapeResult* sr = shaper.Shape(font, TextDirection::kLtr);
+  ASSERT_EQ(3u, sr->NumCharacters());
+  sr->EnsurePositionData();
+
+  // Offsets 1 and 2 are inside the ligature, so they share the cluster's start
+  // position (0), not `advance * 1` / `advance * 2`.
+  EXPECT_EQ(LayoutUnit(), sr->CachedPositionForOffset(0));
+  EXPECT_EQ(LayoutUnit(), sr->CachedPositionForOffset(1));
+  EXPECT_EQ(LayoutUnit(), sr->CachedPositionForOffset(2));
+  EXPECT_GT(sr->CachedPositionForOffset(3), LayoutUnit());
+
+  // The interior offsets are not safe to break; the next safe break is the end
+  // of the ligature (offset 3).
+  EXPECT_EQ(3u, sr->CachedNextSafeToBreakOffset(1));
+  EXPECT_EQ(3u, sr->CachedNextSafeToBreakOffset(2));
 }
 
 TEST_F(HarfBuzzShaperTest, CachedOffsetPositionMappingArabic) {

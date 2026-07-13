@@ -56,7 +56,7 @@
 #include "third_party/blink/renderer/modules/webcodecs/video_frame_init_util.h"
 #include "third_party/blink/renderer/modules/webcodecs/video_frame_rect_util.h"
 #include "third_party/blink/renderer/platform/geometry/geometry_hash_traits.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_non_2d_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_snapshot_info.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
@@ -353,8 +353,7 @@ class CanvasNon2DResourceProviderCache
   CanvasNon2DResourceProviderCache(const CanvasNon2DResourceProviderCache&) =
       delete;
 
-  CanvasNon2DResourceProviderSharedImage* CreateProvider(
-      const media::VideoFrame& frame) {
+  CanvasNon2DResourceProvider* CreateProvider(const media::VideoFrame& frame) {
     if (providers_.empty()) {
       PostMonitoringTask();
     }
@@ -374,8 +373,8 @@ class CanvasNon2DResourceProviderCache
       providers_.clear();
     }
 
-    std::unique_ptr<CanvasNon2DResourceProviderSharedImage> provider =
-        CanvasNon2DResourceProviderSharedImage::Create(
+    std::unique_ptr<CanvasNon2DResourceProvider> provider =
+        CanvasNon2DResourceProvider::Create(
             required_provider_info.size, required_provider_info.format,
             required_provider_info.alpha_type,
             required_provider_info.color_space,
@@ -431,7 +430,7 @@ class CanvasNon2DResourceProviderCache
     PostMonitoringTask();
   }
 
-  Vector<std::unique_ptr<CanvasNon2DResourceProviderSharedImage>> providers_;
+  Vector<std::unique_ptr<CanvasNon2DResourceProvider>> providers_;
   base::TimeTicks last_access_time_;
   TaskHandle task_handle_;
 };
@@ -666,9 +665,11 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
   // Special case <video> and VideoFrame to directly use the underlying frame.
   if (source->IsVideoFrame() || source->IsHTMLVideoElement()) {
     scoped_refptr<media::VideoFrame> source_frame;
+    std::optional<base::TimeDelta> source_timestamp;
     switch (source->GetContentType()) {
       case V8CanvasImageSource::ContentType::kVideoFrame:
         source_frame = source->GetAsVideoFrame()->frame();
+        source_timestamp = source->GetAsVideoFrame()->handle()->timestamp();
         break;
       case V8CanvasImageSource::ContentType::kHTMLVideoElement:
         if (auto* wmp = source->GetAsHTMLVideoElement()->GetWebMediaPlayer())
@@ -682,6 +683,15 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
       exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                         "Invalid source state");
       return nullptr;
+    }
+
+    std::optional<base::TimeDelta> final_timestamp;
+    if (init->hasTimestamp()) {
+      final_timestamp = base::Microseconds(init->timestamp());
+    } else if (source_timestamp != source_frame->timestamp()) {
+      final_timestamp = source_timestamp;
+    } else {
+      // `source_frame->timestamp()` will be used.
     }
 
     const bool force_opaque = init->alpha() == V8AlphaOption::Enum::kDiscard &&
@@ -701,8 +711,8 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
 
     // We can't modify frame metadata directly since there may be other owners
     // accessing these fields concurrently.
-    if (init->hasTimestamp() || init->hasDuration() || force_opaque ||
-        init->hasVisibleRect() || transformed || init->hasDisplayWidth()) {
+    if (init->hasDuration() || force_opaque || init->hasVisibleRect() ||
+        transformed || init->hasDisplayWidth()) {
       auto wrapped_frame = media::VideoFrame::WrapVideoFrame(
           source_frame, wrapped_format, parsed_init.visible_rect,
           parsed_init.display_size);
@@ -720,9 +730,6 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
       }
 
       wrapped_frame->set_color_space(source_frame->ColorSpace());
-      if (init->hasTimestamp()) {
-        wrapped_frame->set_timestamp(base::Microseconds(init->timestamp()));
-      }
       if (init->hasDuration()) {
         wrapped_frame->metadata().frame_duration =
             base::Microseconds(init->duration());
@@ -752,7 +759,8 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
 
     return MakeGarbageCollected<VideoFrame>(
         std::move(source_frame), ExecutionContext::From(script_state),
-        /* monitoring_source_id */ std::string(), std::move(sk_image));
+        /*monitoring_source_id=*/std::string(), std::move(sk_image),
+        final_timestamp);
   }
 
   // Some elements like OffscreenCanvas won't choose a default size, so we must
@@ -1069,10 +1077,11 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
     }
 
     for (wtf_size_t i = 0; i < media::VideoFrame::NumPlanes(media_fmt); i++) {
-      libyuv::CopyPlane(src_frame->visible_data(i), src_frame->stride(i),
-                        frame->GetWritableVisibleData(i), frame->stride(i),
-                        /*width=*/src_frame->GetVisibleRowBytes(i),
-                        /*height=*/src_frame->GetVisibleRows(i));
+      libyuv::CopyPlane(
+          src_frame->visible_data(i), static_cast<int>(src_frame->stride(i)),
+          frame->GetWritableVisibleData(i), static_cast<int>(frame->stride(i)),
+          /*width=*/src_frame->GetVisibleRowBytes(i),
+          /*height=*/src_frame->GetVisibleRows(i));
     }
   }
 
@@ -1290,8 +1299,6 @@ void VideoFrame::ConvertAndCopyToRGB(scoped_refptr<media::VideoFrame> frame,
                                      base::span<uint8_t> buffer,
                                      PredefinedColorSpace target_color_space) {
   DCHECK(media::IsRGB(dest_layout.Format()));
-  SkColorType skia_pixel_format = media::SkColorTypeForPlane(
-      dest_layout.Format(), media::VideoFrame::Plane::kARGB);
 
   if (frame->visible_rect() != src_rect) {
     frame = media::VideoFrame::WrapVideoFrame(frame, frame->format(), src_rect,
@@ -1299,9 +1306,21 @@ void VideoFrame::ConvertAndCopyToRGB(scoped_refptr<media::VideoFrame> frame,
   }
 
   auto sk_color_space = PredefinedColorSpaceToSkColorSpace(target_color_space);
-  SkImageInfo dst_image_info =
-      SkImageInfo::Make(src_rect.width(), src_rect.height(), skia_pixel_format,
-                        kUnpremul_SkAlphaType, sk_color_space);
+  bool same_color_space =
+      SkColorSpace::Equals(sk_color_space.get(),
+                           frame->CompatRGBColorSpace().ToSkColorSpace().get());
+  bool same_format = frame->format() == dest_layout.Format();
+
+  if (frame->HasDirectCpuAccess() && same_color_space && same_format) {
+    CopyMappablePlanes(*frame, src_rect, dest_layout, buffer);
+    return;
+  }
+
+  SkImageInfo dst_image_info = SkImageInfo::Make(
+      src_rect.width(), src_rect.height(),
+      media::SkColorTypeForPlane(dest_layout.Format(),
+                                 media::VideoFrame::Plane::kARGB),
+      kUnpremul_SkAlphaType, sk_color_space);
 
   const wtf_size_t plane = 0;
   DCHECK_EQ(dest_layout.NumPlanes(), 1u);

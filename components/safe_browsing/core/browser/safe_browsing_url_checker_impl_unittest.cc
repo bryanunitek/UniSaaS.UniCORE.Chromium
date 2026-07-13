@@ -184,8 +184,7 @@ class MockSafeBrowsingDatabaseManager : public TestSafeBrowsingDatabaseManager {
     CHECK(client);
     std::string url = gurl.spec();
     DCHECK(urls_threat_type_.contains(url));
-    ThreatMetadata metadata;
-    client->OnCheckBrowseUrlResult(gurl, urls_threat_type_[url], metadata);
+    client->OnCheckBrowseUrlResult(gurl, urls_threat_type_[url]);
   }
   base::flat_map<std::string, SBThreatType> urls_threat_type_;
   base::flat_map<std::string, bool> urls_delayed_callback_;
@@ -313,6 +312,10 @@ class FakeRealTimeUrlLookupService
       case SB_THREAT_TYPE_SUSPICIOUS_SITE:
         threat_type = RTLookupResponse::ThreatInfo::THREAT_TYPE_UNSPECIFIED;
         verdict_type = RTLookupResponse::ThreatInfo::SUSPICIOUS;
+        break;
+      case SB_THREAT_TYPE_WARNABLE_SUSPICIOUS_SITE:
+        threat_type = RTLookupResponse::ThreatInfo::SOCIAL_ENGINEERING;
+        verdict_type = RTLookupResponse::ThreatInfo::WARN;
         break;
       case SB_THREAT_TYPE_UNUSED:
       case SB_THREAT_TYPE_URL_MALWARE:

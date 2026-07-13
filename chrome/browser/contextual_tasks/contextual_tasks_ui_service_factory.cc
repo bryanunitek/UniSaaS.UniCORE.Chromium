@@ -97,9 +97,13 @@ void ContextualTasksUiServiceFactory::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterIntegerPref(kContextualTasksOnboardingTooltipDismissedCount,
                                 0);
+  registry->RegisterIntegerPref(kContextualTasksLensSearchTooltipDismissedCount,
+                                0);
+
   registry->RegisterBooleanPref(kContextualTasksShareOpenTabsEveryThread,
                                 false);
   registry->RegisterDictionaryPref(kContextualTasksSiteExclusions);
+  registry->RegisterIntegerPref(kContextualTasksSessionCountPostOnboarding, -1);
 }
 
 bool ContextualTasksUiServiceFactory::ServiceIsCreatedWithBrowserContext()

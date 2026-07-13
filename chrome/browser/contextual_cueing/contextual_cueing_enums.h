@@ -78,7 +78,13 @@ enum class ContextualCueingDecision {
   kNotEnoughTimeSinceLastClick = 29,
   // There is already another contextual cue or anchored message showing.
   kAnchoredMessageAlreadyShowing = 30,
-  kMaxValue = kAnchoredMessageAlreadyShowing,
+  // The tab is shown in split view.
+  kTabInSplitView = 31,
+  // WebContents destroyed during async eligibility check.
+  kWebContentsDestroyed = 32,
+  // Tab navigated away or is no longer active during async eligibility check.
+  kNoLongerActiveTabAfterEligibilityCheck = 33,
+  kMaxValue = kNoLongerActiveTabAfterEligibilityCheck,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/contextual_cueing/enums.xml:ContextualCueingDecision)
 

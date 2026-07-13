@@ -81,7 +81,13 @@ public class MediaNotificationServiceLifecycleTest extends MediaNotificationTest
         doReturn(false).when(impl).processIntent(any(Intent.class));
         mMockContext.startService(new Intent());
         verify(service.getImpl()).stopListenerService();
-        assertNull(getController());
+        // In multiple-notification mode, service lifetime is decoupled from individual
+        // notifications; destroying the service notifies controllers via onServiceDestroyed()
+        // without removing them from MediaNotificationManager. In single-notification mode,
+        // destroying the service removes the notification and clears the controller.
+        if (!MediaNotificationManager.isMultipleMediaNotificationsEnabled()) {
+            assertNull(getController());
+        }
         verify(controller).onServiceDestroyed();
     }
 
@@ -241,6 +247,7 @@ public class MediaNotificationServiceLifecycleTest extends MediaNotificationTest
         setUpService();
         getController().mService = mService;
         getController().mMediaNotificationInfo = mMediaNotificationInfoBuilder.build();
+        getController().setIsForegroundForTesting(true);
         getController().updateNotification(false, false);
 
         waitForAsync();

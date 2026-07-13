@@ -282,6 +282,10 @@ bool ValidateResponseExtensions(
       if (!request.min_pin_length_requested || !it.second.is_unsigned()) {
         return false;
       }
+    } else if (ext_name == kExtensionCmtgKey) {
+      if (!request.cmtg_key || !it.second.is_bytestring()) {
+        return false;
+      }
     } else {
       // Authenticators may not return unknown extensions.
       return false;
@@ -1019,11 +1023,9 @@ void MakeCredentialRequestHandler::SpecializeRequestForAuthenticator(
   }
 
   if (request->hmac_secret) {
-    bool supports_prf_or_hmac_secret_mc = auth_options.supports_prf;
-    if (base::FeatureList::IsEnabled(device::kWebAuthnHmacSecretMcExtension)) {
-      supports_prf_or_hmac_secret_mc |= auth_options.supports_hmac_secret &&
-                                        auth_options.supports_hmac_secret_mc;
-    }
+    bool supports_prf_or_hmac_secret_mc =
+        auth_options.supports_prf || (auth_options.supports_hmac_secret &&
+                                      auth_options.supports_hmac_secret_mc);
     request->prf = supports_prf_or_hmac_secret_mc;
     request->hmac_secret =
         !auth_options.supports_prf && auth_options.supports_hmac_secret;

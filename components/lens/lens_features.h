@@ -232,6 +232,14 @@ BASE_DECLARE_FEATURE(
 COMPONENT_EXPORT(LENS_FEATURES)
 BASE_DECLARE_FEATURE(kLensDeleteContextOnPageNavigation);
 
+// The implementation type for the Lens Overlay on Android.
+COMPONENT_EXPORT(LENS_FEATURES)
+extern const char kLensOverlayAndroidImplIntent[];
+COMPONENT_EXPORT(LENS_FEATURES)
+extern const char kLensOverlayAndroidImplWebUI[];
+COMPONENT_EXPORT(LENS_FEATURES)
+extern const base::FeatureParam<std::string> kLensOverlayAndroidImplType;
+
 // The base URL for Lens.
 COMPONENT_EXPORT(LENS_FEATURES)
 extern const base::FeatureParam<std::string> kHomepageURLForLens;
@@ -1143,10 +1151,16 @@ extern bool IsLensSendRawFileMediaTypesEnabled();
 COMPONENT_EXPORT(LENS_FEATURES)
 extern bool IsLensSendUrlsInComposeboxesEnabled();
 
-// Enables skipping unresolved urls and Lens files, and only sending AAI for
-// modality chips in composebox queries.
 COMPONENT_EXPORT(LENS_FEATURES)
 extern bool IsLensOnlySendAaiForModalityChipsEnabled();
+
+// Whether to exclude raw files and drive files from the OnlySendAai
+// restriction.
+COMPONENT_EXPORT(LENS_FEATURES)
+extern const base::FeatureParam<bool> kLensOnlySendAaiExcludeRawAndDriveFiles;
+
+COMPONENT_EXPORT(LENS_FEATURES)
+extern bool IsLensOnlySendAaiExcludeRawAndDriveFilesEnabled();
 
 }  // namespace lens::features
 #endif  // COMPONENTS_LENS_LENS_FEATURES_H_

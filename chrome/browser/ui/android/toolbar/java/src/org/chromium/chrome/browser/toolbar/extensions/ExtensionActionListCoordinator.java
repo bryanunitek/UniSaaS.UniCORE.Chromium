@@ -28,6 +28,7 @@ import org.chromium.components.browser_ui.widget.dragreorder.DragReorderableRecy
 import org.chromium.components.browser_ui.widget.dragreorder.DragTouchHandler.DragListener;
 import org.chromium.components.browser_ui.widget.dragreorder.DragTouchHandler.DraggabilityProvider;
 import org.chromium.components.embedder_support.contextmenu.ContextMenuPopulatorFactory;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.selection.SelectionDropdownMenuDelegate;
 import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.base.WindowAndroid;
@@ -178,6 +179,11 @@ public class ExtensionActionListCoordinator implements Destroyable {
         return mMediator.setCanShowPoppedOutAction(availableWidth);
     }
 
+    /** Whether the popped out action can be shown. */
+    public boolean canShowPoppedOutAction() {
+        return mMediator.canShowPoppedOutAction();
+    }
+
     /**
      * Updates the list of displayed actions to fit within the provided width constraint.
      *
@@ -193,6 +199,15 @@ public class ExtensionActionListCoordinator implements Destroyable {
 
         mMediator.fitActionsWithinWidth(availableWidth);
         return mContainer.getWidth();
+    }
+
+    /**
+     * Refreshes and updates the properties (including icons) of all action items.
+     *
+     * @param webContents The WebContents to use for fetching updated state.
+     */
+    public void updateAllIcons(WebContents webContents) {
+        mMediator.updateActionPropertiesForAll(webContents);
     }
 
     private void bindDragProperties(

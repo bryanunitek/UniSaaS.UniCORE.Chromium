@@ -34,7 +34,6 @@
 #include "services/webnn/public/mojom/webnn_context.mojom.h"
 #include "services/webnn/public/mojom/webnn_context_provider.mojom.h"
 #include "services/webnn/public/mojom/webnn_error.mojom-forward.h"
-#include "services/webnn/public/mojom/webnn_graph.mojom-forward.h"
 #include "services/webnn/public/mojom/webnn_graph_builder.mojom-forward.h"
 #include "services/webnn/public/mojom/webnn_service_introspection.mojom-forward.h"
 #include "services/webnn/public/mojom/webnn_tensor.mojom-forward.h"
@@ -142,7 +141,6 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
   // TODO(crbug.com/354724062): Move this to either `WebNNGraphImpl` or
   // `WebNNGraphBuilderImpl`.
   virtual void CreateGraphImpl(
-      mojo::PendingReceiver<mojom::WebNNGraph> receiver,
       mojom::GraphInfoPtr graph_info,
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
@@ -161,7 +159,6 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
 
   // GraphBuilderContext:
   void BuildGraph(
-      mojo::PendingReceiver<mojom::WebNNGraph> receiver,
       mojom::GraphInfoPtr graph_info,
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
@@ -269,6 +266,8 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
       const base::flat_map<std::string, blink::WebNNTensorToken>& named_outputs)
       override;
   void DestroyGraph(const blink::WebNNGraphToken& graph_handle) override;
+  void RequestCompilerContext(mojo::PendingReceiver<mojom::WebNNCompilerContext>
+                                  compiler_context_receiver) override;
 
   // This method will be called by `CreateTensor()` after the tensor info is
   // validated. A backend subclass should implement this method to create and
@@ -295,6 +294,11 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
   void AddGraphImpl(scoped_refptr<WebNNGraphImpl> graph_impl);
 
   void CreateWeightsFile(base::OnceCallback<void(base::File)> callback);
+
+  // Reports a bad message from the renderer and disconnects this context.
+  // After this call, the context will be scheduled for removal. Callers
+  // must return immediately after calling this method.
+  void ReportBadMessageAndDisconnect(std::string_view message);
 
   // True when this context is owned by a WebNNContextProviderImpl (GPU
   // process). This flag is thread-safe to read since it is set at construction
@@ -345,11 +349,6 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
 
   void OnDisconnect() override;
 
-  // Reports a bad message from the renderer and disconnects this context.
-  // After this call, the context will be scheduled for removal. Callers
-  // must return immediately after calling this method.
-  void ReportBadMessageAndDisconnect(std::string_view message);
-
   // Callback for BuildGraph. Takes ownership of the graph and
   // extracts the token/devices for the builder.
   void OnGraphBuilt(
@@ -366,10 +365,7 @@ class COMPONENT_EXPORT(WEBNN_SERVICE) WebNNContextImpl
 
   // GraphImpls owned by the context. Graphs use a WeakPtr to safely access the
   // context during build operations.
-  base::flat_set<scoped_refptr<WebNNGraphImpl>,
-                 WebNNObjectImpl<mojom::WebNNGraph,
-                                 blink::WebNNGraphToken,
-                                 mojo::Receiver<mojom::WebNNGraph>>::Comparator>
+  base::flat_set<scoped_refptr<WebNNGraphImpl>, WebNNGraphImpl::Comparator>
       graph_impls_;
 
   // WebNN context API operations execute tasks in a sequence.

@@ -13,8 +13,14 @@ import "third_party/blink/public/mojom/frame/frame_visual_properties.mojom";
 // The browser uses this interface to embed the surface of a child WebContents
 // in an <embed> element on the embedder page.
 interface SurfaceEmbed {
-  // Embeds a surface by its FrameSinkId.
-  SetFrameSinkId(viz.mojom.FrameSinkId frame_sink_id);
+  // Embeds a surface by its FrameSinkId. When `allow_paint_holding` is true,
+  // the old surface will be used as a fallback until the new surface produces
+  // its first frame (or a timeout expires), preventing a visual flash during
+  // navigation.
+  // The `allow_paint_holding` is decided in Navigator::DidNavigate(). See
+  // crbug.com/40942531 for why we cannot always enable paint holding.
+  SetFrameSinkId(viz.mojom.FrameSinkId frame_sink_id,
+                 bool allow_paint_holding);
 
   // Called when the child frame initiates a LocalSurfaceId update.
   // This typically happens when an auto-resized child frame has a new
@@ -49,4 +55,10 @@ interface SurfaceEmbedHost {
   SynchronizeVisualProperties(
       blink.mojom.FrameVisualProperties visual_properties,
       bool is_visible);
+
+  // Send the parent HTML element accessibility node ID from the render process
+  // to the browser process to stitch together accessibility trees in the
+  // browser process. This may happen during creation or later
+  // if accessibility is not yet enabled.
+  SetParentAccessibilityInfo(int32 ax_node_id);
 };

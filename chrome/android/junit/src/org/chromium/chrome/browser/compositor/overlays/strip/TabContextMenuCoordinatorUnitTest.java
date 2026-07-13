@@ -39,7 +39,6 @@ import android.annotation.StringRes;
 import android.app.Activity;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.InsetDrawable;
 import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
@@ -93,6 +92,7 @@ import org.chromium.chrome.browser.share.send_tab_to_self.EntryPointDisplayReaso
 import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfAndroidBridge;
 import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfAndroidBridgeJni;
 import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfCoordinator;
+import org.chromium.chrome.browser.share.send_tab_to_self.ShareEntryPoint;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
@@ -418,7 +418,8 @@ public class TabContextMenuCoordinatorUnitTest {
                         mActivity,
                         mSnackbarManager,
                         mActivityResultTracker,
-                        mModalDialogManager);
+                        mModalDialogManager,
+                        TabClosingSource.TABLET_TAB_STRIP);
         mTabContextMenuCoordinator =
                 TabContextMenuCoordinator.createContextMenuCoordinator(
                         () -> mTabModel,
@@ -432,7 +433,8 @@ public class TabContextMenuCoordinatorUnitTest {
                         mReorderFunction,
                         mSnackbarManager,
                         mActivityResultTracker,
-                        mModalDialogManager);
+                        mModalDialogManager,
+                        TabClosingSource.TABLET_TAB_STRIP);
     }
 
     @Test
@@ -554,7 +556,7 @@ public class TabContextMenuCoordinatorUnitTest {
 
         // List item 10
         assertEquals(
-                R.id.send_to_your_devices_menu_id,
+                R.id.send_to_your_device_menu_id,
                 modelList.get(9).model.get(ListMenuItemProperties.MENU_ITEM_ID));
 
         // List item 11
@@ -755,7 +757,7 @@ public class TabContextMenuCoordinatorUnitTest {
 
         // List item 10
         assertEquals(
-                R.id.send_to_your_devices_menu_id,
+                R.id.send_to_your_device_menu_id,
                 modelList.get(9).model.get(ListMenuItemProperties.MENU_ITEM_ID));
 
         // List item 11
@@ -2218,7 +2220,7 @@ public class TabContextMenuCoordinatorUnitTest {
 
     @Test
     @Feature("Tab Strip Context Menu")
-    public void testSendToYourDevices() {
+    public void testSendToYourDevice() {
         SendTabToSelfCoordinator mockSttsCoordinator = Mockito.mock(SendTabToSelfCoordinator.class);
         TabContextMenuCoordinator.setSendTabToSelfCreatorForTesting(
                 (context,
@@ -2233,9 +2235,11 @@ public class TabContextMenuCoordinatorUnitTest {
                         launcher,
                         tracker,
                         mdm,
-                        sm) -> {
+                        sm,
+                        entryPoint) -> {
                     assertEquals(EXAMPLE_URL.getSpec(), url);
                     assertEquals(mTab1, tabSupplier.get());
+                    assertEquals(ShareEntryPoint.TAB_MENU, entryPoint);
                     return mockSttsCoordinator;
                 });
 
@@ -2254,7 +2258,7 @@ public class TabContextMenuCoordinatorUnitTest {
 
         // Click on the menu action item
         mOnItemClickedCallback.onClick(
-                R.id.send_to_your_devices_menu_id,
+                R.id.send_to_your_device_menu_id,
                 new AnchorInfo(TAB_ID, Collections.singletonList(TAB_ID)),
                 /* collaborationId= */ null,
                 /* listViewTouchTracker= */ null);
@@ -2264,7 +2268,7 @@ public class TabContextMenuCoordinatorUnitTest {
 
     @Test
     @Feature("Tab Strip Context Menu")
-    public void testSendToYourDevicesMenuItem_isNotShownWhenDisplayReasonNull() {
+    public void testSendToYourDeviceMenuItem_isNotShownWhenDisplayReasonNull() {
         when(mSendTabToSelfAndroidBridgeNatives.getEntryPointDisplayReason(any(), any()))
                 .thenReturn(null);
 
@@ -2273,8 +2277,8 @@ public class TabContextMenuCoordinatorUnitTest {
                 modelList, new AnchorInfo(TAB_ID, Collections.singletonList(TAB_ID)));
 
         assertNull(
-                "Send to Your Devices menu item should not be present when displayReason is null",
-                findItemByMenuId(modelList, R.id.send_to_your_devices_menu_id));
+                "Send to Your Device menu item should not be present when displayReason is null",
+                findItemByMenuId(modelList, R.id.send_to_your_device_menu_id));
     }
 
     @Test
@@ -2729,9 +2733,87 @@ public class TabContextMenuCoordinatorUnitTest {
     @Feature("Tab Strip Context Menu")
     @EnableFeatures(ChromeFeatureList.ANDROID_VERTICAL_TABS)
     @Config(qualifiers = "sw600dp")
-    public void testListMenuItems_verticalTabsEligible() {
+    public void testListMenuItems_verticalTabsEligible_showTabsVertically() {
+        runToggleLayoutMenuTest(/* isVerticalTabsEnabled= */ false, R.string.show_tabs_vertically);
+    }
+
+    @Test
+    @Feature("Tab Strip Context Menu")
+    @EnableFeatures(ChromeFeatureList.ANDROID_VERTICAL_TABS)
+    @Config(qualifiers = "sw600dp")
+    public void testListMenuItems_verticalTabsEligible_showTabsHorizontally() {
+        runToggleLayoutMenuTest(/* isVerticalTabsEnabled= */ true, R.string.show_tabs_horizontally);
+    }
+
+    @Test
+    @Feature("Tab Strip Context Menu")
+    @EnableFeatures(ChromeFeatureList.ANDROID_VERTICAL_TABS)
+    @Config(qualifiers = "sw600dp")
+    public void testListMenuItems_verticalTabsFiltersDirectionalActions_singleTab() {
+        prepareCoordinatorWithTabs();
+
+        var modelList = new ModelList();
+        // Select the left-most tab (index 0).
+        mTabContextMenuCoordinator.configureMenuItemsForTesting(
+                modelList, new AnchorInfo(TAB_ID, Collections.singletonList(TAB_ID)));
+
+        assertNull(
+                "'New tab to the right' should be filtered out from the Vertical Tabs menu.",
+                findItemByMenuId(modelList, R.id.new_tab_to_the_right_menu_id));
+        assertNull(
+                "'Close tabs to the right' should be filtered out from the Vertical Tabs menu.",
+                findItemByMenuId(modelList, R.id.close_tabs_to_the_right_menu_id));
+    }
+
+    @Test
+    @Feature("Tab Strip Context Menu")
+    @EnableFeatures(ChromeFeatureList.ANDROID_VERTICAL_TABS)
+    @Config(qualifiers = "sw600dp")
+    public void testListMenuItems_verticalTabsFiltersDirectionalActions_multipleTabs() {
+        prepareCoordinatorWithTabs();
+
+        var modelList = new ModelList();
+        // Select the two left-most tabs (indices 0 and 1).
+        mTabContextMenuCoordinator.configureMenuItemsForTesting(
+                modelList, new AnchorInfo(TAB_ID, List.of(TAB_ID, TAB_ID_2)));
+
+        assertNull(
+                "'New tab to the right' should be filtered out in Multi-Select Mode.",
+                findItemByMenuId(modelList, R.id.new_tab_to_the_right_menu_id));
+        assertNull(
+                "'Close tabs to the right' should be filtered out in Multi-Select Mode.",
+                findItemByMenuId(modelList, R.id.close_tabs_to_the_right_menu_id));
+    }
+
+    // --------------------------------------------------------------//
+    // ----------------------  UTILITY METHODS ----------------------//
+    // --------------------------------------------------------------//
+
+    private void prepareCoordinatorWithTabs() {
         ChromeSharedPreferences.getInstance()
-                .writeBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, false);
+                .writeBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, true);
+
+        initializeCoordinator();
+        mTabModel.addTab(
+                mTab1,
+                TabModel.INVALID_TAB_INDEX,
+                TabLaunchType.FROM_CHROME_UI,
+                TabCreationState.LIVE_IN_FOREGROUND);
+        mTabModel.addTab(
+                mTab2,
+                TabModel.INVALID_TAB_INDEX,
+                TabLaunchType.FROM_CHROME_UI,
+                TabCreationState.LIVE_IN_FOREGROUND);
+        mTabModel.addTab(
+                mTabOutsideOfGroup,
+                TabModel.INVALID_TAB_INDEX,
+                TabLaunchType.FROM_CHROME_UI,
+                TabCreationState.LIVE_IN_FOREGROUND);
+    }
+
+    private void runToggleLayoutMenuTest(boolean isVerticalTabsEnabled, int expectedTitleRes) {
+        ChromeSharedPreferences.getInstance()
+                .writeBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, isVerticalTabsEnabled);
 
         Activity mockMenuActivity =
                 Mockito.mock(
@@ -2752,7 +2834,8 @@ public class TabContextMenuCoordinatorUnitTest {
                         mockMenuActivity,
                         mSnackbarManager,
                         mActivityResultTracker,
-                        mModalDialogManager);
+                        mModalDialogManager,
+                        TabClosingSource.TABLET_TAB_STRIP);
 
         mTabModel.addTab(
                 mTab1,
@@ -2769,17 +2852,16 @@ public class TabContextMenuCoordinatorUnitTest {
         mTabContextMenuCoordinator.configureMenuItemsForTesting(
                 modelList, new AnchorInfo(TAB_ID, Collections.singletonList(TAB_ID)));
 
-        ListItem verticalTabsItem = modelList.get(11);
-        assertEquals(ListItemType.MENU_ITEM, verticalTabsItem.type);
-        assertEquals(
-                R.id.show_tabs_vertically_menu_id,
-                verticalTabsItem.model.get(ListMenuItemProperties.MENU_ITEM_ID));
-        assertEquals(R.string.show_tabs_vertically, verticalTabsItem.model.get(TITLE_ID));
-        assertEquals(ListItemType.DIVIDER, modelList.get(12).type);
+        // Find the item dynamically by its ID instead of a hardcoded index.
+        ListItem verticalTabsItem = findItemByMenuId(modelList, R.id.toggle_tab_layout_menu_id);
+        assertNotNull("Toggle layout menu item should be present", verticalTabsItem);
+        assertEquals(expectedTitleRes, verticalTabsItem.model.get(TITLE_ID));
+        int toggleIndex = modelList.indexOf(verticalTabsItem);
+        assertEquals(ListItemType.DIVIDER, modelList.get(toggleIndex + 1).type);
 
         // Simulate selecting the item.
         mOnItemClickedCallback.onClick(
-                R.id.show_tabs_vertically_menu_id,
+                R.id.toggle_tab_layout_menu_id,
                 new AnchorInfo(TAB_ID, Collections.singletonList(TAB_ID)),
                 /* collaborationId= */ null,
                 /* listViewTouchTracker= */ null);
@@ -2789,10 +2871,6 @@ public class TabContextMenuCoordinatorUnitTest {
         verify((MenuOrKeyboardActionController) mockMenuActivity, times(1))
                 .onMenuOrKeyboardAction(eq(R.id.toggle_tab_layout_menu_id), eq(false));
     }
-
-    // --------------------------------------------------------------//
-    // ----------------------  UTILITY METHODS ----------------------//
-    // --------------------------------------------------------------//
 
     private void verifyAddToGroupSubmenuForTabOutsideOfGroup(
             ModelList modelList,
@@ -2854,8 +2932,7 @@ public class TabContextMenuCoordinatorUnitTest {
                         .getResources()
                         .getDimensionPixelSize(R.dimen.tab_group_nested_menu_color_icon_size),
                 tabGroupRowModel.get(START_ICON_WIDTH));
-        InsetDrawable insetDrawable = (InsetDrawable) tabGroupRowModel.get(START_ICON_DRAWABLE);
-        GradientDrawable drawable = (GradientDrawable) insetDrawable.getDrawable();
+        GradientDrawable drawable = (GradientDrawable) tabGroupRowModel.get(START_ICON_DRAWABLE);
         assertEquals(
                 "Expected circle to have correct color",
                 TabGroupColorPickerUtils.getTabGroupColorPickerItemColor(

@@ -17,7 +17,6 @@ import org.jni_zero.NativeMethods;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskFeature.InitInfo;
 import org.chromium.chrome.browser.ui.side_panel_container.SidePanelContainerCoordinator;
 import org.chromium.chrome.browser.ui.side_panel_container.SidePanelContent;
 
@@ -56,11 +55,67 @@ public final class SidePanelCoordinatorAndroidImpl implements SidePanelCoordinat
     }
 
     @Override
-    public void onWindowResized(boolean canShowSidePanel) {
-        log(TAG, "onWindowResized", canShowSidePanel);
+    public boolean hasContentToShow() {
+        boolean hasContentToShow =
+                mNativeSidePanelCoordinatorAndroid != 0
+                        ? SidePanelCoordinatorAndroidImplJni.get()
+                                .hasContentToShow(mNativeSidePanelCoordinatorAndroid)
+                        : false;
+
+        log(TAG, "hasContentToShow", hasContentToShow);
+        return hasContentToShow;
+    }
+
+    @Override
+    public void init() {
+        log(TAG, "init");
+        if (mNativeSidePanelCoordinatorAndroid != 0) {
+            SidePanelCoordinatorAndroidImplJni.get().init(mNativeSidePanelCoordinatorAndroid);
+        }
+    }
+
+    @Override
+    public void onPanelOpened() {
+        log(TAG, "onPanelOpened");
         if (mNativeSidePanelCoordinatorAndroid != 0) {
             SidePanelCoordinatorAndroidImplJni.get()
-                    .onWindowResized(mNativeSidePanelCoordinatorAndroid, canShowSidePanel);
+                    .onPanelOpened(mNativeSidePanelCoordinatorAndroid);
+        }
+    }
+
+    @Override
+    public void onPanelClosed() {
+        log(TAG, "onPanelClosed");
+        if (mNativeSidePanelCoordinatorAndroid != 0) {
+            SidePanelCoordinatorAndroidImplJni.get()
+                    .onPanelClosed(mNativeSidePanelCoordinatorAndroid);
+        }
+    }
+
+    @Override
+    public void onPanelContentReplaced() {
+        log(TAG, "onPanelContentReplaced");
+        if (mNativeSidePanelCoordinatorAndroid != 0) {
+            SidePanelCoordinatorAndroidImplJni.get()
+                    .onPanelContentReplaced(mNativeSidePanelCoordinatorAndroid);
+        }
+    }
+
+    @Override
+    public void onWillAutoClose() {
+        log(TAG, "onWillAutoClose");
+        if (mNativeSidePanelCoordinatorAndroid != 0) {
+            SidePanelCoordinatorAndroidImplJni.get()
+                    .onWillAutoClose(mNativeSidePanelCoordinatorAndroid);
+        }
+    }
+
+    @Override
+    public void onWillAutoRestore() {
+        log(TAG, "onWillAutoRestore");
+        if (mNativeSidePanelCoordinatorAndroid != 0) {
+            SidePanelCoordinatorAndroidImplJni.get()
+                    .onWillAutoRestore(mNativeSidePanelCoordinatorAndroid);
         }
     }
 
@@ -100,37 +155,48 @@ public final class SidePanelCoordinatorAndroidImpl implements SidePanelCoordinat
         mDisableAnimationsForTesting = true;
     }
 
-    /**
-     * Populates the side panel with content.
-     *
-     * @param sidePanelNativeView The view to show.
-     * @param x The x coordinate of the starting bounds, or -1 if none.
-     * @param y The y coordinate of the starting bounds, or -1 if none.
-     * @param width The width of the starting bounds, or -1 if none.
-     * @param height The height of the starting bounds, or -1 if none.
-     */
     @CalledByNative
-    private void populateSidePanel(
+    private void startOpeningPanel(
             View sidePanelNativeView,
             int x,
             int y,
             int width,
             int height,
             boolean suppressAnimations) {
-        log(TAG, "populateSidePanel", sidePanelNativeView, x, y, width, height);
-        mSidePanelContainerCoordinator.populateContent(
+        log(TAG, "startOpeningPanel", sidePanelNativeView, x, y, width, height);
+        mSidePanelContainerCoordinator.startOpeningPanel(
                 new SidePanelContent(sidePanelNativeView),
-                result -> notifyOpenAnimationFinished(null),
                 createRectFromCoordinates(x, y, width, height),
                 suppressAnimations || mDisableAnimationsForTesting);
     }
 
     @CalledByNative
-    private void removeContentAndClose(boolean suppressAnimations) {
-        log(TAG, "removeContentAndClose", suppressAnimations);
-        mSidePanelContainerCoordinator.removeContentAndClose(
-                result -> notifyCloseAnimationFinished(null),
+    private void startClosingPanel(boolean suppressAnimations) {
+        log(TAG, "startClosingPanel", suppressAnimations);
+        mSidePanelContainerCoordinator.startClosingPanel(
                 suppressAnimations || mDisableAnimationsForTesting);
+    }
+
+    @CalledByNative
+    private void startReplacingPanelContent(View sidePanelNativeView) {
+        log(TAG, "startReplacingPanelContent", sidePanelNativeView);
+        mSidePanelContainerCoordinator.startReplacingPanelContent(
+                new SidePanelContent(sidePanelNativeView));
+    }
+
+    @CalledByNative
+    private void endAnimations() {
+        log(TAG, "endAnimations");
+        mSidePanelContainerCoordinator.endAnimations();
+    }
+
+    @CalledByNativeForTesting
+    private int getContainerWidthForTesting() {
+        View view = mSidePanelContainerCoordinator.getViewForTesting(); // IN-TEST
+        if (view == null || !view.isAttachedToWindow()) {
+            return 0;
+        }
+        return view.getWidth();
     }
 
     private @Nullable Rect createRectFromCoordinates(int x, int y, int width, int height) {
@@ -141,22 +207,6 @@ public final class SidePanelCoordinatorAndroidImpl implements SidePanelCoordinat
             return null;
         }
         return new Rect(x, y, x + width, y + height);
-    }
-
-    private void notifyOpenAnimationFinished(@Nullable Void unused) {
-        log(TAG, "notifyOpenAnimationFinished");
-        if (mNativeSidePanelCoordinatorAndroid != 0) {
-            SidePanelCoordinatorAndroidImplJni.get()
-                    .notifyOpenAnimationFinished(mNativeSidePanelCoordinatorAndroid);
-        }
-    }
-
-    private void notifyCloseAnimationFinished(@Nullable Void unused) {
-        log(TAG, "notifyCloseAnimationFinished");
-        if (mNativeSidePanelCoordinatorAndroid != 0) {
-            SidePanelCoordinatorAndroidImplJni.get()
-                    .notifyCloseAnimationFinished(mNativeSidePanelCoordinatorAndroid);
-        }
     }
 
     @NativeMethods
@@ -179,28 +229,60 @@ public final class SidePanelCoordinatorAndroidImpl implements SidePanelCoordinat
         void destroy(long nativeSidePanelCoordinatorAndroid);
 
         /**
-         * Notifies the underlying native object that animations for closing have finished.
+         * Notifies the underlying native object that the panel has been closed.
          *
          * @param nativeSidePanelCoordinatorAndroid The address of the native {@code
          *     SidePanelCoordinatorAndroid}.
          */
-        void notifyCloseAnimationFinished(long nativeSidePanelCoordinatorAndroid);
+        void onPanelClosed(long nativeSidePanelCoordinatorAndroid);
 
         /**
-         * Notifies the underlying native object that animations for opening have finished.
+         * Notifies the underlying native object that the panel has been opened.
          *
          * @param nativeSidePanelCoordinatorAndroid The address of the native {@code
          *     SidePanelCoordinatorAndroid}.
          */
-        void notifyOpenAnimationFinished(long nativeSidePanelCoordinatorAndroid);
+        void onPanelOpened(long nativeSidePanelCoordinatorAndroid);
 
         /**
-         * See {@link SidePanelCoordinatorAndroid#onWindowResized(boolean).
+         * Notifies the underlying native object that the panel content has been replaced.
          *
          * @param nativeSidePanelCoordinatorAndroid The address of the native {@code
          *     SidePanelCoordinatorAndroid}.
-         * @param canShowSidePanel Whether the side panel can be shown.
          */
-        void onWindowResized(long nativeSidePanelCoordinatorAndroid, boolean canShowSidePanel);
+        void onPanelContentReplaced(long nativeSidePanelCoordinatorAndroid);
+
+        /**
+         * Initializes the native coordinator and restores the active entry if one exists.
+         *
+         * @param nativeSidePanelCoordinatorAndroid The address of the native {@code
+         *     SidePanelCoordinatorAndroid}.
+         */
+        void init(long nativeSidePanelCoordinatorAndroid);
+
+        /**
+         * Returns whether the native coordinator has content to show.
+         *
+         * @param nativeSidePanelCoordinatorAndroid The address of the native {@code
+         *     SidePanelCoordinatorAndroid}.
+         * @see org.chromium.chrome.browser.ui.side_ui.SideUiContainer#hasContentToShow
+         */
+        boolean hasContentToShow(long nativeSidePanelCoordinatorAndroid);
+
+        /**
+         * See {@link SidePanelCoordinatorAndroid#onWillAutoClose()}.
+         *
+         * @param nativeSidePanelCoordinatorAndroid The address of the native {@code
+         *     SidePanelCoordinatorAndroid}.
+         */
+        void onWillAutoClose(long nativeSidePanelCoordinatorAndroid);
+
+        /**
+         * See {@link SidePanelCoordinatorAndroid#onWillAutoRestore()}.
+         *
+         * @param nativeSidePanelCoordinatorAndroid The address of the native {@code
+         *     SidePanelCoordinatorAndroid}.
+         */
+        void onWillAutoRestore(long nativeSidePanelCoordinatorAndroid);
     }
 }

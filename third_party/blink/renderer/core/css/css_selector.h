@@ -183,6 +183,8 @@ class CORE_EXPORT CSSSelector {
   unsigned Specificity() const;
   // Returns specificity components in decreasing order of significance.
   std::array<uint8_t, 3> SpecificityTuple() const;
+  // Returns specificity components for this single simple selector.
+  std::array<uint8_t, 3> SimpleSelectorSpecificityTuple() const;
 
   enum RelationType {
     // No combinator. Used between simple selectors within the same compound.
@@ -291,6 +293,7 @@ class CORE_EXPORT CSSSelector {
     kPseudoLink,
     kPseudoMarker,
     kPseudoModal,
+    kPseudoNavSource,
     kPseudoNoButton,
     kPseudoNot,
     kPseudoNthChild,  // Includes :nth-child(An+B of <selector>)
@@ -322,6 +325,8 @@ class CORE_EXPORT CSSSelector {
     kPseudoSearchText,
     kPseudoPickerIcon,
     kPseudoPicker,
+    kPseudoSelectListbox,
+    kPseudoSelectContainsInput,
     kPseudoSelectHasSlottedButton,
     kPseudoSelection,
     kPseudoSingleButton,
@@ -387,7 +392,7 @@ class CORE_EXPORT CSSSelector {
     kPseudoSpatialNavigationFocus,
     kPseudoSpellingError,
     kPseudoTargetText,
-    kPseudoUnboundedElementInactive,
+    kPseudoUnbounded,
     kPseudoVideoPersistent,
     kPseudoVideoPersistentAncestor,
 
@@ -415,8 +420,8 @@ class CORE_EXPORT CSSSelector {
     kPseudoScrollButton,
 
     // Overscroll gesture support.
-    kPseudoOverscrollTarget,
     kPseudoOverscrollAreaParent,
+    kPseudoOverscrollBackdrop,
     kPseudoOverscrollOpen,
 
     // :link-to(<route-location>)

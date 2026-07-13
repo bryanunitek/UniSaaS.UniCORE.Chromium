@@ -31,8 +31,8 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.SearchEngineUtils;
-import org.chromium.chrome.browser.omnibox.SearchEngineUtils.SearchEngineIconObserver;
+import org.chromium.chrome.browser.omnibox.SearchEngineService;
+import org.chromium.chrome.browser.omnibox.SearchEngineService.SearchEngineIconObserver;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxFeatureUtils;
@@ -49,7 +49,6 @@ import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.ui.extensions.ExtensionUi;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.chrome.browser.util.BrowserUiUtils;
-import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.components.browser_ui.util.DrawableUtils;
 import org.chromium.components.content_settings.CookieControlsBridge;
 import org.chromium.components.content_settings.CookieControlsObserver;
@@ -67,6 +66,8 @@ import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.search_engines.TemplateUrlService.TemplateUrlServiceObserver;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.content_public.browser.BrowserContextHandle;
+import org.chromium.content_public.browser.NavigationController;
+import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
@@ -92,7 +93,6 @@ public class StatusMediator
     private final LocationBarDataProvider mLocationBarDataProvider;
     private final PermissionStatusHandler mPermissionStatusHandler;
     private final Handler mIconTaskHandler = new Handler();
-    private final PageInfoIphController mPageInfoIphController;
     private final PageInfoAction mPageInfoAction;
     private final NonNullObservableSupplier<@FuseboxState Integer> mFuseboxStateSupplier;
     private final NonNullObservableSupplier<@FuseboxLayoutMode Integer> mFuseboxLayoutModeSupplier;
@@ -123,7 +123,7 @@ public class StatusMediator
     private @StringRes int mSecurityIconDescriptionRes;
     private @ColorRes int mNavigationIconTintRes;
     private @Nullable CookieControlsBridge mCookieControlsBridge;
-    private @Nullable SearchEngineUtils mSearchEngineUtils;
+    private @Nullable SearchEngineService mSearchEngineService;
     private @Nullable StatusIconResource mSearchEngineIcon;
     private @Nullable StatusIconResource mSiteSearchFavicon;
     private @Nullable NullableObservableSupplier<SiteSearchData> mSiteSearchDataSupplier;
@@ -139,6 +139,7 @@ public class StatusMediator
     private @Nullable GURL mExactMatchFetchedUrl;
     private @Nullable Drawable mExactMatchFavicon;
     private boolean mShowExactMatchGlobe;
+    private @DrawableRes int mStatusIconOverrideResId = Resources.ID_NULL;
 
     /**
      * @param model The {@link PropertyModel} for this mediator.
@@ -183,7 +184,6 @@ public class StatusMediator
                 });
 
         mProfileSupplier = profileSupplier;
-        mPageInfoIphController = pageInfoIphController;
 
         mPageInfoAction = pageInfoAction;
         mModel.set(StatusProperties.INCOGNITO_BADGE_VISIBLE, false);
@@ -210,11 +210,11 @@ public class StatusMediator
 
         mProfileSupplier.addSyncObserverAndPostIfNonNull(
                 p -> {
-                    if (mSearchEngineUtils != null) {
-                        mSearchEngineUtils.removeIconObserver(this);
+                    if (mSearchEngineService != null) {
+                        mSearchEngineService.removeIconObserver(this);
                     }
-                    mSearchEngineUtils = SearchEngineUtils.getForProfile(p);
-                    mSearchEngineUtils.addIconObserver(this);
+                    mSearchEngineService = SearchEngineService.getForProfile(p);
+                    mSearchEngineService.addIconObserver(this);
                     mImageSupplier.setProfile(p);
                     updateLocationBarIcon(IconTransitionType.CROSSFADE);
                 });
@@ -225,9 +225,9 @@ public class StatusMediator
     }
 
     public void destroy() {
-        if (mSearchEngineUtils != null) {
-            mSearchEngineUtils.removeIconObserver(this);
-            mSearchEngineUtils = null;
+        if (mSearchEngineService != null) {
+            mSearchEngineService.removeIconObserver(this);
+            mSearchEngineService = null;
         }
 
         mPermissionStatusHandler.destroy();
@@ -402,11 +402,21 @@ public class StatusMediator
                         && UrlUtilities.isNtpUrl(url)
                         && !mLocationBarDataProvider.isIncognitoBranded();
 
-        mModel.set(StatusProperties.USE_WIDE_STATUS_ICON, mUrlHasFocus || isRegularNtpUrl);
+        mModel.set(
+                StatusProperties.USE_WIDE_STATUS_ICON,
+                mUrlHasFocus || isRegularNtpUrl || isHubSearch());
     }
 
     public void setUseSmallWidget(boolean useSmallWidget) {
         mModel.set(StatusProperties.USE_SMALL_WIDGET, useSmallWidget);
+    }
+
+    /** Set the default status icon override resource identifier. */
+    void setDefaultStatusIconOverrideResId(@DrawableRes int iconOverrideResId) {
+        if (mStatusIconOverrideResId != iconOverrideResId) {
+            mStatusIconOverrideResId = iconOverrideResId;
+            updateLocationBarIcon(IconTransitionType.CROSSFADE);
+        }
     }
 
     /** Specify minimum width of an URL field. */
@@ -509,6 +519,7 @@ public class StatusMediator
                         && mInputSessionState.getAutocompleteInput().getAutocompleteState()
                                 == AutocompleteInput.AutocompleteState.STANDBY_NO_FOCUS;
         return isNtpVisible()
+                && !hasPendingNonNtpNavigation()
                 && (!mUrlHasFocus || isStandbyNoFocus)
                 && !DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)
                 && FuseboxFeatureUtils.shouldShowNtpPlusButton(
@@ -561,12 +572,16 @@ public class StatusMediator
         if (isHubSearch()) {
             mPermissionStatusHandler.reset(/* shouldDismissNativePrompt= */ false);
             updateStatusViewVisibility();
-            iconRes = R.drawable.ic_arrow_back_24dp;
+            boolean hasIconOverride = mStatusIconOverrideResId != Resources.ID_NULL;
+            iconRes = hasIconOverride ? mStatusIconOverrideResId : R.drawable.ic_arrow_back_24dp;
             tintRes = ThemeUtils.getThemedToolbarIconTintRes(mBrandedColorScheme);
-            doubleTapDescriptionRes = R.string.accessibility_toolbar_exit_hub_search;
+            doubleTapDescriptionRes =
+                    hasIconOverride
+                            ? Resources.ID_NULL
+                            : R.string.accessibility_toolbar_exit_hub_search;
             applyStatusIconAndTooltipProperties(
                     mModel.get(StatusProperties.VERBOSE_STATUS_TEXT_VISIBLE));
-            clickListener = mOnStatusIconNavigateBackButtonPress;
+            clickListener = hasIconOverride ? null : mOnStatusIconNavigateBackButtonPress;
         } else if (exactMatch && mShowExactMatchGlobe) {
             mPermissionStatusHandler.reset(/* shouldDismissNativePrompt= */ false);
             iconRes = R.drawable.ic_globe_24dp;
@@ -688,11 +703,32 @@ public class StatusMediator
             return false;
         }
 
+        // Immediately hide the search engine logo if we have started navigating away from the NTP.
+        if (hasPendingNonNtpNavigation()) {
+            return false;
+        }
+
         if (mUrlHasFocus) {
             return true;
         }
 
         return (isNtpVisible() || isIncognitoNtpVisible()) && mProfileSupplier.get() != null;
+    }
+
+    private boolean hasPendingNonNtpNavigation() {
+        Tab tab = mLocationBarDataProvider.getTab();
+        if (tab == null) return false;
+
+        WebContents webContents = tab.getWebContents();
+        if (webContents == null) return false;
+
+        NavigationController navigationController = webContents.getNavigationController();
+        if (navigationController == null) return false;
+
+        NavigationEntry pendingEntry = navigationController.getPendingEntry();
+        if (pendingEntry == null) return false;
+
+        return !UrlUtilities.isNtpUrl(pendingEntry.getUrl());
     }
 
     /** Returns status icon resource for the user-selected default search engine. */
@@ -745,7 +781,7 @@ public class StatusMediator
 
     /** Return the resource id for the accessibility description or 0 if none apply. */
     private int getAccessibilityDescriptionRes() {
-        if (isHubSearch()) {
+        if (isHubSearch() && mStatusIconOverrideResId == Resources.ID_NULL) {
             return R.string.hub_search_status_view_back_button_icon_description;
         }
 
@@ -790,57 +826,6 @@ public class StatusMediator
         mExactMatchFavicon = favicon;
         mShowExactMatchGlobe = useGlobe;
         updateLocationBarIcon(IconTransitionType.CROSSFADE);
-    }
-
-    // CookieControlsObserver interface.
-    @Override
-    public void onHighlightCookieControl(boolean shouldHighlight) {
-        if (shouldHighlight) {
-            animateCookieControlsIcon(
-                    () -> {
-                        mPageInfoIphController.showCookieControlsIph(
-                                mPermissionStatusHandler.getIphTimeoutMs(),
-                                R.string.cookie_controls_iph_message);
-                    });
-        }
-    }
-
-    private void animateCookieControlsIcon(Runnable onAnimationFinished) {
-        // Check if the web content is valid before attempting to animate.
-        Tab tab = mLocationBarDataProvider.getTab();
-        if (tab == null || tab.getWebContents() == null) {
-            return;
-        }
-        resetCustomIconsStatus();
-
-        boolean isIncognitoBranded = mLocationBarDataProvider.isIncognitoBranded();
-        Drawable eyeCrossedIcon =
-                SettingsUtils.getTintedIcon(
-                        mContext,
-                        R.drawable.ic_eye_crossed,
-                        isIncognitoBranded
-                                ? R.color.default_icon_color_blue_light
-                                : R.color.default_icon_color_accent1_tint_list);
-
-        PermissionIconResource permissionIconResource =
-                new PermissionIconResource(
-                        eyeCrossedIcon, isIncognitoBranded, COOKIE_CONTROLS_ICON);
-        permissionIconResource.setTransitionType(IconTransitionType.ROTATE);
-        permissionIconResource.setAnimationFinishedCallback(
-                () -> {
-                    if (mCookieControlsBridge != null) {
-                        mCookieControlsBridge.onEntryPointAnimated();
-                    }
-                    onAnimationFinished.run();
-                });
-
-        // Set the timer to switch the icon back afterwards.
-        mIconTaskHandler.removeCallbacksAndMessages(null);
-        mModel.set(StatusProperties.STATUS_ICON_RESOURCE, permissionIconResource);
-        mModel.set(StatusProperties.STATUS_CLICK_LISTENER, this::onClickOpenPageInfo);
-        mIconTaskHandler.postDelayed(
-                () -> updateLocationBarIcon(IconTransitionType.ROTATE),
-                PermissionStatusHandler.PERMISSION_ICON_DEFAULT_DISPLAY_TIMEOUT_MS);
     }
 
     // Reset all customized icons' status to avoid different icons' conflicts.
@@ -903,7 +888,7 @@ public class StatusMediator
         mSiteSearchFavicon = null;
         updateLocationBarIcon(IconTransitionType.CROSSFADE);
 
-        if (siteSearchData == null || mSearchEngineUtils == null) return;
+        if (siteSearchData == null || mSearchEngineService == null) return;
 
         TemplateUrlService templateUrlService = mTemplateUrlServiceSupplier.get();
         if (templateUrlService == null) return;
@@ -912,7 +897,7 @@ public class StatusMediator
                 templateUrlService.getTemplateUrlForKeyword(siteSearchData.keyword);
         if (templateUrl == null) return;
 
-        mSearchEngineUtils.retrieveFavicon(
+        mSearchEngineService.retrieveFavicon(
                 templateUrl,
                 icon -> {
                     // Only set the icon if the SiteSearchData has not changed. There might be edge

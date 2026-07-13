@@ -23,8 +23,6 @@ class AuthenticationService;
 typedef NS_ENUM(NSInteger, GeminiSettingsContext);
 
 using GeminiEligibilityCallback = void (^)(BOOL eligible);
-// TODO(crbug.com/478259873): Get rid of BWG after internal changes land.
-using BWGEligibilityCallback = GeminiEligibilityCallback;
 
 namespace gemini {
 enum class EntryPoint;
@@ -141,6 +139,21 @@ enum class GeminiClientMode {
   kTranscribing,
 };
 
+// Reasons why the Gemini client is in the dormant mode.
+// This needs to stay in sync with GCRGeminiDormantReason.
+enum class GeminiDormantReason {
+  kUnknown = 0,
+  kInterruptedByExternalAudio,
+  kLowVolumeInBackground,
+  kLowVolumeInForeground,
+  kInactivityTimeout,
+  kLongInteractionTimeout,
+  kMovedToBackgroundWhenMicOff,
+  kUserStop,
+  kUserPause,
+  kServerPause,
+};
+
 // Enum representing the Gemini view mode.
 // This needs to stay in sync with GMNGeminiViewMode in the SDK.
 enum class GeminiViewMode {
@@ -157,9 +170,6 @@ void ConfigureWithStartupConfiguration(
     GeminiStartupConfiguration* startup_configuration);
 
 // Starts the overlay experience with the given configuration.
-// TODO(crbug.com/478259873): Get rid of BWG after internal changes land. Use
-// `StartGeminiOverlay` is preferable in the meantime.
-void StartBwgOverlay(GeminiConfiguration* gemini_configuration);
 void StartGeminiOverlay(GeminiConfiguration* gemini_configuration);
 
 // Gets the portion of the PageContext script that checks whether PageContext
@@ -167,9 +177,6 @@ void StartGeminiOverlay(GeminiConfiguration* gemini_configuration);
 const std::u16string GetPageContextShouldDetachScript();
 
 // Creates a Gemini gateway object for relaying internal protocols.
-// TODO(crbug.com/478259873): Get rid of BWG after internal changes land. Use
-// `CreateGeminiGateway` is preferable in the meantime
-id<BWGGatewayProtocol> CreateBWGGateway();
 id<BWGGatewayProtocol> CreateGeminiGateway();
 
 // Checks if the feature is disabled through a Gemini Enterprise policy, and
@@ -193,6 +200,10 @@ bool IsProtectedUrl(std::string url);
 
 // Updates the page context of the floaty.
 void UpdatePageContext(GeminiPageContext* gemini_page_context);
+
+// Updates the floaty's active page context and shared tabs, if any.
+void UpdateActivePageContext(GeminiPageContext* gemini_page_context,
+                             NSArray<GeminiPageContext*>* shared_tabs);
 
 // Returns the Gemini settings that the user is eligible for.
 NSArray<GeminiSettingsMetadata*>* GetEligibleSettings(

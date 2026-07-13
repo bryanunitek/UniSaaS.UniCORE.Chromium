@@ -277,6 +277,12 @@ inline constexpr char
     kIosMagicStackSegmentationShopCardImpressionsSinceFreshness[] =
         "ios.magic_stack_segmentation.shop_card_freshness";
 
+// Integer representing the number of impressions of LevelUp module since a
+// freshness signal.
+inline constexpr char
+    kIosMagicStackSegmentationLevelUpImpressionsSinceFreshness[] =
+        "ios.magic_stack_segmentation.level_up_freshness";
+
 // Integer representing the number of impressions of Shortcuts since a freshness
 // signal.
 inline constexpr char
@@ -825,6 +831,16 @@ inline constexpr char kIOSGeminiLiveIntroPlayed[] =
 // A boolean specifying whether the Gemini camera permission setting is enabled.
 inline constexpr char kIOSGeminiCameraSetting[] = "ios.gemini.camera.setting";
 
+// A boolean specifying whether the Gemini Live closed captioning setting is
+// enabled.
+inline constexpr char kIOSGeminiLiveClosedCaptioningSetting[] =
+    "ios.gemini.live_closed_captioning.setting";
+
+// A boolean specifying whether the Gemini Live microphone permission setting is
+// enabled.
+inline constexpr char kIOSGeminiLiveMicrophoneSetting[] =
+    "ios.gemini.live_microphone.setting";
+
 // Timestamp tracking the last interaction with the Gemini floaty.
 inline constexpr char kLastGeminiInteractionTimestamp[] =
     "ios.gemini.last_interaction_timestamp";
@@ -856,7 +872,12 @@ inline constexpr char kWaitingForMultiProfileForcedMigrationTimestamp[] =
 // A time object storing when the sign-in promo should be displayed again.
 // The value is set on the first cold start to make sure sign-in promo is not
 // triggered right after the FRE.
-inline constexpr char kNextSSORecallTime[] = "ios.next_sso_recall_time";
+
+// A time object storing the last time when the sign-in promo was displayed
+// with a random offset added to it. The value is set on the first cold start
+// to make sure sign-in promo is not triggered right after the FRE.
+inline constexpr char kSigninStartupPromoLastShownTimeWithRandomOffset[] =
+    "ios.signin_startup_promo_last_shown_time_with_random_offset";
 
 // An integer determining the enabled status of Gemini by policy.
 // 0 means Gemini is enabled (default), and 1 means it's disabled.

@@ -84,7 +84,8 @@ class CORE_EXPORT CSSSelectorParser {
   CSSSelectorList* ConsumeNthChildOfSelectors(CSSParserTokenStream&);
 
   static bool SupportsComplexSelector(CSSParserTokenStream&,
-                                      const CSSParserContext*);
+                                      const CSSParserContext*,
+                                      StyleSheetContents*);
 
   static CSSSelector::PseudoType ParsePseudoType(const AtomicString&,
                                                  bool has_arguments,
@@ -107,8 +108,7 @@ class CORE_EXPORT CSSSelectorParser {
       HeapVector<CSSSelector>&);
 
   static ActiveNavigationCondition* ParseActiveNavigationCondition(
-      CSSParserTokenStream&,
-      const Document&);
+      CSSParserTokenStream&);
 
  private:
   enum ResultFlag {
@@ -183,7 +183,6 @@ class CORE_EXPORT CSSSelectorParser {
   base::span<CSSSelector> ConsumeComplexSelector(
       CSSParserTokenStream& stream,
       CSSNestingType,
-      bool first_in_complex_selector_list,
       ResultFlags&);
 
   // ConsumePartialComplexSelector() method provides the common logic of

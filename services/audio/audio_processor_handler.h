@@ -21,15 +21,19 @@
 namespace media {
 class AudioBus;
 class AudioParameters;
+class VoiceIsolation;
 }  // namespace media
 
 namespace audio {
 class MlModelHandle;
 class MlModelManager;
+class ProcessingAudioFifo;
+class VoiceIsolationHandler;
 
 // Encapsulates audio processing effects in the audio process, using a
 // media::AudioProcessor. Forwards capture audio, playout audio, and
-// control calls to the processor.
+// control calls to the processor. If voice isolation is enabled, the
+// processed audio is further routed through a VoiceIsolationHandler.
 //
 // The class can be operated on by three different sequences:
 // - An owning sequence, which performs construction, destruction, getting
@@ -41,10 +45,39 @@ class MlModelManager;
 // specified. It is the responsibility of the owner to ensure that the playout
 // thread and capture thread stop calling into the AudioProcessorHandler before
 // destruction.
+//
+// Audio data flow through AudioProcessorHandler:
+//
+// * Without a dedicated processing thread (lightweight / no FIFO):
+//   Audio capture thread:
+//     AudioProcessorHandler::ProcessCapturedAudio()
+//     -> AudioProcessorHandler::ProcessCapturedAudioInternal()
+//     --> media::AudioProcessor (WebRTC processing)
+//     ---> AudioProcessorHandler::OnAudioProcessorOutput() (callback)
+//     ----> VoiceIsolationHandler::ProcessCapturedAudio() (if voice isolation
+//     enabled)
+//     -----> |deliver_processed_audio_callback_|
+//     ----> |deliver_processed_audio_callback_| (if voice isolation disabled)
+//
+// * With a dedicated processing thread (heavy / using FIFO):
+//   Audio capture thread:
+//     AudioProcessorHandler::ProcessCapturedAudio()
+//     -> |processing_fifo_|::PushData()
+//   Audio processing thread:
+//     -> AudioProcessorHandler::ProcessCapturedAudioInternal() (via FIFO
+//     callback)
+//     --> media::AudioProcessor (WebRTC processing)
+//     ---> AudioProcessorHandler::OnAudioProcessorOutput() (callback)
+//     ----> VoiceIsolationHandler::ProcessCapturedAudio() (if voice isolation
+//     enabled)
+//     -----> |deliver_processed_audio_callback_|
+//     ----> |deliver_processed_audio_callback_| (if voice isolation disabled)
 class AudioProcessorHandler final : public ReferenceOutput::Listener,
                                     public media::mojom::AudioProcessorControls,
                                     public media::AecdumpRecordingSource {
  public:
+  static constexpr int kProcessingFifoSize = 10;
+
   using DeliverProcessedAudioCallback = base::RepeatingCallback<void(
       const media::AudioBus& audio_bus,
       base::TimeTicks audio_capture_time,
@@ -77,13 +110,26 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
       mojo::PendingReceiver<media::mojom::AudioProcessorControls>
           controls_receiver,
       media::AecdumpRecordingManager* aecdump_recording_manager,
-      raw_ptr<MlModelManager> ml_model_manager);
+      raw_ptr<MlModelManager> ml_model_manager,
+      std::unique_ptr<media::VoiceIsolation> voice_isolation);
 
   AudioProcessorHandler(const AudioProcessorHandler&) = delete;
   AudioProcessorHandler& operator=(const AudioProcessorHandler&) = delete;
   ~AudioProcessorHandler() final;
 
-  // Processes and delivers capture audio.
+  // Prepares the handler to start processing captured audio. Must be called
+  // before the capture stream is started.
+  // Called on `owning_sequence_`.
+  void StartProcessing();
+
+  // Stops audio processing and resets internal resources (including destroying
+  // the FIFO if present). Must be called after the capture stream has been
+  // synchronously stopped. The caller must guarantee that no concurrent calls
+  // to ProcessCapturedAudio() are in progress or will be made after
+  // StopProcessing() starts. Called on `owning_sequence_`.
+  void StopProcessing();
+
+  // Processes and delivers captured audio.
   // See media::AudioProcessor::ProcessCapturedAudio for API details.
   // Called on the capture thread.
   void ProcessCapturedAudio(const media::AudioBus& audio_source,
@@ -104,6 +150,9 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
   }
 
  private:
+  friend class InputControllerTestHelper;
+  friend class AudioProcessorHandlerTest;
+
   // Used in the mojom::AudioProcessorControls implementation.
   using GetStatsCallback =
       base::OnceCallback<void(const media::AudioProcessingStats& stats)>;
@@ -124,11 +173,28 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
   void StartAecdump(base::File aecdump_file) final;
   void StopAecdump() final;
 
-  void DeliverProcessedAudio(const media::AudioBus& audio_bus,
-                             base::TimeTicks audio_capture_time,
-                             std::optional<double> new_volume);
+  void ProcessCapturedAudioInternal(
+      const media::AudioBus& audio_source,
+      base::TimeTicks audio_capture_time,
+      double volume,
+      const media::AudioGlitchInfo& audio_glitch_info);
+
+  // Callback invoked by `audio_processor_` when it has finished WebRTC
+  // processing for a frame of captured audio. Called on the capture/processing
+  // thread.
+  //
+  // This method acts as the coordinator: it retrieves the accumulated
+  // `AudioGlitchInfo` (which `AudioProcessor` doesn't track) and routes the
+  // processed audio along with the glitch info to `voice_isolation_handler_`
+  // if enabled, or directly to the final `deliver_processed_audio_callback_`
+  // otherwise.
+  void OnAudioProcessorOutput(const media::AudioBus& audio_bus,
+                              base::TimeTicks audio_capture_time,
+                              std::optional<double> new_volume);
 
   SEQUENCE_CHECKER(owning_sequence_);
+
+  std::unique_ptr<VoiceIsolationHandler> voice_isolation_handler_;
 
   // Lifetime management handle for ML models. Must outlive audio_processor_.
   const std::unique_ptr<MlModelHandle> residual_echo_estimation_model_handle_;
@@ -160,6 +226,8 @@ class AudioProcessorHandler final : public ReferenceOutput::Listener,
   std::atomic<int32_t> num_preferred_channels_ = 1;
 
   media::AudioGlitchInfo::Accumulator glitch_info_accumulator_;
+
+  std::unique_ptr<ProcessingAudioFifo> processing_fifo_;
 };
 
 }  // namespace audio

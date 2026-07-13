@@ -9,6 +9,7 @@
 #import <string>
 #import <vector>
 
+#import "base/containers/flat_map.h"
 #import "base/functional/callback.h"
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
@@ -17,7 +18,9 @@
 #import "ios/chrome/browser/intelligence/actor/model/actor_engine.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_task_updates_observer.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/tool_delegate.h"
 #import "ios/web/public/web_state_observer.h"
+#import "url/origin.h"
 
 @class CRBProtocolObservers;
 
@@ -35,7 +38,8 @@ class AggregatedJournal;
 // a whole Actor journey and be passed multiple sets of actions to execute
 // sequentially.
 class ActorTask : public web::WebStateObserver,
-                  public ActorEngine::ExecutionUpdatesDelegate {
+                  public ActorEngine::ExecutionUpdatesDelegate,
+                  public ToolDelegate {
  public:
   ActorTask(ActorTaskId task_id,
             const std::string& title,
@@ -100,6 +104,23 @@ class ActorTask : public web::WebStateObserver,
  private:
   friend class ActorTaskTest;
 
+  // ToolDelegate:
+  ActorTaskId GetTaskId() const override;
+  AggregatedJournal& GetJournal() const override;
+  ActorToolFactory& GetToolFactory() const override;
+  void InterruptFromTool() override;
+  void UninterruptFromTool() override;
+  actor_login::ActorLoginService* GetActorLoginService() override;
+  void PromptToSelectCredential(
+      const std::vector<actor_login::Credential>& credentials,
+      CredentialSelectedCallback callback) override;
+  std::optional<CredentialWithPermission> GetUserSelectedCredential(
+      const url::Origin& request_origin) const override;
+
+  // Sets the actuation state on all controlled `WebState`s based on
+  // `actuating`.
+  void SetActuatingOnWebStates(bool actuating);
+
   // Sets the task state and logs the transition.
   void SetState(ActorTaskState new_state);
 
@@ -114,6 +135,13 @@ class ActorTask : public web::WebStateObserver,
   // timer.
   void DeferActCompletion(ActCallback callback,
                           std::vector<ActionResult> results);
+
+  // TODO(crbug.com/472291829): Implement affiliation service related logic to
+  // fetch affiliated domains so we can reuse the permission.
+  // Caches any user selected credential during task execution.
+  void SetUserSelectedCredential(const actor_login::Credential& credential,
+                                 bool should_store_permission,
+                                 base::OnceClosure affiliations_fetched);
 
   // Handles observation removal when a WebState finishes loading or is
   // destroyed. Also resolves the deferred callback if no more WebStates are
@@ -145,6 +173,10 @@ class ActorTask : public web::WebStateObserver,
   // guaranteed to outlive this ActorTask.
   raw_ptr<AggregatedJournal> journal_;
 
+  // The tool factory used for creating tools under this task. Owned by the
+  // ActorService, which is guaranteed to outlive this ActorTask.
+  raw_ptr<ActorToolFactory> tool_factory_;
+
   // Set of web states actively controlled (observed and/or being actuated on)
   // by this task.
   std::vector<base::WeakPtr<web::WebState>> controlled_web_states_;
@@ -169,6 +201,15 @@ class ActorTask : public web::WebStateObserver,
   // executions. `CRBProtocolObservers` itself is held strongly, but the
   // observers inside are held weakly.
   __strong CRBProtocolObservers<ActorTaskUpdatesObserver>* observers_;
+
+  // For multi-step login, these are the credentials that the user has chosen to
+  // allow the actor to use in this task, as well as whether the user has given
+  // permission for this credential to always be used.
+  base::flat_map<url::Origin, CredentialWithPermission>
+      user_selected_credentials_;
+
+  // The login service to log into websites.
+  std::unique_ptr<actor_login::ActorLoginService> actor_login_service_;
 
   // Weak pointer factory.
   base::WeakPtrFactory<ActorTask> weak_ptr_factory_{this};

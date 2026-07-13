@@ -83,7 +83,6 @@
 #import "ios/chrome/browser/shared/ui/elements/home_waiting_view.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_url_item.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_illustrated_empty_view.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_model.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_navigation_controller_constants.h"
@@ -163,11 +162,11 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 }  // namespace
 
 @interface BookmarksHomeViewController () <
-    BookmarksEditorCoordinatorDelegate,
-    BookmarksFolderEditorCoordinatorDelegate,
-    BookmarksFolderChooserCoordinatorDelegate,
-    BookmarksHomeConsumer,
     BookmarkModelBridgeObserver,
+    BookmarksEditorCoordinatorDelegate,
+    BookmarksFolderChooserCoordinatorDelegate,
+    BookmarksFolderEditorCoordinatorDelegate,
+    BookmarksHomeConsumer,
     BookmarkTableCellTitleEditDelegate,
     TableViewURLDragDataSource,
     TableViewURLDropDelegate,
@@ -415,6 +414,10 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 - (void)viewDidLoad {
   [super viewDidLoad];
 
+  if (!_bookmarkModel) {
+    return;
+  }
+
   // Set Navigation Bar, Toolbar and TableView appearance.
   self.navigationController.navigationBarHidden = NO;
 
@@ -469,7 +472,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
 
-  if (_isShutDown) {
+  if (_isShutDown || !_bookmarkModel) {
     // After `shutdown` is called, `_profile` is null.
     return;
   }
@@ -1572,7 +1575,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
     // Even if Apple documentation hints toward reconfiguring the row instead
     // of just updating the cell, it creates a visible jank. Use the item
     // configuration method instead. See crbug.com/479692041 for more info.
-    [item configureCell:cell withStyler:self.styler];
+    [item configureCell:cell];
   }
 }
 
@@ -2280,6 +2283,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
                                    title:title
                                 scenario:SharingScenario::BookmarkEntry];
   UIView* cellView = [self.tableView cellForRowAtIndexPath:indexPath];
+  [self.sharingCoordinator stop];
   self.sharingCoordinator =
       [[SharingCoordinator alloc] initWithBaseViewController:self
                                                      browser:_browser.get()

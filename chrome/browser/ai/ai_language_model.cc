@@ -22,6 +22,7 @@
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/types/expected.h"
 #include "chrome/browser/ai/ai_context_bound_object.h"
 #include "chrome/browser/ai/ai_manager.h"
@@ -686,14 +687,31 @@ AILanguageModel::AILanguageModel(
     OPTIMIZATION_GUIDE_LOGGER(
         optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
         logger_.get())
-        << "Starting on-device session for PromptApi";
+        << "Starting on-device session for LanguageModel with params: "
+        << base::StringPrintf(
+               "{max_tokens=%u, top_k=%u, temperature=%.2f, image_input=%d, "
+               "audio_input=%d}",
+               session_params_->max_tokens, session_params_->top_k,
+               session_params_->temperature,
+               session_params_->capabilities.Has(
+                   on_device_model::CapabilityFlags::kImageInput),
+               session_params_->capabilities.Has(
+                   on_device_model::CapabilityFlags::kAudioInput));
   }
 }
 
 AILanguageModel::~AILanguageModel() {
+  const bool crashed = !initial_session_;
   // If the initial session has been reset, the session crashed.
-  base::UmaHistogramBoolean("AI.Session.LanguageModel.Crashed",
-                            !initial_session_);
+  base::UmaHistogramBoolean("AI.Session.LanguageModel.Crashed", crashed);
+
+  if (logger_ && logger_->ShouldEnableDebugLogs()) {
+    OPTIMIZATION_GUIDE_LOGGER(
+        optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
+        logger_.get())
+        << "Terminated on-device session for LanguageModel. Reason: "
+        << (crashed ? "Session crashed" : "Session destroyed");
+  }
 }
 
 // static
@@ -1106,10 +1124,19 @@ void AILanguageModel::OnPromptOutputComplete() {
     model_output->pieces.push_back(
         InputPiece::NewText(prompt_state_->response()));
     model_output->pieces.push_back(InputPiece::NewToken(ml::Token::kEnd));
-    item.input->pieces.insert(
-        item.input->pieces.end(),
-        std::make_move_iterator(model_output->pieces.begin()),
-        std::make_move_iterator(model_output->pieces.end()));
+    if (base::FeatureList::IsEnabled(
+            features::kAILanguageModelAppendOutputTokensToContext)) {
+      item.input->pieces.insert(
+          item.input->pieces.end(),
+          std::make_move_iterator(model_output->pieces.begin()),
+          std::make_move_iterator(model_output->pieces.end()));
+    } else {
+      // Preserve `model_output->pieces` for potential use below when
+      // kAILanguageModelAppendOutputTokensToContext is disabled.
+      for (const auto& piece : model_output->pieces) {
+        item.input->pieces.push_back(piece->Clone());
+      }
+    }
     // One extra token for the end token on the model output.
     item.tokens++;
   }

@@ -740,7 +740,8 @@ void BucketContext::Open(
     mojo::PendingAssociatedReceiver<blink::mojom::IDBTransaction>
         transaction_receiver,
     int64_t transaction_id,
-    int scheduling_priority) {
+    int scheduling_priority,
+    bool request_shared_connection) {
   base::ElapsedTimer timer;
   TRACE_EVENT0("IndexedDB", "BucketContext::Open");
   auto scoper = ScopedHandlingRequest();
@@ -785,6 +786,8 @@ void BucketContext::Open(
       transaction_id, version, std::move(transaction_receiver));
   connection->data_loss_info = data_loss_info;
   connection->scheduling_priority = scheduling_priority;
+  connection->request_shared_connection = request_shared_connection;
+
   ReceiverContext& client = receivers_.current_context();
   // `Connection` only needs an opaque token to uniquely identify the
   // document or worker that owns the other side of the connection.
@@ -1105,6 +1108,7 @@ bool BucketContext::OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
     return true;
   }
 
+  uintptr_t identifier = backing_store()->GetIdentifierForMemoryDump();
   base::CheckedNumeric<uint64_t> total_memory_in_flight = 0;
   for (const auto& [name, database] : databases_) {
     for (Connection* connection : database->connections()) {
@@ -1113,12 +1117,18 @@ bool BucketContext::OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
       }
     }
   }
-  auto* db_dump = pmd->CreateAllocatorDump(
-      base::StringPrintf("site_storage/index_db/in_flight_0x%" PRIXPTR,
-                         backing_store()->GetIdentifierForMemoryDump()));
-  db_dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
-                     base::trace_event::MemoryAllocatorDump::kUnitsBytes,
-                     total_memory_in_flight.ValueOrDefault(0));
+  auto* in_flight_dump = pmd->CreateAllocatorDump(base::StringPrintf(
+      "site_storage/indexed_db/in_flight_0x%" PRIXPTR, identifier));
+  in_flight_dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
+                            base::trace_event::MemoryAllocatorDump::kUnitsBytes,
+                            total_memory_in_flight.ValueOrDefault(0));
+
+  // TODO(crbug.com/520300216): Add per-bucket origin attribution.
+  backing_store()->ReportMemoryUsage(
+      pmd,
+      base::StringPrintf("site_storage/indexed_db/database_engine_0x%" PRIXPTR,
+                         identifier));
+
   return true;
 }
 

@@ -113,6 +113,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "components/user_education/webui/help_bubble_handler.h"
 #include "ui/webui/tracked_element/tracked_element_handler.h"
 #include "ui/webui/tracked_element/tracked_element_web_ui.h"
@@ -510,12 +511,13 @@ NewTabPageHandler::NewTabPageHandler(
         segmentation_platform_service,
     content::WebContents* web_contents,
     const base::Time& ntp_navigation_start_time,
+    base::TimeTicks ntp_navigation_start_time_ticks,
     const std::vector<ntp::ModuleIdDetail>* module_id_details)
     : SettingsEnabledObserver(
           optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
       logger_(profile,
               chrome::ChromeUINewTabPageURLAsGURL(),
-              ntp_navigation_start_time),
+              ntp_navigation_start_time_ticks),
       ntp_custom_background_service_(ntp_custom_background_service),
       logo_service_(logo_service),
 // TODO(b/502297163): Implement for Android.
@@ -1177,18 +1179,18 @@ void NewTabPageHandler::CanShowRealboxContextMenuAnimation(
     CanShowRealboxContextMenuAnimationCallback callback) {
   PrefService* prefs = profile_->GetPrefs();
   const base::DictValue& state_dict =
-      prefs->GetDict(prefs::kRealboxContextMenuAnimationState);
+      prefs->GetDict(prefs::kContextMenuAnimationState);
 
-  int lifetime_count = state_dict.FindInt("lifetime_count").value_or(0);
+  int lifetime_count = state_dict.FindInt("realbox_lifetime_count").value_or(0);
   if (lifetime_count >= 20) {
     std::move(callback).Run(false);
     return;
   }
 
   base::Time last_impression_time =
-      base::ValueToTime(state_dict.Find("last_impression_time"))
+      base::ValueToTime(state_dict.Find("realbox_last_impression_time"))
           .value_or(base::Time());
-  int daily_count = state_dict.FindInt("daily_count").value_or(0);
+  int daily_count = state_dict.FindInt("realbox_daily_count").value_or(0);
 
   base::Time today_time = base::Time::Now().LocalMidnight();
 
@@ -1203,13 +1205,13 @@ void NewTabPageHandler::CanShowRealboxContextMenuAnimation(
 void NewTabPageHandler::RecordRealboxContextMenuAnimationImpression() {
   PrefService* prefs = profile_->GetPrefs();
   const base::DictValue& state_dict =
-      prefs->GetDict(prefs::kRealboxContextMenuAnimationState);
+      prefs->GetDict(prefs::kContextMenuAnimationState);
 
   base::Time last_impression_time =
-      base::ValueToTime(state_dict.Find("last_impression_time"))
+      base::ValueToTime(state_dict.Find("realbox_last_impression_time"))
           .value_or(base::Time());
-  int daily_count = state_dict.FindInt("daily_count").value_or(0);
-  int lifetime_count = state_dict.FindInt("lifetime_count").value_or(0);
+  int daily_count = state_dict.FindInt("realbox_daily_count").value_or(0);
+  int lifetime_count = state_dict.FindInt("realbox_lifetime_count").value_or(0);
 
   base::Time today_time = base::Time::Now().LocalMidnight();
 
@@ -1222,11 +1224,25 @@ void NewTabPageHandler::RecordRealboxContextMenuAnimationImpression() {
     lifetime_count++;
 
     ScopedDictPrefUpdate update(profile_->GetPrefs(),
-                                prefs::kRealboxContextMenuAnimationState);
-    update->Set("last_impression_time", base::TimeToValue(today_time));
-    update->Set("daily_count", daily_count);
-    update->Set("lifetime_count", lifetime_count);
+                                prefs::kContextMenuAnimationState);
+    update->Set("realbox_last_impression_time", base::TimeToValue(today_time));
+    update->Set("realbox_daily_count", daily_count);
+    update->Set("realbox_lifetime_count", lifetime_count);
   }
+}
+
+void NewTabPageHandler::OnContextualSearchIPHEngaged() {
+#if !BUILDFLAG(IS_ANDROID)
+  auto* browser = webui::GetBrowserWindowInterface(web_contents_);
+  if (browser) {
+    auto* user_education = BrowserUserEducationInterface::From(browser);
+    if (user_education) {
+      user_education->NotifyFeaturePromoFeatureUsed(
+          feature_engagement::kIPHDesktopRealboxContextualSearchFeature,
+          FeaturePromoFeatureUsedAction::kClosePromoIfPresent);
+    }
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
 void NewTabPageHandler::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
@@ -1377,18 +1393,12 @@ void NewTabPageHandler::MaybeTriggerAutomaticCustomizeChromePromo() {
 }
 
 void NewTabPageHandler::LogEvent(NTPLoggingEventType event) {
-// TODO(b/502297163): Implement for Android.
-#if !BUILDFLAG(IS_ANDROID)
   logger_.LogEvent(event, base::TimeDelta() /* unused */);
-#endif
 }
 
 void NewTabPageHandler::LogEvent(NTPLoggingEventType event,
                                  base::TimeDelta delta) {
-// TODO(b/502297163): Implement for Android.
-#if !BUILDFLAG(IS_ANDROID)
   logger_.LogEvent(event, delta);
-#endif
 }
 
 void NewTabPageHandler::Fetch(const GURL& url,

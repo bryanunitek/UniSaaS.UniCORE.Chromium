@@ -136,7 +136,8 @@ public class SignOutCoordinator {
                             getUiState(
                                     !unsyncedTypes.isEmpty(),
                                     showConfirmDialog,
-                                    userActionableError);
+                                    userActionableError,
+                                    signinManager.hasSignedInAccountExtensions());
                     switch (uiState) {
                         case UiState.SNACK_BAR ->
                                 signOutAndShowSnackbar(
@@ -202,6 +203,7 @@ public class SignOutCoordinator {
             case SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_BOOKMARKS:
             case SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_NTP:
             case SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_RECENT_TABS:
+            case SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_AUTOFILL_AND_PASSWORDS:
                 break;
             default:
                 throw new IllegalArgumentException("Invalid signOutReason: " + signOutReason);
@@ -296,14 +298,15 @@ public class SignOutCoordinator {
     private static @UiState int getUiState(
             boolean hasUnsavedData,
             boolean showConfirmDialog,
-            @UserActionableError int userActionableError) {
+            @UserActionableError int userActionableError,
+            boolean hasSignedInAccountExtensions) {
         if (userActionableError == UserActionableError.BOOKMARKS_LIMIT_EXCEEDED) {
             return UiState.UNSAVED_DATA;
         }
         if (hasUnsavedData) {
             return UiState.UNSAVED_DATA;
         }
-        if (showConfirmDialog) {
+        if (showConfirmDialog || hasSignedInAccountExtensions) {
             return UiState.SHOW_CONFIRM_DIALOG;
         }
         return UiState.SNACK_BAR;
@@ -330,6 +333,15 @@ public class SignOutCoordinator {
                                 ModalDialogProperties.TITLE,
                                 context.getString(R.string.sign_out_unsaved_data_title))
                         .with(ModalDialogProperties.MESSAGE_PARAGRAPH_1, message)
+                        // Setting CHECKBOX_TEXT to an empty string hides the checkbox.
+                        .with(
+                                ModalDialogProperties.CHECKBOX_TEXT,
+                                signinManager.hasSignedInAccountExtensions()
+                                        ? context.getString(
+                                                R.string
+                                                        .sign_out_unsaved_data_remove_extensions_message)
+                                        : "")
+                        .with(ModalDialogProperties.CHECKBOX_CHECKED, false)
                         .with(
                                 ModalDialogProperties.POSITIVE_BUTTON_TEXT,
                                 context.getString(R.string.sign_out_unsaved_data_primary_button))
@@ -370,6 +382,14 @@ public class SignOutCoordinator {
                         .with(
                                 ModalDialogProperties.MESSAGE_PARAGRAPH_1,
                                 context.getString(R.string.sign_out_message))
+                        // Setting CHECKBOX_TEXT to an empty string hides the checkbox.
+                        .with(
+                                ModalDialogProperties.CHECKBOX_TEXT,
+                                signinManager.hasSignedInAccountExtensions()
+                                        ? context.getString(
+                                                R.string.sign_out_remove_extensions_message)
+                                        : "")
+                        .with(ModalDialogProperties.CHECKBOX_CHECKED, false)
                         .with(
                                 ModalDialogProperties.POSITIVE_BUTTON_TEXT,
                                 context.getString(R.string.sign_out))
@@ -394,6 +414,8 @@ public class SignOutCoordinator {
             @Override
             public void onClick(PropertyModel model, int buttonType) {
                 if (buttonType == ModalDialogProperties.ButtonType.POSITIVE) {
+                    signinManager.setUninstallAccountExtensionsOnSignout(
+                            model.get(ModalDialogProperties.CHECKBOX_CHECKED));
                     signOut(
                             signinManager,
                             signOutReason,

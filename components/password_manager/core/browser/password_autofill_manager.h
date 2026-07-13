@@ -6,6 +6,7 @@
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_PASSWORD_AUTOFILL_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -76,19 +77,17 @@ class PasswordAutofillManager : public autofill::AutofillSuggestionDelegate,
   GetWebauthnSignInWithAnotherDeviceSuggestion() const override;
 
   // AutofillSuggestionDelegate implementation.
-  std::variant<autofill::AutofillDriver*, PasswordManagerDriver*> GetDriver()
-      override;
-  void OnSuggestionsShown(
-      base::span<const autofill::Suggestion> suggestions) override;
+  std::variant<autofill::AutofillDriver*, PasswordManagerDriver*>
+  GetDriver_DoNotUse() override;
+  void OnSuggestionsShown(base::span<const autofill::Suggestion> suggestions,
+                          base::optional_ref<const SuggestionMetadata>
+                              parent_suggestion_metadata) override;
   void OnSuggestionsHidden(autofill::SuggestionHidingReason reason) override;
   bool OnFilterChanged(const std::u16string& filter) override;
   bool OnSearchSubmitted(const std::u16string& filter) override;
   void DidSelectSuggestion(const autofill::Suggestion& suggestion) override;
   void DidAcceptSuggestion(const autofill::Suggestion& suggestion,
                            const SuggestionMetadata& metadata) override;
-  void DidPerformButtonActionForSuggestion(
-      const autofill::Suggestion&,
-      const autofill::SuggestionButtonAction&) override;
   bool RemoveSuggestion(const autofill::Suggestion& suggestion) override;
   void ClearPreviewedForm() override;
   autofill::FillingProduct GetMainFillingProduct() const override;
@@ -106,13 +105,15 @@ class PasswordAutofillManager : public autofill::AutofillSuggestionDelegate,
   // This is currently used for cases in which the automatic generation
   // option is offered through a different UI surface than the popup
   // (e.g. via the keyboard accessory on Android).
-  bool MaybeShowPasswordSuggestions(const gfx::RectF& bounds,
+  bool MaybeShowPasswordSuggestions(const autofill::FieldGlobalId& field_id,
+                                    const gfx::RectF& bounds,
                                     base::i18n::TextDirection text_direction);
 
   // If there are relevant credentials for the current frame, shows them with
   // an additional 'generation' option and returns true. Otherwise, does nothing
   // and returns false.
   bool MaybeShowPasswordSuggestionsWithGeneration(
+      const autofill::FieldGlobalId& field_id,
       const gfx::RectF& bounds,
       base::i18n::TextDirection text_direction,
       bool show_password_suggestions);
@@ -147,7 +148,8 @@ class PasswordAutofillManager : public autofill::AutofillSuggestionDelegate,
 
  private:
   // Validates and forwards the given objects to the autofill client.
-  bool ShowPopup(const gfx::RectF& bounds,
+  bool ShowPopup(const autofill::FieldGlobalId& field_id,
+                 const gfx::RectF& bounds,
                  base::i18n::TextDirection text_direction,
                  const std::vector<autofill::Suggestion>& suggestions,
                  bool is_for_webauthn_request);
@@ -258,6 +260,11 @@ class PasswordAutofillManager : public autofill::AutofillSuggestionDelegate,
   const raw_ptr<autofill::AutofillClient> autofill_client_;
 
   const raw_ptr<PasswordManagerClient> password_client_;
+
+  // The ID of the last ShowPopup() call. UpdatePopup() is a no-op if the
+  // current session ID isn't the same as the `last_session_id_`.
+  std::optional<autofill::AutofillClient::SuggestionUiSessionId>
+      last_session_id_;
 
   // The arguments of the last ShowPopup() call and UpdatePopup(), to be re-used
   // by OnUnlockReauthCompleted().

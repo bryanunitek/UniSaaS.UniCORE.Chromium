@@ -12,6 +12,7 @@
 #import "base/not_fatal_until.h"
 #import "components/open_from_clipboard/clipboard_async_wrapper_ios.h"
 #import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/enterprise/data_controls/model/data_controls_pasteboard_manager_observer.h"
 #import "ios/chrome/browser/enterprise/data_controls/model/pasteboard_observer.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -119,10 +120,17 @@ void DataControlsPasteboardManager::RestoreItemsToGeneralPasteboardIfNeeded(
   // Restore protected items to the pasteboard so they can be copied to
   // destinations allowed by Data Control rules.
   if (!pasteboard_state_.os_clipboard_allowed && pasteboard_state_.items) {
-    stage_ = Stage::kReplacingItems;
-    GetGeneralPasteboard(
-        base::BindOnce(&WriteItemsToPasteboard, pasteboard_state_.items)
-            .Then(std::move(callback)));
+    GetGeneralPasteboard(base::BindOnce(
+                             [](DataControlsPasteboardManager* manager,
+                                NSArray<NSDictionary<NSString*, id>*>* items,
+                                UIPasteboard* pasteboard) {
+                               if (manager->stage_ == Stage::kKnownSource) {
+                                 manager->stage_ = Stage::kReplacingItems;
+                                 WriteItemsToPasteboard(items, pasteboard);
+                               }
+                             },
+                             base::Unretained(this), pasteboard_state_.items)
+                             .Then(std::move(callback)));
   } else {
     std::move(callback).Run();
   }
@@ -157,6 +165,10 @@ void DataControlsPasteboardManager::OnPasteboardChanged(
       stage_ = Stage::kUnknownSource;
       break;
   }
+
+  for (auto& observer : observers_) {
+    observer.OnPasteboardContentChanged();
+  }
 }
 
 void DataControlsPasteboardManager::
@@ -167,10 +179,27 @@ void DataControlsPasteboardManager::
   }
 
   if (!pasteboard_state_.os_clipboard_allowed) {
-    stage_ = Stage::kReplacingItems;
-    GetGeneralPasteboard(
-        base::BindOnce(&ReplacePasteboardItemsWithPlaceholder));
+    GetGeneralPasteboard(base::BindOnce(
+        [](DataControlsPasteboardManager* manager, UIPasteboard* pasteboard) {
+          if (manager->stage_ == Stage::kKnownSource) {
+            manager->stage_ = Stage::kReplacingItems;
+            ReplacePasteboardItemsWithPlaceholder(pasteboard);
+          }
+        },
+        base::Unretained(this)));
   }
+}
+
+void DataControlsPasteboardManager::AddObserver(
+    DataControlsPasteboardManagerObserver* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  observers_.AddObserver(observer);
+}
+
+void DataControlsPasteboardManager::RemoveObserver(
+    DataControlsPasteboardManagerObserver* observer) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  observers_.RemoveObserver(observer);
 }
 
 void DataControlsPasteboardManager::ResetForTesting() {

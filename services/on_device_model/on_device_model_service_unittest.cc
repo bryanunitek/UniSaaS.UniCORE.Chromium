@@ -320,6 +320,56 @@ TEST_F(OnDeviceModelServiceTest, IdleTimeout) {
             static_cast<uint32_t>(ModelDisconnectReason::kIdleShutdown));
 }
 
+TEST_F(OnDeviceModelServiceTest, AsrStreamIdleTimeout) {
+  auto model = LoadModel();
+  mojo::Remote<mojom::Session> session;
+  model->StartSession(session.BindNewPipeAndPassReceiver(), nullptr);
+
+  base::test::TestFuture<uint32_t, const std::string&> model_future;
+  base::test::TestFuture<uint32_t, const std::string&> session_future;
+  model.set_disconnect_with_reason_handler(model_future.GetCallback());
+  session.set_disconnect_with_reason_handler(session_future.GetCallback());
+
+  class DummyResponder : public mojom::AsrStreamResponder {
+   public:
+    void OnResponse(
+        std::vector<mojom::SpeechRecognitionResultPtr> result) override {}
+  };
+  DummyResponder responder_impl;
+  mojo::PendingRemote<mojom::AsrStreamResponder> responder_remote;
+  mojo::Receiver<mojom::AsrStreamResponder> receiver(
+      &responder_impl, responder_remote.InitWithNewPipeAndPassReceiver());
+
+  auto options = mojom::AsrStreamOptions::New();
+  options->sample_rate_hz = 16000;
+  mojo::Remote<mojom::AsrStreamInput> asr_input;
+  session->AsrStream(std::move(options), asr_input.BindNewPipeAndPassReceiver(),
+                     std::move(responder_remote));
+
+  task_environment_.FastForwardBy(kDefaultModelIdleTimeout - base::Seconds(1));
+  EXPECT_FALSE(model_future.IsReady());
+  EXPECT_FALSE(session_future.IsReady());
+
+  // An ASR chunk should reset timeout.
+  auto audio_data = mojom::AudioData::New();
+  audio_data->sample_rate = 16000;
+  audio_data->channel_count = 1;
+  audio_data->frame_count = 1;
+  audio_data->data = {0};
+  asr_input->AddAudioChunk(std::move(audio_data));
+  task_environment_.RunUntilIdle();
+
+  task_environment_.FastForwardBy(kDefaultModelIdleTimeout - base::Seconds(1));
+  EXPECT_FALSE(model_future.IsReady());
+  EXPECT_FALSE(session_future.IsReady());
+
+  task_environment_.FastForwardBy(base::Seconds(1));
+  EXPECT_EQ(std::get<0>(model_future.Get()),
+            static_cast<uint32_t>(ModelDisconnectReason::kIdleShutdown));
+  EXPECT_EQ(std::get<0>(session_future.Get()),
+            static_cast<uint32_t>(ModelDisconnectReason::kIdleShutdown));
+}
+
 TEST_F(OnDeviceModelServiceTest, Responds) {
   auto model = LoadModel();
   EXPECT_THAT(GetResponses(*model, "bar"), ElementsAre("bar"));
@@ -363,6 +413,63 @@ TEST_F(OnDeviceModelServiceTest, PerSessionSamplingParams) {
 
   EXPECT_THAT(response.responses(),
               ElementsAre("TopK: 2, Temp: 0.5", "cheese", "more", "cheddar"));
+}
+
+TEST_F(OnDeviceModelServiceTest, ClampedSamplingParams) {
+  auto model = LoadModel();
+
+  // top_k = 0 should be clamped to kMinTopK (1). We use temperature = 0.5 to
+  // ensure the params block is printed by the fake engine.
+  {
+    auto session_params = mojom::SessionParams::New();
+    session_params->top_k = 0;
+    session_params->temperature = 0.5;
+
+    TestResponseHolder response;
+    mojo::Remote<mojom::Session> session;
+    model->StartSession(session.BindNewPipeAndPassReceiver(),
+                        std::move(session_params));
+
+    session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+    response.WaitForCompletion();
+
+    EXPECT_THAT(response.responses(), ElementsAre("TopK: 1, Temp: 0.5"));
+  }
+
+  // temperature = -1 should be clamped to kMinTemperature (0.0f). We use
+  // top_k = 2 to ensure the params block is printed by the fake engine.
+  {
+    auto session_params = mojom::SessionParams::New();
+    session_params->top_k = 2;
+    session_params->temperature = -1;
+
+    TestResponseHolder response;
+    mojo::Remote<mojom::Session> session;
+    model->StartSession(session.BindNewPipeAndPassReceiver(),
+                        std::move(session_params));
+
+    session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+    response.WaitForCompletion();
+
+    EXPECT_THAT(response.responses(), ElementsAre("TopK: 2, Temp: 0"));
+  }
+
+  // top_k = 1000 should be clamped to MaxTopK (128).
+  {
+    auto session_params = mojom::SessionParams::New();
+    session_params->top_k = 1000;
+    session_params->temperature = 0.5;
+
+    TestResponseHolder response;
+    mojo::Remote<mojom::Session> session;
+    model->StartSession(session.BindNewPipeAndPassReceiver(),
+                        std::move(session_params));
+
+    session->Generate(mojom::GenerateOptions::New(), response.BindRemote());
+    response.WaitForCompletion();
+
+    EXPECT_THAT(response.responses(), ElementsAre("TopK: 128, Temp: 0.5"));
+  }
 }
 
 TEST_F(OnDeviceModelServiceTest, CloneContextAndContinue) {
@@ -706,58 +813,7 @@ TEST_F(OnDeviceModelServiceTest, AppendWithImages) {
                           "bleu[Bitmap of size 63x42]cheese"));
 }
 
-TEST_F(OnDeviceModelServiceTest, ClassifyTextSafety) {
-  FakeFile ts_data("fake_ts_data");
-  FakeFile ts_sp_model("fake_ts_sp_model");
-  TextSafetyLoaderParams params;
-  params.ts_paths.emplace();
-  params.ts_paths->data = ts_data.Path();
-  params.ts_paths->sp_model = ts_sp_model.Path();
-  mojo::Remote<mojom::TextSafetyModel> model;
-  service()->LoadTextSafetyModel(LoadTextSafetyParams(params),
-                                 model.BindNewPipeAndPassReceiver());
-  mojo::Remote<mojom::TextSafetySession> session;
-  model->StartSession(session.BindNewPipeAndPassReceiver());
-  base::test::TestFuture<mojom::SafetyInfoPtr> future1;
-  base::test::TestFuture<mojom::SafetyInfoPtr> future2;
-  session->ClassifyTextSafety("unsafe text", future1.GetCallback());
-  session->ClassifyTextSafety("reasonable text", future2.GetCallback());
-  auto resp1 = future1.Take();
-  auto resp2 = future2.Take();
 
-  ASSERT_TRUE(resp1);
-  EXPECT_THAT(resp1->class_scores, ElementsAre(0.8, 0.8));
-  ASSERT_TRUE(resp2);
-  EXPECT_THAT(resp2->class_scores, ElementsAre(0.2, 0.2));
-}
-
-TEST_F(OnDeviceModelServiceTest, CloneTextSafety) {
-  FakeFile ts_data("fake_ts_data");
-  FakeFile ts_sp_model("fake_ts_sp_model");
-  TextSafetyLoaderParams params;
-  params.ts_paths.emplace();
-  params.ts_paths->data = ts_data.Path();
-  params.ts_paths->sp_model = ts_sp_model.Path();
-  mojo::Remote<mojom::TextSafetyModel> model;
-  service()->LoadTextSafetyModel(LoadTextSafetyParams(params),
-                                 model.BindNewPipeAndPassReceiver());
-
-  mojo::Remote<mojom::TextSafetySession> session;
-  model->StartSession(session.BindNewPipeAndPassReceiver());
-  {
-    base::test::TestFuture<mojom::SafetyInfoPtr> future;
-    session->ClassifyTextSafety("unsafe text", future.GetCallback());
-    EXPECT_THAT(future.Take()->class_scores, ElementsAre(0.8, 0.8));
-  }
-
-  mojo::Remote<mojom::TextSafetySession> clone;
-  session->Clone(clone.BindNewPipeAndPassReceiver());
-  {
-    base::test::TestFuture<mojom::SafetyInfoPtr> future;
-    clone->ClassifyTextSafety("unsafe text", future.GetCallback());
-    EXPECT_THAT(future.Take()->class_scores, ElementsAre(0.8, 0.8));
-  }
-}
 
 TEST_F(OnDeviceModelServiceTest, GpuBlocked) {
   // The fake implementation of ChromeML always blocks GPU by default.

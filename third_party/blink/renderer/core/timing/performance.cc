@@ -85,6 +85,7 @@
 #include "third_party/blink/renderer/core/timing/performance_observer.h"
 #include "third_party/blink/renderer/core/timing/performance_paint_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_resource_timing.h"
+#include "third_party/blink/renderer/core/timing/performance_scroll_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_server_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_soft_navigation.h"
 #include "third_party/blink/renderer/core/timing/performance_user_timing.h"
@@ -162,6 +163,7 @@ PerformanceEntry::EntryType kDroppableEntryTypes[] = {
     PerformanceEntry::kBackForwardCacheRestoration,
     PerformanceEntry::kSoftNavigation,
     PerformanceEntry::kInteractionContentfulPaint,
+    PerformanceEntry::kScroll,
 };
 
 void SwapEntries(PerformanceEntryVector& entries,
@@ -254,6 +256,7 @@ constexpr size_t kDefaultResourceTimingBufferSize = 250;
 constexpr size_t kDefaultEventTimingBufferSize = 150;
 constexpr size_t kDefaultContainerTimingBufferSize = 150;
 constexpr size_t kDefaultElementTimingBufferSize = 150;
+constexpr size_t kDefaultScrollTimingBufferSize = 150;
 constexpr size_t kDefaultLayoutShiftBufferSize = 150;
 constexpr size_t kDefaultLargestContenfulPaintSize = 150;
 constexpr size_t kDefaultInteractionContenfulPaintSize = 150;
@@ -278,6 +281,7 @@ Performance::Performance(
       event_timing_buffer_max_size_(kDefaultEventTimingBufferSize),
       container_timing_buffer_max_size_(kDefaultContainerTimingBufferSize),
       element_timing_buffer_max_size_(kDefaultElementTimingBufferSize),
+      scroll_timing_buffer_max_size_(kDefaultScrollTimingBufferSize),
       user_timing_(nullptr),
       time_origin_(time_origin),
       cross_origin_isolated_capability_(cross_origin_isolated_capability),
@@ -534,10 +538,10 @@ PerformanceEntryVector Performance::getEntriesByTypeInternal(
     case PerformanceEntry::kScript:
       break;
 
-    // TODO(crbug.com/504094429): Scroll entries are not emitted yet. A
-    // follow-up CL will add scroll instrumentation that delivers entries
-    // through PerformanceObserver.
+    // Scroll entries are buffered and observed via the PerformanceScrollTiming
+    // API.
     case PerformanceEntry::kScroll:
+      entries = &scroll_timing_buffer_;
       break;
 
     case PerformanceEntry::kLayoutShift:
@@ -574,6 +578,12 @@ PerformanceEntryVector Performance::getEntriesByTypeInternal(
         UseCounter::Count(GetExecutionContext(),
                           WebFeature::kLongAnimationFrameRequested);
         entries = &long_animation_frame_buffer_;
+      break;
+
+    // Conditional user timing entries are included in other relevant
+    // Performance entries. They are not retrievable through Performance
+    // interface.
+    case PerformanceEntry::kMarkConditional:
       break;
 
     case PerformanceEntry::kInvalid:
@@ -720,6 +730,18 @@ void Performance::AddToElementTimingBuffer(PerformanceElementTiming& entry) {
     InsertEntryIntoSortedBuffer(element_timing_buffer_, entry);
   } else {
     ++(dropped_entries_count_map_.find(PerformanceEntry::kElement)->value);
+  }
+}
+
+bool Performance::IsScrollTimingBufferFull() const {
+  return scroll_timing_buffer_.size() >= scroll_timing_buffer_max_size_;
+}
+
+void Performance::AddToScrollTimingBuffer(PerformanceScrollTiming& entry) {
+  if (!IsScrollTimingBufferFull()) {
+    InsertEntryIntoSortedBuffer(scroll_timing_buffer_, entry);
+  } else {
+    ++(dropped_entries_count_map_.find(PerformanceEntry::kScroll)->value);
   }
 }
 
@@ -913,24 +935,28 @@ PerformanceMark* Performance::mark(ScriptState* script_state,
       }
     }
 
-    std::optional<base::Value> detail_value;
-    if (mark_options && mark_options->hasDetail()) {
-      ScriptValue detail = mark_options->detail();
-      if (!detail.IsEmpty() && !detail.V8Value()->IsNullOrUndefined()) {
-        v8::Local<v8::Context> context = script_state->GetContext();
-        std::unique_ptr<WebV8ValueConverter> converter =
-            Platform::Current()->CreateWebV8ValueConverter();
-        if (std::unique_ptr<base::Value> new_value =
-                converter->FromV8Value(detail.V8Value(), context)) {
-          detail_value = std::move(*new_value);
+    if (RuntimeEnabledFeatures::DeclarativePerformanceObserverEnabled(
+            GetExecutionContext()) &&
+        !is_declarative_performance_observer_disabled_for_document_) {
+      std::optional<base::Value> detail_value;
+      if (mark_options && mark_options->hasDetail()) {
+        ScriptValue detail = mark_options->detail();
+        if (!detail.IsEmpty() && !detail.V8Value()->IsNullOrUndefined()) {
+          v8::Local<v8::Context> context = script_state->GetContext();
+          std::unique_ptr<WebV8ValueConverter> converter =
+              Platform::Current()->CreateWebV8ValueConverter();
+          if (std::unique_ptr<base::Value> new_value =
+                  converter->FromV8Value(detail.V8Value(), context)) {
+            detail_value = std::move(*new_value);
+          }
         }
       }
+      auto entry = mojom::blink::DeclarativePerformanceEntry::New();
+      entry->name = mark_name;
+      entry->start_time = base::Milliseconds(performance_mark->startTime());
+      entry->detail = std::move(detail_value);
+      BufferPerformanceEntry(std::move(entry));
     }
-    auto entry = mojom::blink::DeclarativePerformanceEntry::New();
-    entry->name = mark_name;
-    entry->start_time = base::Milliseconds(performance_mark->startTime());
-    entry->detail = std::move(detail_value);
-    BufferPerformanceEntry(std::move(entry));
 
     if (RuntimeEnabledFeatures::HTMLParserYieldByUserTimingEnabled() &&
         !mark_parser_blocking.empty() && !mark_parser_restart.empty()) {
@@ -1162,6 +1188,9 @@ void Performance::clearMeasures(const AtomicString& measure_name) {
   GetUserTiming().ClearMeasures(measure_name);
 }
 
+void Performance::markConditional(ScriptState* script_state,
+                                  const AtomicString& mark_name) {}
+
 void Performance::RegisterPerformanceObserver(PerformanceObserver& observer) {
   observer_filter_options_ |= observer.FilterOptions();
   observers_.insert(&observer);
@@ -1227,16 +1256,17 @@ void Performance::ActivateObserver(PerformanceObserver& observer) {
   if (active_observers_.empty())
     deliver_observations_timer_.StartOneShot(base::TimeDelta(), FROM_HERE);
 
-  if (suspended_observers_.Contains(&observer))
-    suspended_observers_.erase(&observer);
+  // erase() is a no-op when the observer isn't present, so no guard is needed.
+  suspended_observers_.erase(&observer);
   active_observers_.insert(&observer);
 }
 
 void Performance::SuspendObserver(PerformanceObserver& observer) {
   DCHECK(!suspended_observers_.Contains(&observer));
-  if (!active_observers_.Contains(&observer))
+  auto it = active_observers_.find(&observer);
+  if (it == active_observers_.end())
     return;
-  active_observers_.erase(&observer);
+  active_observers_.erase(it);
   suspended_observers_.insert(&observer);
 }
 
@@ -1368,6 +1398,7 @@ void Performance::Trace(Visitor* visitor) const {
   visitor->Trace(resource_timing_secondary_buffer_);
   visitor->Trace(container_timing_buffer_);
   visitor->Trace(element_timing_buffer_);
+  visitor->Trace(scroll_timing_buffer_);
   visitor->Trace(event_timing_buffer_);
   visitor->Trace(layout_shift_buffer_);
   visitor->Trace(largest_contentful_paint_buffer_);
@@ -1451,8 +1482,7 @@ void Performance::BufferPerformanceEntry(
     mojom::blink::DeclarativePerformanceEntryPtr entry) {
   batched_performance_entries_.push_back(std::move(entry));
   if (!performance_entries_flush_timer_.IsActive()) {
-    performance_entries_flush_timer_.StartOneShot(base::Milliseconds(100),
-                                                  FROM_HERE);
+    performance_entries_flush_timer_.StartOneShot(kBufferTimerDelay, FROM_HERE);
   }
 }
 
@@ -1473,6 +1503,10 @@ void Performance::FlushPerformanceEntries() {
           frame->GetBrowserInterfaceBroker().GetInterface(
               declarative_performance_observer_host_.BindNewPipeAndPassReceiver(
                   frame->GetTaskRunner(TaskType::kInternalDefault)));
+          declarative_performance_observer_host_.set_disconnect_handler(
+              BindOnce(&Performance::
+                           OnDeclarativePerformanceObserverHostDisconnected,
+                       WrapWeakPersistent(this)));
         }
         declarative_performance_observer_host_->DidObservePerformanceEntries(
             std::move(batched_performance_entries_));
@@ -1484,6 +1518,12 @@ void Performance::FlushPerformanceEntries() {
 
 void Performance::ResetTimeOriginForTesting(base::TimeTicks time_origin) {
   time_origin_ = time_origin;
+}
+
+void Performance::OnDeclarativePerformanceObserverHostDisconnected() {
+  is_declarative_performance_observer_disabled_for_document_ = true;
+  declarative_performance_observer_host_.reset();
+  batched_performance_entries_.clear();
 }
 
 }  // namespace blink

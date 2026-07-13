@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -537,8 +538,8 @@ v8::MaybeLocal<v8::UnboundScript> AuctionV8Helper::Compile(
   if (src_string.IsEmpty() || origin_string.IsEmpty())
     return v8::MaybeLocal<v8::UnboundScript>();
 
-  TRACE_EVENT_BEGIN1(kTraceEventCategoryGroup, "v8.compile", "fileName",
-                     src_url.spec());
+  TRACE_EVENT_BEGIN(kTraceEventCategoryGroup, "v8.compile", "fileName",
+                    src_url.spec());
 
   // Compile script.
   v8::TryCatch try_catch(isolate());
@@ -564,13 +565,13 @@ v8::MaybeLocal<v8::UnboundScript> AuctionV8Helper::Compile(
   DCHECK(!cached_data || (script_source.GetCachedData() &&
                           !script_source.GetCachedData()->rejected));
 
-  TRACE_EVENT_END1(kTraceEventCategoryGroup, "v8.compile", "data",
-                   [&](perfetto::TracedValue trace_context) {
-                     auto dict = std::move(trace_context).WriteDictionary();
-                     dict.Add("url", src_url.spec());
-                     dict.Add("lineNumber", 1);
-                     dict.Add("columnNumber", 1);
-                   });
+  TRACE_EVENT_END(kTraceEventCategoryGroup, "data",
+                  [&](perfetto::TracedValue trace_context) {
+                    auto dict = std::move(trace_context).WriteDictionary();
+                    dict.Add("url", src_url.spec());
+                    dict.Add("lineNumber", 1);
+                    dict.Add("columnNumber", 1);
+                  });
 
   return result;
 }
@@ -589,8 +590,7 @@ v8::MaybeLocal<v8::WasmModuleObject> AuctionV8Helper::CompileWasm(
   v8::TryCatch try_catch(isolate());
   v8::MaybeLocal<v8::WasmModuleObject> result = v8::WasmModuleObject::Compile(
       isolate(),
-      v8::MemorySpan<const uint8_t>(
-          reinterpret_cast<const uint8_t*>(payload.data()), payload.size()));
+      {reinterpret_cast<const uint8_t*>(payload.data()), payload.size()});
   if (try_catch.HasCaught()) {
     // WasmModuleObject::Compile doesn't know the URL, so FormatExceptionMessage
     // would produce unhelpful message w/o that important bit of context.

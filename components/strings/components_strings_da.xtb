@@ -14,7 +14,6 @@
 <translation id="1021753677514347426">Dette problem opstår på grund af et certifikat, som du eller en anden har installeret på din enhed. Certifikatet anvendes ofte til at overvåge og opfange netværk, og Chromium har ikke tillid til det. Der findes legitime årsager til at overvåge, f.eks. på skole- og virksomhedsnetværk, men Chromium vil sikre, at du er bevidst om det, når det sker, også selvom du ikke kan stoppe det. Overvågning kan finde sted i enhver browser eller app, der har adgang til nettet.</translation>
 <translation id="1024111578869940408">Hackere efterligner nogle gange websites ved at foretage små ændringer af webadressen, som er svære at se.</translation>
 <translation id="1024913885641459127">Produktanmeldelser og prissammenligninger</translation>
-<translation id="1025174656774447058">Vil du automatisk dele åbne faner for denne tråd?</translation>
 <translation id="102916930470544692">Adgangsnøgle</translation>
 <translation id="1030706264415084469"><ph name="URL" /> anmoder om at gemme store datamængder permanent på din enhed</translation>
 <translation id="1030949145805074938">{COUNT,plural, =0{Ingen}=1{Fra 1 website. Dette logger dig ud af de fleste websites. }one{Fra # website. Dette logger dig ud af de fleste websites. }other{Fra # websites. Dette logger dig ud af de fleste websites. }}</translation>
@@ -26,6 +25,7 @@
 <translation id="1038106730571050514">Vis forslag</translation>
 <translation id="1038168778161626396">Kun omsætning til kode</translation>
 <translation id="1038842779957582377">ukendt navn</translation>
+<translation id="1039767473048604223"><ph name="DEVICE_NAME" /> <ph name="MODEL" /></translation>
 <translation id="1041998700806130099">Jobarksmeddelelse</translation>
 <translation id="1044897699341250361">Hvad det betyder</translation>
 <translation id="1046350918013988591">Kuponer og rabattilbud</translation>
@@ -117,7 +117,6 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="1178821169867863726">12 x 16 tommer</translation>
 <translation id="1181037720776840403">Fjern</translation>
 <translation id="1185331130467528132"><ph name="URL" /> anmoder om adgang til andre enheder på dit lokale netværk</translation>
-<translation id="1185343831726846924">Bekræftelse af, at det virtuelle kort ikke kan aktiveres</translation>
 <translation id="1186201132766001848">Tjek adgangskoder</translation>
 <translation id="1187430513518041110">Biler og køretøjer</translation>
 <translation id="1188817995162638216">Vil du annullere lagringen af filen?</translation>
@@ -269,6 +268,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="1407135791313364759">Åbn alle</translation>
 <translation id="1408696301184924537">Hvis du vil udfylde dette IBAN-nummer automatisk næste gang, skal du gemme det på din Google-konto</translation>
 <translation id="1408787208417187241">Trehæftning øverst</translation>
+<translation id="1410306713026702438"><ph name="SUGGESTION_TITLE" />, <ph name="SUGGESTION_DESCRIPTION" />. <ph name="SUGGESTION_TYPE" />. <ph name="MATCH_POSITION" /> af <ph name="NUM_MATCHES_IN_GROUP" /> i gruppen <ph name="GROUP_HEADER" />.</translation>
 <translation id="1410365862999780287">Andre, der bruger denne enhed, kan ikke se din aktivitet, så du kan bruge nettet på en mere privat måde. Dette ændrer ikke på, hvordan data indsamles af websites, du besøger, og de tjenester, de bruger, herunder Google. Downloads, bogmærker og indholdet på din læseliste gemmes stadig.</translation>
 <translation id="1410941016594047814">Konvolut Invitation</translation>
 <translation id="1413235258620101697">Kortets CVC krypteres og gemmes i Google Wallet, så du kan betale hurtigere</translation>
@@ -300,6 +300,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="1445896388055045436">Vis tilgængelige kortfordele og -bonusser ved betaling. Udstederens vilkår er gældende.</translation>
 <translation id="1447067628680007684">(x86_64)</translation>
 <translation id="1448166547804028941">Værdierne "<ph name="DATA_CONTROLS_FIRST_KEY_SET" />" kan ikke angives i samme ordbog som værdierne "<ph name="DATA_CONTROLS_SECOND_KEY_SET" />"</translation>
+<translation id="1449251255954293933">Gem redress-nummeret i Google Wallet</translation>
 <translation id="1455413310270022028">Viskelæder</translation>
 <translation id="1457992721081300557">{NUM_REVIEWS,plural, =0{Se 0 anmeldelser}=1{Se 1 anmeldelse}one{Se # anmeldelse}other{Se alle # anmeldelser}}</translation>
 <translation id="1458059624921545588">Mennesker og samfund</translation>
@@ -313,6 +314,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="1463793142714244641">Timeshares og ferieejendomme</translation>
 <translation id="1465457928007067810">IBAN er gemt på din Google-konto</translation>
 <translation id="1467432559032391204">Venstre</translation>
+<translation id="1471514598850585811">Computer</translation>
 <translation id="1472675084647422956">Vis mere</translation>
 <translation id="1473183651233018052">JIS B10</translation>
 <translation id="1473495410389165587">Angiv mindst 3 ord for at få hjælp til at skrive</translation>
@@ -348,6 +350,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="1542105669288201090">Erhvervsuddannelse</translation>
 <translation id="1542830386724426410">Vis tilgængelige kortfordele og -bonusser ved betaling. Udstederens vilkår er gældende. <ph name="CARD_BENEFIT_HELP_LINK_BEGIN" />Få flere oplysninger<ph name="CARD_BENEFIT_HELP_LINK_END" /></translation>
 <translation id="1545757265410828525">Prishistorik</translation>
+<translation id="1546286808622193216">Sammenlign kortfordele via Gemini</translation>
 <translation id="1549470594296187301">JavaScript skal være aktiveret, før du kan bruge denne funktion.</translation>
 <translation id="1553152622374372421">Vintersport</translation>
 <translation id="1553358976309200471">Opdater Chrome</translation>
@@ -476,6 +479,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="173080396488393970">Denne korttype understøttes ikke</translation>
 <translation id="1731563515262205847">ML-DSA-65</translation>
 <translation id="1732445923934584865">Spørg direkte i stedet</translation>
+<translation id="1732796940245838248">Opdater redress-nummeret i Google Wallet</translation>
 <translation id="1733064249834771892">skrifttyper</translation>
 <translation id="1733631169686303142">Lydudstyr</translation>
 <translation id="1733762317901693627">Selv websites, der normalt er sikre, kan nogle gange blive kompromitteret af hackere. Gå kun til <ph name="BEGIN_LINK" />dette usikre website<ph name="END_LINK" />, hvis du er sikker på, at du er indforstået med risiciene.</translation>
@@ -501,6 +505,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="175656076281618225">Magi</translation>
 <translation id="1757773103848038814">Skrifttype med enkelt tegnafstand</translation>
 <translation id="1757935267918149452">Knappen Skift Google-adgangskode, aktivér for at ændre adgangskoden til din Google-konto</translation>
+<translation id="1759776526873274358">Autofyld verificeringskoder, som websites bruger til at forbedre din sikkerhed. Chrome kan få disse koder fra din Gmail. <ph name="BEGIN_LINK" />Få flere oplysninger om denne funktion<ph name="LINK_END" /></translation>
 <translation id="1763864636252898013">Denne server kunne ikke bevise, at den er <ph name="DOMAIN" />, da operativsystemet på din enhed ikke har tillid til sikkerhedscertifikatet. Dette kan skyldes en fejlkonfiguration, eller at en hacker har opfanget din forbindelse.</translation>
 <translation id="1768211456781949159"><ph name="BEGIN_LINK" />Prøv at køre Windows Netværksdiagnosticering<ph name="END_LINK" />.</translation>
 <translation id="1777422078676229054">Foto (arkiv)</translation>
@@ -580,6 +585,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="1902576642799138955">Gyldighedsperiode</translation>
 <translation id="1908217026282415406">Kamerabrug og -bevægelse</translation>
 <translation id="1908690643053136980">Din administrator tillader ikke <ph name="PERMISSION" /> for dette website</translation>
+<translation id="1912750443952232242">Gem id-kortet i Google Wallet</translation>
 <translation id="1913037223029790376">Brug CVC'en til dette virtuelle kort</translation>
 <translation id="191374271204266022">Kopiér som JSON</translation>
 <translation id="1914326953223720820">Udpakningstjeneste</translation>
@@ -660,6 +666,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="2045871135676061132">Konvolut Personlig</translation>
 <translation id="2046951263634619614">Boghandlere</translation>
 <translation id="2048261947532620704">Oversætter siden</translation>
+<translation id="2055016614992422886">Samtale</translation>
 <translation id="2059166748188874810">Kommune</translation>
 <translation id="2059202684901022309">22 x 34 tommer</translation>
 <translation id="2064568741209980952">Kredit og udlån</translation>
@@ -709,6 +716,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="2122165854541876335">Forbrugerressourcer</translation>
 <translation id="2122214041802369259">Prisen er høj</translation>
 <translation id="2122719317867821810">Denne politik fungerer efter hensigten, men et andet sted er en modstridende værdi blevet tilsidesat af denne politik.</translation>
+<translation id="2124081665399116863">Opdater køretøjet i Google Wallet</translation>
 <translation id="2126374524350484896">PDF Producer:</translation>
 <translation id="2127090458081644412">Adgangskoden er gemt på denne enhed</translation>
 <translation id="2127747486437921899">Kursiv</translation>
@@ -887,6 +895,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="2365382709349300355">1 fil blev blokeret på grund af en politik</translation>
 <translation id="2365508935344991784">Havemøbler</translation>
 <translation id="2366689192918515749">Kød, fisk og skaldyr</translation>
+<translation id="2367025302166767427">Dine oplysninger kunne ikke udfyldes</translation>
 <translation id="2367567093518048410">Niveau</translation>
 <translation id="23703388716193220">Golfudstyr</translation>
 <translation id="2370368710215137370">Upload af filer</translation>
@@ -991,6 +1000,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="2524962131655207565"><ph name="BEGIN_BOLD" />Indhold fra betalingssiden deles med Google for at give disse valgmuligheder.<ph name="END_BOLD" /> Betalingsplaner forudsætter, at du er kvalificeret. Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> for at skjule valgmuligheder for Betal senere.</translation>
 <translation id="2526062290525841862">Hvis du vil køre denne app, skal du genaktivere udviklertilstanden for isolerede webapps</translation>
 <translation id="2526280916094749336">Du kan bruge gemte adresser i alle Google-produkter. Denne adresse gemmes på din Google-konto, <ph name="ACCOUNT" />.</translation>
+<translation id="2526590354069164005">Skrivebord</translation>
 <translation id="2527451058878391043">Din CVC er på forsiden af dit kort. Det er den 4-cifrede kode øverst til højre over dit kortnummer.</translation>
 <translation id="2529899080962247600">Dette felt må ikke have mere end <ph name="MAX_ITEMS_LIMIT" /> poster. Alle yderligere poster ignoreres.</translation>
 <translation id="2530042584066815841">Lås og brug af mus</translation>
@@ -1119,6 +1129,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="271663710482723385">Tryk på |<ph name="ACCELERATOR1" />| + |<ph name="ACCELERATOR2" />| for at afslutte visning i fuld skærm</translation>
 <translation id="2717336592027046789">Papirrulle</translation>
 <translation id="2718207025093645426">Der er ikke indlæst en politik for den administrerede bruger eller enhed.</translation>
+<translation id="271850739643214113">Din Pix-konto er tilknyttet Google Pay</translation>
 <translation id="2719233594187778789">Identisk webadresse blev ignoreret: <ph name="URL_NAME" /></translation>
 <translation id="2721148159707890343">Anmodning lykkedes</translation>
 <translation id="2722622039067384533">Stuemøbler</translation>
@@ -1155,6 +1166,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="2782088940970074970">Biludlejning</translation>
 <translation id="278436560439594386">Husholdningsapparater</translation>
 <translation id="2784474685437057136">B5 Extra</translation>
+<translation id="2784795832957740711">Adgangskoder · Adgangsnøgler</translation>
 <translation id="2784949926578158345">Forbindelsen blev nulstillet.</translation>
 <translation id="2786008859124691917">Cykler og tilbehør</translation>
 <translation id="2792012897584536778">Administratorer for denne enhed har konfigureret sikkerhedscertifikater, som muligvis giver dem mulighed for at se indholdet af de websites, du besøger.</translation>
@@ -1206,6 +1218,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="2903493209154104877">Adresser</translation>
 <translation id="290376772003165898">Er siden ikke på <ph name="LANGUAGE" />?</translation>
 <translation id="2904180982022726666">Din organisation begrænser, hvad du kan dele</translation>
+<translation id="2905065304080706507">Når funktionen er aktiveret, deler Chrome relevante faner i dette vindue for at hjælpe dig med at få mere relevante svar.</translation>
 <translation id="2905107382358353958">Underretning om en ny betalingsindstilling</translation>
 <translation id="2909946352844186028">Der blev registreret en netværksændring.</translation>
 <translation id="2910062169995917863">Der opstod timeout for din session</translation>
@@ -1229,6 +1242,7 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="2929525460561903222">{SHIPPING_ADDRESS,plural, =0{<ph name="SHIPPING_ADDRESS_PREVIEW" />}=1{<ph name="SHIPPING_ADDRESS_PREVIEW" /> og <ph name="NUMBER_OF_ADDITIONAL_ADDRESSES" /> anden}one{<ph name="SHIPPING_ADDRESS_PREVIEW" /> og <ph name="NUMBER_OF_ADDITIONAL_ADDRESSES" /> anden}other{<ph name="SHIPPING_ADDRESS_PREVIEW" /> og <ph name="NUMBER_OF_ADDITIONAL_ADDRESSES" /> andre}}</translation>
 <translation id="2930531075747147366">Fane fra din anden enhed</translation>
 <translation id="2930577230479659665">Beskær efter hver kopi</translation>
+<translation id="2931453528659195355">Administrer shoppingoplysninger</translation>
 <translation id="2933624813161016821">Prægefolie</translation>
 <translation id="2935726091208500473">deling af dine faner</translation>
 <translation id="293796669683825859">Kommentarer</translation>
@@ -1258,7 +1272,6 @@ Ellers vil det blive blokeret af dine privatlivsindstillinger. Det giver det ind
 <translation id="297173220375858963">Desktoppublishing</translation>
 <translation id="2972581237482394796">&amp;Annuller fortryd</translation>
 <translation id="2974468223369775963">Dette IBAN kunne ikke gemmes på din Google-konto. Det er gemt i Chrome på denne enhed i stedet. Chrome spørger dig igen, næste gang du bruger dette IBAN.</translation>
-<translation id="2976162850019490782">Når funktionen er aktiveret, deler Chrome alle faner i dette vindue for at hjælpe dig med at få mere relevante svar. Du kan aktivere dette for alle tråde i Indstillinger.</translation>
 <translation id="297667759942911166">Samarbejd i fanegrupper</translation>
 <translation id="2977665033722899841"><ph name="ROW_NAME" /> er i øjeblikket valgt. <ph name="ROW_CONTENT" /></translation>
 <translation id="2978824962390592855">Opera</translation>
@@ -1387,6 +1400,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3158539265159265653">Disk</translation>
 <translation id="3162070126914310576">Denne enhed kan ikke tilmeldes lige nu, fordi din organisationsenhed har nået sin grænse for indledende tilmelding. Kontakt din administrator for at få hjælp.</translation>
 <translation id="3162559335345991374">Det Wi-Fi-netværk, du bruger, kan kræve, at du går til netværkets loginside.</translation>
+<translation id="316542773973815724">Navigation</translation>
 <translation id="316638481603975524">Kan anmode om at installere webapps</translation>
 <translation id="3166788340998560642">Chrome tilbyder at gemme oplysningerne i <ph name="IDS_AUTOFILL_GOOGLE_WALLET_TITLE" />, næste gang du bruger den</translation>
 <translation id="3168744840365648658">Radioudstyr</translation>
@@ -1407,6 +1421,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3194737229810486521"><ph name="URL" /> anmoder om at gemme data permanent på din enhed</translation>
 <translation id="3194765668709099364">Klarna</translation>
 <translation id="3195213714973468956"><ph name="PRINTER_NAME" /> på <ph name="SERVER_NAME" /></translation>
+<translation id="3196902089458890316">Vil du altid dele relevante faner for at få bedre svar?</translation>
 <translation id="3197136577151645743">Websitet kan anmode om tilladelse til at blive underrettet, når du aktivt bruger din enhed</translation>
 <translation id="3202497928925179914"><ph name="MANAGE_SYNC_FOCUSED_FRIENDLY_MATCH_TEXT" />, tryk på Tab-tasten efterfulgt af Enter for at administrere, hvilke oplysninger der skal synkroniseres, i Chrome-indstillingerne</translation>
 <translation id="3203025201812691413">Webadressen skal angives</translation>
@@ -1444,6 +1459,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3237427677128462778">Dataene kunne ikke gemmes i Google Wallet</translation>
 <translation id="3238395604961564389">Åbn link i inkognitovindue</translation>
 <translation id="3240683217920639535"><ph name="MANAGE_CHROME_THEMES_FOCUSED_FRIENDLY_MATCH_TEXT" />– tryk på Tab-tasten efterfulgt af Enter for at tilpasse din browsers udseende</translation>
+<translation id="3243131902823383230"><ph name="MANUFACTURER" />-computer</translation>
 <translation id="3243650379537999343">Tegn</translation>
 <translation id="3248329428895535435">Vis ikke for dette website</translation>
 <translation id="3249102948665905108">Filupload til <ph name="CLOUD_PROVIDER" /> er gennemført med fejl</translation>
@@ -1543,6 +1559,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3422472998109090673"><ph name="HOST_NAME" /> kan ikke læses i øjeblikket.</translation>
 <translation id="3422794267539320056">Tryk på dinoen, eller tryk på mellemrumstasten for at spille</translation>
 <translation id="3423742043356668186">Systemspecificeret</translation>
+<translation id="3426672782316020729">Opdater passet i Google Wallet</translation>
 <translation id="3427342743765426898">&amp;Annuller fortryd redigering</translation>
 <translation id="342781501876943858">Chromium anbefaler, at du nulstiller din adgangskode, hvis du har brugt den på andre websites.</translation>
 <translation id="3428151540071562330">En eller flere af serverskabelon-URI'erne for DnsOverHttpsTemplates er ugyldige og anvendes ikke.</translation>
@@ -1554,6 +1571,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="343474037147570563">De filer, du uploader eller vedhæfter, sendes til Google Cloud eller tredjeparter, hvor de analyseres. De kan f.eks. blive scannet for følsomme oplysninger eller malware, og de kan blive gemt i henhold til virksomhedens politikker og være synlige for din administrator.</translation>
 <translation id="3435557549311968410">Kontinuerlig (kort)</translation>
 <translation id="3435738964857648380">Sikkerhed</translation>
+<translation id="3436125638121079308">Vil du automatisk dele relevante faner for at få bedre svar i denne tråd?</translation>
 <translation id="3438509337461223476">Del automatisk åbne faner i alle tråde</translation>
 <translation id="3440783957068352691">firkant</translation>
 <translation id="3441653493275994384">Skærm</translation>
@@ -1615,6 +1633,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3537165859691846083">Letter Plus</translation>
 <translation id="353816159217417898">Skærm (side)</translation>
 <translation id="3541016556608204104">Flere oplysninger om Chrome Enterprise Connectors</translation>
+<translation id="3542005451565251757">Du får vist denne advarsel, fordi dette website ikke understøtter HTTPS, og fordi du har aktiveret Avanceret beskyttelse i Android-indstillingerne. <ph name="LEARN_MORE" /></translation>
 <translation id="3542628208405253498">Kortbillede</translation>
 <translation id="3542768452570884558">Åbn link i nyt vindue</translation>
 <translation id="3543597750097719865">X9.62 ECDSA-signatur med SHA-512</translation>
@@ -1666,7 +1685,6 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="361438452008624280">Listepost "<ph name="LANGUAGE_ID" />": Ukendt eller ikke-understøttet sprog.</translation>
 <translation id="3614934205542186002"><ph name="RUN_CHROME_SAFETY_CHECK_FOCUSED_FRIENDLY_MATCH_TEXT" />– tryk på Tab-tasten efterfulgt af Enter for at køre et sikkerhedstjek i Chrome-indstillingerne</translation>
 <translation id="3615309852743236517">Manicure og pedicure</translation>
-<translation id="3620034424637552643">Bruges ofte til rutevejledning, leveringer m.m.</translation>
 <translation id="3620239073311576716">Uniformer og arbejdstøj</translation>
 <translation id="3620865353340165509">Dette IBAN kunne ikke gemmes i Google Wallet. Det er gemt i Chrome på denne enhed i stedet. Chrome spørger dig igen, næste gang du bruger dette IBAN.</translation>
 <translation id="3621401353678567613">Hvis du vil have notifikationer om prisfald på produkter, du sporer, kan du aktivere notifikationer i indstillingerne.</translation>
@@ -1688,7 +1706,6 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3641116835972736297">Amerikansk fodbold</translation>
 <translation id="3642196846309122856">Prøv at downloade dine filer igen</translation>
 <translation id="3642638418806704195">Program:</translation>
-<translation id="3644768007456662469">Ikon for betalingselement</translation>
 <translation id="3647286794400715637">Hver webadressestreng skal indeholde mellem 1 og 2 webadresser.</translation>
 <translation id="3647400963805615193">Knappen Luk Chrome-tip, tryk på Enter for at lukke, <ph name="REMOVE_BUTTON_FOCUSED_FRIENDLY_MATCH_TEXT" /></translation>
 <translation id="3650584904733503804">Valideringen er fuldført</translation>
@@ -1720,6 +1737,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3681841880472207951">QuickTime-video</translation>
 <translation id="3687920599421452763">Kassevogne og minibusser</translation>
 <translation id="3693327506115126094">Vælg, hvordan du vil verificere din identitet</translation>
+<translation id="3693516565203081475">Vælg betalingsmetode</translation>
 <translation id="3698353241727597930">Din administrator har konfigureret at gemme <ph name="FILES" /> i din virksomhedsadministrerede <ph name="CLOUD_STORAGE" />-lagerplads. Disse filer kan overvåges, kontrolleres og opbevares, når du sletter dem.</translation>
 <translation id="3698629142018988477">Knappen Opret website, aktivér for hurtigt at oprette et nyt website i Google Sites</translation>
 <translation id="3700094625653511150">Gå til <ph name="IDS_AUTOFILL_CARD_BNPL_SELECT_PROVIDER_FOOTNOTE_HIDE_OPTION_PAYMENT_SETTINGS_LINK_TEXT" /> for at skjule valgmuligheder for Betal senere</translation>
@@ -1775,6 +1793,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3761718714832595332">Skjul status</translation>
 <translation id="3763752038825281594">Du har tidligere ikke tilladt <ph name="PERMISSION" /> for dette website</translation>
 <translation id="3765588406864124894">Postkasse 9</translation>
+<translation id="3766505784424699541">Få mere tilpassede svar ved automatisk at dele relevante faner i dette vindue, hvis de er relateret til denne tråd.</translation>
 <translation id="3767485424735936570">Administratorpolitikken fraråder at kopiere og indsætte dette indhold i <ph name="VM_NAME" /></translation>
 <translation id="3769584711865378220"><ph name="URL" /> vil gerne ændre lokationsadgangen fra omtrentlig til præcis</translation>
 <translation id="3772211998634047851">Papir (bankpost)</translation>
@@ -1860,6 +1879,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="3901925938762663762">Kortet er udløbet</translation>
 <translation id="390391808978419508">Åbningen fik timeout</translation>
 <translation id="3905894480064208252">{0,plural, =1{FIlen er blokeret, så den ikke kan overføres}one{<ph name="FILE_COUNT" /> fil er blokeret, så den ikke kan åbnes}other{<ph name="FILE_COUNT" /> filer er blokeret, så de ikke kan åbnes}}</translation>
+<translation id="3906022360148923497">Ikon for betalingsmetode</translation>
 <translation id="3906954721959377182">Tablet</translation>
 <translation id="3909695131102177774"><ph name="LABEL" /> <ph name="ERROR" /></translation>
 <translation id="3910231615117880630">Få flere oplysninger om indlejret indhold</translation>
@@ -2081,6 +2101,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="422722221769396062">Takeaway</translation>
 <translation id="4230204356098880324">Websitet kan anmode om tilladelse til at bruge og bevæge dit kamera</translation>
 <translation id="4231448684371260244">8 x 13 tommer</translation>
+<translation id="4234996384188431444">Betal med Pix uden at skifte app i Google Chrome</translation>
 <translation id="4239799716689808527">Etiketter</translation>
 <translation id="424063167283213501">Gem Known Traveler-nummer</translation>
 <translation id="4241830393007970744">Hackere på det website, du har forsøgt at besøge, kan narre dig til at installere software eller afsløre data som f.eks. dine adgangskoder, dit telefonnummer eller dine kreditkortnumre.</translation>
@@ -2097,6 +2118,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4255487295905690262">Du får underretninger via mail, hvis prisen falder på et website.</translation>
 <translation id="425582637250725228">Ændringer, du har foretaget, gemmes muligvis ikke.</translation>
 <translation id="4258748452823770588">Forkert signatur</translation>
+<translation id="4258927999980634471">Vil du automatisk dele relevante faner for denne tråd?</translation>
 <translation id="4260407128682690669">Synkroniser din historik og dine faner på <ph name="ACCOUNT_EMAIL" />, så du kan få adgang til din historik på dine andre enheder. Du kan til enhver tid stoppe med at synkronisere ved at gå til indstillingerne. Google kan tilpasse Søgning og andre tjenester baseret på din historik.</translation>
 <translation id="4265635050210404830">Dine loyalitetskort</translation>
 <translation id="4265872034478892965">Tilladt af din administrator</translation>
@@ -2135,6 +2157,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4304049446746819918">{0,plural, =1{Administratorpolitikken fraråder at flytte denne fil til <ph name="DESTINATION_NAME" />}one{Administratorpolitikken fraråder at flytte denne fil til <ph name="DESTINATION_NAME" />}other{Administratorpolitikken fraråder at flytte disse filer til <ph name="DESTINATION_NAME" />}}</translation>
 <translation id="4304485328308299773">Med anmeldelser kan du læse kundernes evalueringer af produkter, tjenester eller oplevelser for at gøre det nemmere at træffe beslutninger.</translation>
 <translation id="4305666528087210886">Din fil kunne ikke tilgås</translation>
+<translation id="4306349443295056740">OCSP-signering</translation>
 <translation id="4306529830550717874">Vil du gemme adressen?</translation>
 <translation id="4306812610847412719">udklipsholder</translation>
 <translation id="4308567447483056043">Denne politik ignoreres, fordi brugeren ikke er tilknyttet organisationen. Chrome-browseren og -profilen skal administreres via Administrationskonsol af den samme organisation, før denne politik kan anvendes.</translation>
@@ -2164,6 +2187,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4340810192899866471">Importér fra JSON</translation>
 <translation id="4340982228985273705">Denne computer registreres ikke som virksomhedsadministreret, så politikken kan kun automatisk installere udvidelser, der hostes i Chrome Webshop. Opdateringswebadressen til Chrome Webshop er "<ph name="CWS_UPDATE_URL" />".</translation>
 <translation id="4342742994656318294">Forlystelsesparker</translation>
+<translation id="4344194909635300809">Sidetitler og webadresser sendes til Google og gennemgås muligvis af menneskelige kontrollanter</translation>
 <translation id="4346670990181948854">Rejseoplysninger · Køretøjer</translation>
 <translation id="4348834659292907206">Forbindelsen til <ph name="SITE" /> er ikke sikker</translation>
 <translation id="4349365535725594680">Fortroligt indhold kan ikke deles</translation>
@@ -2171,6 +2195,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4350629523305688469">Multifunktionsbakke</translation>
 <translation id="4351060348582610152"><ph name="ORIGIN" /> vil gerne søge efter Bluetooth-enheder i nærheden. Følgende enheder blev fundet:</translation>
 <translation id="4355383636893709732">ChromeOS-opdatering til Android-apps</translation>
+<translation id="4357577888320640139">Vil du automatisk dele relevante faner i alle tråde?</translation>
 <translation id="4358059973562876591">De skabeloner, du har angivet, anvendes muligvis ikke på grund af en fejl med politikken DnsOverHttpsMode.</translation>
 <translation id="4358461427845829800">Administrer betalingsmetoder...</translation>
 <translation id="4359160567981085931">Du har lige angivet din adgangskode på et vildledende website. Chrome kan hjælpe. Klik på Beskyt konto for at ændre din adgangskode og underrette Google om, at din konto muligvis er kompromitteret.</translation>
@@ -2206,6 +2231,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4418150423720608641">ML-DSA-87</translation>
 <translation id="4419287616181386201">Adgangskoder kan slettes i de tilhørende administrationsindstillinger</translation>
 <translation id="4424024547088906515">Denne server kunne ikke bevise, at den er <ph name="DOMAIN" />, da Chrome ikke har tillid til sikkerhedscertifikatet. Dette kan skyldes en fejlkonfiguration, eller at en hacker har opfanget din forbindelse.</translation>
+<translation id="4425137053900958839">Få den brugervenlighed og sikkerhed, du forventer af Pix</translation>
 <translation id="4425750422187370446">Sportstøj</translation>
 <translation id="443121186588148776">Serieport</translation>
 <translation id="4432688616882109544"><ph name="HOST_NAME" /> accepterede ikke dit logincertifikat, eller der er ikke angivet et.</translation>
@@ -2215,7 +2241,6 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4434045419905280838">Pop op-vinduer og omdirigeringer</translation>
 <translation id="443673843213245140">Brug af en proxy er deaktiveret, men en eksplicit proxykonfiguration er angivet.</translation>
 <translation id="4438821706955556403">Normalpris</translation>
-<translation id="4439687924334332880">Få mere tilpassede svar ved automatisk at dele åbne faner i dette vindue, hvis de er relateret til denne tråd. Du kan aktivere dette for alle tråde i Indstillinger.</translation>
 <translation id="4441832193888514600">Ignoreret, fordi politikken kun kan angives som en skybrugerpolitik.</translation>
 <translation id="4444062564459679679">Allerede sendt til Chrome på din <ph name="DEVICE_NAME" /></translation>
 <translation id="4445694043187340808"><ph name="STARTER_PACK_TABS_FOCUSED_FRIENDLY_MATCH_TEXT" />, tryk på Enter for at søge i faner</translation>
@@ -2282,6 +2307,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4557573143631562971">Indboforsikring</translation>
 <translation id="4558551763791394412">Prøv at deaktivere dine udvidelser.</translation>
 <translation id="4566017918361049074">Udendørsaktiviteter</translation>
+<translation id="4568572491321119037">Opdater identitetskortet i Google Wallet</translation>
 <translation id="4569155249847375786">Godkendt</translation>
 <translation id="4570008401337135432">Tekstjustering</translation>
 <translation id="457875822857220463">Levering</translation>
@@ -2301,9 +2327,11 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4607608436550361748">Se tips til Chrome</translation>
 <translation id="460848736049414407">Blokeret af administrator</translation>
 <translation id="4610279718074907952">Dette website er i en gruppe, der er defineret af <ph name="SET_OWNER" />, og som kan se din aktivitet</translation>
+<translation id="4612631413844865947">Der opstod en fejl under behandlingen af din ordre <ph name="MERCHANT_ORIGIN" /> via <ph name="PAYMENT_APP_ORIGIN" />.</translation>
 <translation id="46128681529823442">Fodboldudstyr</translation>
 <translation id="4612904677925722054">Dette website kan have indhold, der er uegnet for børn. En forælder eller værge skal godkende, at du må besøge dette website.</translation>
 <translation id="4619564267100705184">Verificer din identitet</translation>
+<translation id="4619669610757527494">Gem kørekortet i Google Wallet</translation>
 <translation id="4622292761762557753">Overfør alligevel</translation>
 <translation id="4622647778991854660">Aktivér notifikationer i Notifikationscenter. Åbn <ph name="LINK" />.</translation>
 <translation id="4623894491222334521">Id-dokumenter</translation>
@@ -2348,6 +2376,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4691093235373904540">Tagdækning</translation>
 <translation id="4692623383562244444">Søgemaskiner</translation>
 <translation id="4695702626068620848"><ph name="KEYWORD" /> – Spørg <ph name="KEYWORD_SHORT_NAME" /></translation>
+<translation id="4697071790493980729">Der blev ikke fundet nogen resultater</translation>
 <translation id="4698308118265482293">Opdater pas</translation>
 <translation id="4698692901173737941">Kampsport</translation>
 <translation id="4701488924964507374"><ph name="SENTENCE1" /> <ph name="SENTENCE2" /></translation>
@@ -2358,6 +2387,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4705573018059932476">Du har valgt at verificere via <ph name="AUTHENTICATOR" /> på websites, der anvender <ph name="PROVIDER_ORIGIN" />. Denne udbyder har muligvis gemt oplysninger om, hvordan du betaler, som du kan <ph name="LINK_TEXT" />.</translation>
 <translation id="4708268264240856090">Din forbindelse blev afbrudt</translation>
 <translation id="4708276642004148190">Vandforsyning og -behandling</translation>
+<translation id="4710249055485272920">Disse oplysninger kunne ikke findes</translation>
 <translation id="4711628883879888561">Samarbejd om fanegruppe</translation>
 <translation id="4712404868219726379">Windows Hello</translation>
 <translation id="471880041731876836">Du har ikke tilladelse til at besøge dette website</translation>
@@ -2369,6 +2399,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4726672564094551039">Opdater politikker</translation>
 <translation id="4728558894243024398">Platform</translation>
 <translation id="4729147136006144950">Velgørenhed og filantropi</translation>
+<translation id="4730773064303503917">Brug Pix til at betale venner og virksomheder med Wallet</translation>
 <translation id="4730977633786878901">Anmeldelser</translation>
 <translation id="4731638775147756694">Denne app er blokeret af din administrator</translation>
 <translation id="4732860731866514038">Downloader sprogpakken for <ph name="LANGUAGE" />... <ph name="PERCENT" /> %</translation>
@@ -2386,6 +2417,8 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4744603770635761495">Eksekverbar sti</translation>
 <translation id="4744816391336495134">Du kan bruge dit fingeraftryk til at verificere din identitet, når du bruger en gemt adgangskode</translation>
 <translation id="4749011317274908093">Du er i inkognitotilstand</translation>
+<translation id="4749620353539006322">Maksimér bonusser</translation>
+<translation id="4749924365937394956">Servergodkendelse</translation>
 <translation id="4750671009706599284">denne telefon</translation>
 <translation id="4750917950439032686">Dine oplysninger (f.eks. adgangskoder eller kreditkortnumre) er private, når de sendes til dette website.</translation>
 <translation id="4751249061288707459">Samtykke blev senest opdateret:</translation>
@@ -2403,6 +2436,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="4766713847338118463">Dobbelthæftning nederst</translation>
 <translation id="4768816584204270288">Når du betaler på afbetaling, udfyldes et virtuelt engangskortnummer. Du kan klikke for at kopiere og indsætte kortoplysningerne for dette køb.</translation>
 <translation id="4768864802656530630">Detaljerede systemlogs. <ph name="BEGIN_LINK" />Få flere oplysninger<ph name="END_LINK" /></translation>
+<translation id="4770909831299304090">Opdater KTN i Google Wallet</translation>
 <translation id="4771249073710170730">Radiostyring og modeller</translation>
 <translation id="4771973620359291008">Der er opstået en ukendt fejl.</translation>
 <translation id="4774055414220872623">Kunst- og kunsthåndværksartikler</translation>
@@ -2652,6 +2686,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5157504274688344097">Grossister og stormagasiner</translation>
 <translation id="5158275234811857234">Forside</translation>
 <translation id="5159010409087891077">Åbn siden i et nyt inkognitovindue (⇧⌘N)</translation>
+<translation id="5160781056848005130">Du hjælper med at forbedre forbedret autofyld ved at dele data med Google</translation>
 <translation id="5161334686036120870">Emne:</translation>
 <translation id="5161506081086828129">Stabler 9</translation>
 <translation id="5164537320435517152">Slet filer om <ph name="MINUTES" /> min.</translation>
@@ -2695,7 +2730,6 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5238301240406177137">Gem på din konto</translation>
 <translation id="5239119062986868403">Normalpris</translation>
 <translation id="5239623327352565343">Adgang til lokation er tilladt</translation>
-<translation id="5241048084654737238">Bekræftelse af, at kortoplysningerne ikke kan gemmes</translation>
 <translation id="5242610955375133957">Tørfilm</translation>
 <translation id="5243004157379865295">Opdater adresse</translation>
 <translation id="5244521145258281926">Administrer Google-konto, aktivér for at administrere oplysninger, privatliv og sikkerhed på din Google-konto</translation>
@@ -2754,6 +2788,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5323501626199324454">Administrer på din Google-konto</translation>
 <translation id="5327248766486351172">Navn</translation>
 <translation id="5329858041417644019">Din browser administreres ikke</translation>
+<translation id="5330451136755214328"><ph name="MANUFACTURER" />-computer</translation>
 <translation id="5331585574693522196">Angiv som standard</translation>
 <translation id="5332219387342487447">Leveringsmetode</translation>
 <translation id="5332769172018416402">Spørg i en meddelelse</translation>
@@ -2792,6 +2827,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5385857628869214740">Humor</translation>
 <translation id="5386426401304769735">Certifikatkæden for dette website indeholder et certifikat, der er signeret med SHA-1.</translation>
 <translation id="5391010642126249196">Du besøgte indholdet</translation>
+<translation id="5391030615542642809"><ph name="MANUFACTURER" />-enhed</translation>
 <translation id="5391306025131596142">Åbn siden Historik</translation>
 <translation id="539203134595252721">Bordtennis</translation>
 <translation id="5392506727170022660">Metal (halvblankt)</translation>
@@ -2833,6 +2869,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="543656192084990644">Bevægelsessensorer er ikke tilladt</translation>
 <translation id="5441409130426352029"><ph name="ATTRIBUTE_VALUE" />, var oprindeligt <ph name="PREVIOUS_VALUE" /></translation>
 <translation id="5443468954631487277">Omvendt rækkefølge med forside opad</translation>
+<translation id="5447103258548475868">Gem passet i Google Wallet</translation>
 <translation id="5447235695608032700">Tillad, at <ph name="SITE" /> bruger oplysninger om dig, som websitet har gemt</translation>
 <translation id="5447973833955560753">Adgangskode til gendannelse</translation>
 <translation id="5451331376824595378">Når sikkerhedshændelser rapporteres af Chrome, sendes der relevante data om hændelserne til din administrator. Disse data kan omfatte webadresserne på de sider, du besøger i Chrome, webadresserne på de sider, du har kopieret data fra, filnavne eller metadata, IP-adresser, browser- eller fanenedbrud samt det brugernavn, du bruger til at logge ind med i webbaserede apps, på din enhed og i Chrome.</translation>
@@ -2843,6 +2880,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5458150163479425638">{CONTACT,plural, =0{<ph name="CONTACT_PREVIEW" />}=1{<ph name="CONTACT_PREVIEW" /> og <ph name="NUMBER_OF_ADDITIONAL_CONTACTS" /> anden}one{<ph name="CONTACT_PREVIEW" /> og <ph name="NUMBER_OF_ADDITIONAL_CONTACTS" /> anden}other{<ph name="CONTACT_PREVIEW" /> og <ph name="NUMBER_OF_ADDITIONAL_CONTACTS" /> andre}}</translation>
 <translation id="5463625433003343978">Finder enheder...</translation>
 <translation id="5464236009658034488">Kontorartikler</translation>
+<translation id="5465128270485645058">Få mere tilpassede svar ved automatisk at dele åbne faner i dette vindue, hvis de er relateret til denne tråd.</translation>
 <translation id="5465724643247062031">Glas (uigennemsigtig)</translation>
 <translation id="5466018172325111652">Har du ikke modtaget din kode? <ph name="BEGIN_LINK" />Få en ny kode<ph name="END_LINK" /></translation>
 <translation id="5466818462212249084">Betalingsapps</translation>
@@ -2955,6 +2993,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5611398002774823980">Gem på konto</translation>
 <translation id="561165882404867731">Oversæt denne side med Google Oversæt</translation>
 <translation id="5612720917913232150"><ph name="URL" /> anmoder om at anvende computerens placering</translation>
+<translation id="5613958591683399697">Spørg <ph name="ENGINE_NAME" /></translation>
 <translation id="5614190747811328134">Brugermeddelelse</translation>
 <translation id="5614520971155863709">Kortspil</translation>
 <translation id="5617949217645503996"><ph name="HOST_NAME" /> omdirigerede dig for mange gange.</translation>
@@ -3006,6 +3045,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5707154300732650394">Genoptag din søgning</translation>
 <translation id="57094364128775171">Foreslå stærk adgangskode…</translation>
 <translation id="570953204696852961">Rød 3</translation>
+<translation id="5710907191777451677">Spørg Gemini i Chrome i stedet</translation>
 <translation id="571403275720188526">(arm64)</translation>
 <translation id="571510845185711675">Dyrlæger</translation>
 <translation id="5715150588940290235">Vil du slette de gemte sikkerhedskoder?</translation>
@@ -3015,6 +3055,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5718601519531438273">Dette omfatter oplysninger såsom pas og kørekort</translation>
 <translation id="5720705177508910913">Aktuel bruger</translation>
 <translation id="5720895412771013401">Stationære computere</translation>
+<translation id="5721147290164931316">Scan for at logge ind med din telefon</translation>
 <translation id="5721367770070844253">{count,plural, =1{{website_1}}=2{{website_1}, {website_2}}=3{{website_1}, {website_2} og 1 mere}one{{website_1}, {website_2} og {more_count} mere}other{{website_1}, {website_2} og {more_count} mere}}</translation>
 <translation id="572328651809341494">Seneste faner</translation>
 <translation id="5723873695528696965">Styre og omprogrammere dine MIDI-enheder</translation>
@@ -3047,6 +3088,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5765072501007116331">Vælg en adresse for at se leveringsmetoder og -krav</translation>
 <translation id="57689295674415555">Er det virtuelle kortnummer ikke udfyldt?</translation>
 <translation id="5773286975255318081">F.eks. profilbrugernavne og browserversioner</translation>
+<translation id="5774897849666641211">Stil spørgsmål om denne fane</translation>
 <translation id="5776313857861697733">Prioritet</translation>
 <translation id="577804500166306874">Resultatet indlæses</translation>
 <translation id="5781136890105823427">Eksperimentet er aktiveret</translation>
@@ -3094,6 +3136,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5860491529813859533">Aktivér</translation>
 <translation id="5862579898803147654">Stabler 8</translation>
 <translation id="5863515189965725638">Rediger IBAN</translation>
+<translation id="5863517400058880216">Autofyld verificeringskoder fra Gmail</translation>
 <translation id="5863847714970149516">Siden forude kan forsøge at opkræve dig penge</translation>
 <translation id="5866257070973731571">Tilføj telefonnummer</translation>
 <translation id="5866327164731551901">Fra <ph name="TYPE_1" /> <ph name="TYPE_2" /></translation>
@@ -3124,6 +3167,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="5911020115933784199">Arrangementer, aktiviteter og oversigter</translation>
 <translation id="5911110632211230665">Åbning er ikke tilladt</translation>
 <translation id="5912796581727968237">Åbn Google Wallet</translation>
+<translation id="5914185423510719251">Gem KTN i Google Wallet</translation>
 <translation id="5914465277418006379"><ph name="MEMBER_FIRST_NAME" /> har tilføjet denne fane</translation>
 <translation id="5915189366813702112">Fleksibelt arbejde</translation>
 <translation id="59174027418879706">Aktiveret</translation>
@@ -3206,6 +3250,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6034000775414344507">Lysegrå</translation>
 <translation id="6034514109191629503">Harmonikafals</translation>
 <translation id="6035491133925068289">Atletik</translation>
+<translation id="6037458223703682108">Digital signatur</translation>
 <translation id="6039846035001940113">Kontakt ejeren af websitet, hvis problemet fortsætter.</translation>
 <translation id="6040143037577758943">Luk</translation>
 <translation id="6040539895181423374">Prisinfo</translation>
@@ -3316,6 +3361,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
     <ph name="BEGIN_LINK" />Få flere oplysninger<ph name="END_LINK" /></translation>
 <translation id="6190518157737269631">Tilsidesætter visse taster på dit tastatur, f.eks. Esc</translation>
 <translation id="6194209731893739467">Se alle de produkter, du holder øje med, her</translation>
+<translation id="6194245113389143644">Annotering</translation>
 <translation id="6195371403461054755">Geologi</translation>
 <translation id="6195418151868446719">Forbrugerelektronik</translation>
 <translation id="6197648101609735209">89 x 89 mm</translation>
@@ -3349,6 +3395,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6246316216123107851">for <ph name="NUM_DAYS" /> dage siden</translation>
 <translation id="6246382863801034910">Køretøj</translation>
 <translation id="6246868321321344665">Din organisation kan se browserdata som f.eks. adgangskoder og historik på både arbejdsprofiler og personlige profiler</translation>
+<translation id="6248479108671123143"><ph name="MEMBER_FIRST_NAME" /> har ændret denne fane, <ph name="TAB_TITLE" /></translation>
 <translation id="6248988683584659830">Søg efter indstillinger</translation>
 <translation id="6250932670816326647">Produkter til badeværelset og kropspleje</translation>
 <translation id="6251906504834538140">{0,plural, =1{Filen er blokeret, så den ikke kan flyttes}one{<ph name="FILE_COUNT" /> fil er blokeret, så den ikke kan flyttes}other{<ph name="FILE_COUNT" /> filer er blokeret, så de ikke kan flyttes}}</translation>
@@ -3385,6 +3432,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6302546952464230349">Vis oplysninger om tilladelsen <ph name="PERMISSION_NAME" /></translation>
 <translation id="6304398603974202180">Multimediesoftware</translation>
 <translation id="6305205051461490394"><ph name="URL" /> kan ikke nås.</translation>
+<translation id="6305834316918845109">Når du indtaster en anmodning om forbedret autofyld, registrerer Chrome, hvordan du bruger funktionen, f.eks. om du accepterer, redigerer eller ignorerer forslag fra autofyld</translation>
 <translation id="6306713302480826305">Denne adresse slettes fra denne enhed og de øvrige enheder, du er logget ind på</translation>
 <translation id="6307968763353904914">Din bank tilbyder ikke virtuelle kort for denne betalingsmetode i øjeblikket, men du kan stadig bruge <ph name="CARD_LABEL" /> til onlinebetaling.</translation>
 <translation id="6311410654831092784">Karton</translation>
@@ -3514,6 +3562,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6474220430271405609">Politiktests</translation>
 <translation id="6476284679642588870">Administrer betalingsmetoder</translation>
 <translation id="647881094269678013">Skuespil og teater</translation>
+<translation id="6480363549849064919">Klientgodkendelse</translation>
 <translation id="6480864723214312258">Husholdningsbatterier</translation>
 <translation id="6487678699866233349">Verdensmusik</translation>
 <translation id="6489534406876378309">Start upload af nedbrud</translation>
@@ -3556,6 +3605,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6550245281449521513">Lås af musen er ikke tilladt</translation>
 <translation id="6551737294564628267"><ph name="ATTRIBUTE_NAME" />, nyt</translation>
 <translation id="6552566579578780089">Betalinger</translation>
+<translation id="6553777254569586547"><ph name="SUGGESTION_TITLE" />. <ph name="SUGGESTION_TYPE" />. <ph name="MATCH_POSITION" /> af <ph name="NUM_MATCHES_IN_GROUP" /> i gruppen <ph name="GROUP_HEADER" />.</translation>
 <translation id="6554732001434021288">Senest besøgt for <ph name="NUM_DAYS" /> dage siden</translation>
 <translation id="6556866813142980365">Annuller fortrydelse</translation>
 <translation id="6557715786897013164">14 x 17 tommer</translation>
@@ -3634,6 +3684,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6689271823431384964">Chrome tilbyder at gemme dine kort på din Google-konto, fordi du er logget ind. Du kan ændre dette i indstillingerne. Kortindehaverens navn hentes fra din konto.</translation>
 <translation id="6690688090329768424">"<ph name="PROXY_INVALID_DESTINATION" />" er ikke et gyldigt destinationsmønster.</translation>
 <translation id="6691397311652656001">Frigør mere end <ph name="REQUIRED_FREE_DISK_SPACE" /> plads</translation>
+<translation id="6692006953064648573">Du får vist denne advarsel, fordi dette website ikke understøtter HTTPS, og fordi du er tilmeldt Googles program Avanceret beskyttelse. <ph name="LEARN_MORE" /></translation>
 <translation id="6694681292321232194"><ph name="FIND_MY_PHONE_FOCUSED_FRIENDLY_MATCH_TEXT" /> – tryk på Tab-tasten og derefter Enter for at finde din enhed på Google-kontoen</translation>
 <translation id="6695428916538794739">Action- og adventurefilm</translation>
 <translation id="6696424331653607346">Rejsevejledninger og rejsekataloger</translation>
@@ -3645,6 +3696,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6702851555558236418">Lyd- og musiksoftware</translation>
 <translation id="6702919718839027939">Præsenter</translation>
 <translation id="6704458454638854812">Egenskaben "custom_size" er angivet. Det forventede navn er "custom".</translation>
+<translation id="670477556876354552">En genstart er nødvendig</translation>
 <translation id="6706005862292023715">Gardiner, persienner m.m.</translation>
 <translation id="6706210727756204531">Omfang</translation>
 <translation id="6706678697074905703">Dette IBAN kunne ikke gemmes på din Google-konto. Det er gemt i Chrome på denne enhed i stedet.</translation>
@@ -3704,6 +3756,7 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6798066466127540426">Listen indeholder ikke nogen gyldig søgemaskine.</translation>
 <translation id="6798460514924505775">Konvolut Chou 3</translation>
 <translation id="6799145206637008376">Angiv det virtuelle korts CVC</translation>
+<translation id="6800773453940486492"><ph name="MEMBER_FIRST_NAME" /> har tilføjet denne fane, <ph name="TAB_TITLE" /></translation>
 <translation id="6801920212017470190">Hold dig opdateret om alle dine prisfald på farten</translation>
 <translation id="6805030849054648206">Konvolut B6/C4</translation>
 <translation id="6807791860691150411">Uddannelse</translation>
@@ -3742,7 +3795,6 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6874604403660855544">&amp;Annuller fortryd tilføjelse</translation>
 <translation id="6875873347995743859">Send til assistent</translation>
 <translation id="6875894866901426843">Din administrator sletter dine lokale filer, herunder eventuelle filer i papirkurven, <ph name="DATE_TIME" />.</translation>
-<translation id="6880812263216766325">Vil du altid dele åbne faner for at få bedre svar?</translation>
 <translation id="6880941331070119097">Købsmulighed med høj pris</translation>
 <translation id="6881240511396774766">Opret hurtigt et nyt Google-dokument</translation>
 <translation id="6883221904761970440">Arket til godkendelse af loginoplysninger til sikker betaling er lukket</translation>
@@ -3759,7 +3811,6 @@ Gå til <ph name="BEGIN_LINK" />betalingsindstillingerne<ph name="END_LINK" /> f
 <translation id="6893057134494550310">Lamineringsfolie</translation>
 <translation id="6893204630281237373">Hvis du vil deaktivere betalingsappen i Chrome, skal du gå til dine <ph name="BEGIN_LINK1" />betalingsindstillinger<ph name="END_LINK1" /></translation>
 <translation id="6895330447102777224">Dit kort er bekræftet</translation>
-<translation id="6895573608763679343"><ph name="SUGGESTION_TITLE" />, <ph name="SUGGESTION_DESCRIPTION" />, <ph name="MATCH_POSITION" /> af <ph name="NUM_MATCHES_IN_GROUP" /> i gruppen <ph name="GROUP_HEADER" />.</translation>
 <translation id="6896758677409633944">Kopiér</translation>
 <translation id="6897140037006041989">Brugeragent</translation>
 <translation id="6898699227549475383">Organisation (O)</translation>
@@ -3999,7 +4050,6 @@ Yderligere oplysninger:
 <translation id="7257453341537973799">Karriereressourcer og -planlægning</translation>
 <translation id="725866823122871198">Der kunne ikke oprettes en privat forbindelse til <ph name="BEGIN_BOLD" /><ph name="DOMAIN" /><ph name="END_BOLD" />, da dato og tid (<ph name="DATE_AND_TIME" />) på din enhed er forkerte.</translation>
 <translation id="7260075294900977274">En ny smart mappe, der hjælper dig med at gemme alle dine shoppingsider på ét sted, ligesom den også giver dig mulighed for automatisk at overvåge priser, få prisinfo og meget mere</translation>
-<translation id="7264942008235065057">Dette website forbliver blokeret, fordi du er tilmeldt Googles program Avanceret beskyttelse. <ph name="LEARN_MORE" /></translation>
 <translation id="7265608370113700582">Adressen er kun tilgængelig på denne enhed</translation>
 <translation id="7266094331715305887">apps på enheden</translation>
 <translation id="7269151392155523061">Genvejen kan ikke være den samme som søgeordet for søgeaggregatoren, som er defineret af <ph name="SEARCH_AGGREGATOR_SETTINGS_POLICY" />: <ph name="SHORTCUT_NAME" /></translation>
@@ -4026,6 +4076,7 @@ Yderligere oplysninger:
 <translation id="7310392214323165548">Enheden genstarter meget snart</translation>
 <translation id="7311244614769792472">Der blev ikke fundet nogen resultater</translation>
 <translation id="7313107491291103073">Din organisation har rapporteret dette website, fordi det muligvis overtræder en politik.</translation>
+<translation id="7313260329718515829">De anmodninger, der sendes til Personlig intelligens med Gemini, analyseres for at forbedre autofyld</translation>
 <translation id="7316521168101843192">Gemmer filen i Microsoft OneDrive</translation>
 <translation id="7319430975418800333">A3</translation>
 <translation id="7320336641823683070">Hjælp til at oprette forbindelse</translation>
@@ -4101,6 +4152,7 @@ Yderligere oplysninger:
 <translation id="7418620734632363981">Programmering</translation>
 <translation id="7419091773564635591">Computere og elektronik</translation>
 <translation id="7419106976560586862">Profilsti</translation>
+<translation id="742088698616475957"><ph name="MANUFACTURER" />-computer</translation>
 <translation id="7421067045979951561">protokolhåndtering</translation>
 <translation id="7422347648202898039">Etiketter (sikkerhed)</translation>
 <translation id="7423283032694727565">Knappen Administrer cookies, aktivér for at administrere dine cookiepræferencer i Chrome-indstillingerne</translation>
@@ -4123,7 +4175,6 @@ Yderligere oplysninger:
 <translation id="7450577240311017924">Knappen Administrer synkronisering, aktivér for at administrere, hvilke oplysninger der skal synkroniseres, i Chrome-indstillingerne</translation>
 <translation id="7451311239929941790"><ph name="BEGIN_LINK" />Få flere oplysninger<ph name="END_LINK" /> om dette problem.</translation>
 <translation id="745208957946308667">Dino-spillet – tryk på mellemrumstasten for at spille</translation>
-<translation id="74521886886364465"><ph name="SUGGESTION_TITLE" />, <ph name="MATCH_POSITION" /> af <ph name="NUM_MATCHES_IN_GROUP" /> i gruppen <ph name="GROUP_HEADER" />.</translation>
 <translation id="7453032093368223821">Administrer andre data</translation>
 <translation id="7453849010505253492">Denne server kunne ikke bevise, at den er <ph name="DOMAIN" />, fordi den bruger et sikkerhedscertifikat, som Chrome eller din systemkonfiguration til kryptering af webtrafik ikke har tillid til. Dette kan skyldes en fejlkonfiguration, eller at en hacker har opfanget din forbindelse. <ph name="BEGIN_VIEW_CERTIFICATE_LINK" />Se certifikat<ph name="END_VIEW_CERTIFICATE_LINK" /></translation>
 <translation id="7454377933424667109">Cloud-konto</translation>
@@ -4154,7 +4205,6 @@ Yderligere oplysninger:
 <translation id="7489255442002627311"><ph name="BNPL_ISSUER_NAME" /> tjekker, om du er kvalificeret (dette påvirker ikke din kreditvurdering). Hvis du bliver godkendt, angiver <ph name="BNPL_ISSUER_NAME" /> betalingsplaner, som du kan vælge mellem, og derefter gennemføres dit køb.</translation>
 <translation id="7489392576326061356">Shampoo og balsam</translation>
 <translation id="7489919936111034362">Du har ikke mere Google Drev-lagerplads</translation>
-<translation id="7490026840522163531">Vil du automatisk dele åbne faner i alle tråde?</translation>
 <translation id="7495528107193238112">Dette indhold er blokeret. Kontakt ejeren af websitet for at løse problemet.</translation>
 <translation id="749865518782565832">Blikkenslagerarbejde og VVS</translation>
 <translation id="7499188644237027195">Når du foretager køb i Chrome, kan du se din elektroniske pung og Pix som valgmuligheder</translation>
@@ -4212,12 +4262,14 @@ Yderligere oplysninger:
 <translation id="7569490014721427265">Golf</translation>
 <translation id="7569952961197462199">Vil du fjerne kreditkortet fra Chrome?</translation>
 <translation id="7569983096843329377">Sort</translation>
+<translation id="7570524564113479209">Opdater id-kortet i Google Wallet</translation>
 <translation id="7570862164055912832">Redress-numre</translation>
 <translation id="7571813784389228510">Google AI-tilstand</translation>
 <translation id="7574998639136359461">Udstyr til vintersport</translation>
 <translation id="7575207903026901870">Knappen Fjern forslag. Tryk på Enter for at fjerne dette forslag.</translation>
 <translation id="7575800019233204241">"Din forbindelse er ikke privat" eller "&lt;span class="error-code"&gt;NET::ERR_CERT_AUTHORITY_INVALID&lt;/span&gt;" eller "&lt;span class="error-code"&gt;ERR_CERT_COMMON_NAME_INVALID&lt;/span&gt;" eller "&lt;span class="error-code"&gt;NET::ERR_CERT_WEAK_SIGNATURE_ALGORITHM&lt;/span&gt;" eller "SSL-certifikatfejl"</translation>
 <translation id="7575887283389198269">Mobiltelefoner</translation>
+<translation id="7579113844074980463"><ph name="MANUFACTURER" />-tablet</translation>
 <translation id="7579442726219254162">Der er en ukendt variabel (<ph name="VARIABLE" />) i den administrerede konfiguration af "<ph name="APPLICATION_ID" />".</translation>
 <translation id="7581199239021537589">Billedskift Y på side 2</translation>
 <translation id="7582602800368606489">Opret hurtigt en ny begivenhed i Google Kalender</translation>
@@ -4235,6 +4287,7 @@ Yderligere oplysninger:
 <translation id="7599089013883397081">Downloaden fik timeout</translation>
 <translation id="7602868996817972616">Spørg Google om denne side</translation>
 <translation id="7606123685356405076">Gemini 3-modeller</translation>
+<translation id="760632772920590778">Gem køretøjet i Google Wallet</translation>
 <translation id="7610193165460212391">Værdien er uden for intervallet <ph name="VALUE" />.</translation>
 <translation id="761261689936461781">Tyk</translation>
 <translation id="7613889955535752492">Udløbsdato: <ph name="EXPIRATION_MONTH" />/<ph name="EXPIRATION_YEAR" /></translation>
@@ -4263,7 +4316,9 @@ Yderligere oplysninger:
 <translation id="7646681339175747202">Den adgangskode, du lige har brugt, er blevet lækket i forbindelse med et brud på datasikkerheden. Google Adgangs­kode­admin­istrator anbefaler, at du ændrer din adgangskode med det samme.</translation>
 <translation id="7647206758853451655">Udskriftskvalitet</translation>
 <translation id="7648133459447652947">Hvis du vil have vist markøren igen, skal du skifte app, genindlæse siden eller gå tilbage</translation>
+<translation id="764847582138410250">Scan for at logge ind med din telefon</translation>
 <translation id="7648527891719919697">Dette website forbliver blokeret, fordi Avanceret beskyttelse er aktiveret i <ph name="BEGIN_ANDROID_SETTINGS_LINK" />Android-indstillingerne<ph name="END_ANDROID_SETTINGS_LINK" />. <ph name="BEGIN_LEARN_MORE_LINK" />Få flere oplysninger om denne advarsel<ph name="END_LEARN_MORE_LINK" /></translation>
+<translation id="7648900539798595789">Gem Known Traveler-nummeret i Google Wallet</translation>
 <translation id="7648992873808071793">Gemme filer på denne enhed</translation>
 <translation id="7649070708921625228">Hjælp</translation>
 <translation id="7650141368285545431">Brug en adgangsnøgle fra en anden enhed</translation>
@@ -4356,6 +4411,7 @@ Yderligere oplysninger:
 <translation id="7773005668374414287">Samme rækkefølge med forside opad</translation>
 <translation id="7779418012194492374">Tilbagekald adgang for <ph name="DEVICE_NAME" /></translation>
 <translation id="7781829728241885113">I går</translation>
+<translation id="7782228658217918863">Gem identitetskortet i Google Wallet</translation>
 <translation id="7782465647372057580">Kontooplysningerne krypteres og holdes private</translation>
 <translation id="7785471469930192436">Se din søgemaskines vejledning i, hvordan du sletter din søgehistorik, hvis det er relevant</translation>
 <translation id="7785790577395078482">denne tablet</translation>
@@ -4470,8 +4526,10 @@ Yderligere oplysninger:
 <translation id="7966803981046576691">Jobkontotype</translation>
 <translation id="7967477318370169806">Investeringsselskaber</translation>
 <translation id="7967636097426665267">Kommunikationsudstyr</translation>
+<translation id="7967973398323409409">De oplysninger, du udfylder automatisk, kan aldrig ses af nogen</translation>
 <translation id="79682505114836835">Værdien "<ph name="VALUE" />" er en ugyldig hex-farve.</translation>
 <translation id="7968982339740310781">Se oplysninger</translation>
+<translation id="7971403153351954587">Din organisation overvåger kopiering</translation>
 <translation id="7972714317346275248">PKCS #1 SHA-384 med RSA-kryptering</translation>
 <translation id="7976053965094442846">Udstedere, der tilbyder betalingsmetoden Køb nu, betal senere med afbetaling. Tastaturet er skjult.</translation>
 <translation id="7976214039405368314">For mange anmodninger</translation>
@@ -4538,7 +4596,7 @@ Yderligere oplysninger:
 <translation id="8077669823243888800">Konvolut Kinesisk nr. 8</translation>
 <translation id="8078006011486731853">{0,plural, =1{Vil du uploade den fortrolige fil?}one{Vil du uploade den fortrolige fil?}other{Vil du uploade de fortrolige filer?}}</translation>
 <translation id="8079031581361219619">Vil du genindlæse websitet?</translation>
-<translation id="8079591184016291275">Navn på begivenhed</translation>
+<translation id="8079591184016291275">Hændelsesnavn</translation>
 <translation id="8079976827192572403">Farligt website</translation>
 <translation id="8081087320434522107">Sedaner</translation>
 <translation id="8086429410809447605">Dametøj</translation>
@@ -4705,6 +4763,7 @@ Yderligere oplysninger:
 <translation id="8351131234907093545">Opret note</translation>
 <translation id="8352849934814541340">Administratoren af denne enhed har installeret apps til yderligere funktioner. De pågældende apps har adgang til nogle af dine data.</translation>
 <translation id="8355270400102541638">Lokal nedbrudskontekst:</translation>
+<translation id="8362914115861174987">Oversæt til</translation>
 <translation id="8363502534493474904">Deaktivere flytilstand</translation>
 <translation id="8363929499301563123">Websitecookies (loginstatus på websites, der er besøgt for nylig, bevares)</translation>
 <translation id="8364627913115013041">Ikke angivet.</translation>
@@ -4724,11 +4783,11 @@ Yderligere oplysninger:
 <translation id="8381674639488873545">Disse opkrævninger kan være enkeltstående eller gentagne og fremgår muligvis ikke tydeligt. <ph name="BEGIN_LINK" />Vis alligevel<ph name="END_LINK" /></translation>
 <translation id="8382097126743287270">Automatisk fuld skærm</translation>
 <translation id="838307841291975086">Stationcars</translation>
-<translation id="838953173259347825">Få mere tilpassede svar ved automatisk at dele åbne faner i dette vindue, hvis de er relateret til denne tråd. Du kan aktivere dette for alle tråde i</translation>
 <translation id="8389532092404711541">Normalt <ph name="LOW_PRICE" /></translation>
 <translation id="8389940864052787379">Ombyggede biler og sportsvogne</translation>
 <translation id="8390725133630534698">Administratorpolitikken tillader ikke, at du deler fra <ph name="ORIGIN_NAME" /> til <ph name="VM_NAME" /></translation>
 <translation id="8392783408127179588">Genindlæser politikker</translation>
+<translation id="8393948304336153065">Opdater kørekortet i Google Wallet</translation>
 <translation id="8396522675989118466">Dette er den <ph name="NUMBER_OF_DIGITS" />-cifrede kode på <ph name="SIDE_OF_CARD" /></translation>
 <translation id="8398335999901363925">Betalingsmetoder, der kan udfyldes ved berøring, er åbnet i fuld højde.</translation>
 <translation id="8398446215576328011">Nulstil anvendte politikker</translation>
@@ -5010,7 +5069,6 @@ Yderligere oplysninger:
 <translation id="8861482055962701239">Disse oplysninger kunne ikke gemmes i Google Wallet. De er gemt i Chrome på denne enhed i stedet. Chrome tilbyder at gemme oplysningerne i Wallet, næste gang du bruger den.</translation>
 <translation id="8863218129525348270">Gem dit kort på din enhed for at betale hurtigere næste gang</translation>
 <translation id="8864939224504814334">Jakkesæt og påklædning til forretningsfolk</translation>
-<translation id="8865650218866129025">Vil du automatisk dele åbne faner for at få bedre svar i denne tråd?</translation>
 <translation id="8866132857352163524">Lydspor</translation>
 <translation id="8866481888320382733">Der opstod en fejl ved parsing af indstillinger for politik</translation>
 <translation id="8866928039507595380">Fals</translation>
@@ -5021,7 +5079,6 @@ Yderligere oplysninger:
 <translation id="8871485335898060555">Antikviteter og samleobjekter</translation>
 <translation id="8871553383647848643">Tilpas din browsers udseende</translation>
 <translation id="887350038812854047">Denne politik har den samme værdi, der anvendes på maskin- og brugerniveau. Politikken fungerer efter hensigten.</translation>
-<translation id="8874790741333031443">Prøv midlertidigt at tillade tredjepartscookies, hvilket vil betyde mindre browserbeskyttelse, men større sandsynlighed for, at websitefunktionerne fungerer som forventet.</translation>
 <translation id="8874824191258364635">Angiv et gyldigt kortnummer</translation>
 <translation id="8877780815363510165">Fiskeri</translation>
 <translation id="888117890813270681">"<ph name="DATA_CONTROLS_RESTRICTION" />" kan ikke indstilles til "<ph name="DATA_CONTROLS_LEVEL" />"</translation>
@@ -5087,6 +5144,7 @@ Yderligere oplysninger:
 <translation id="9001074447101275817">Proxyserveren <ph name="DOMAIN" /> kræver et brugernavn og en adgangskode.</translation>
 <translation id="9001701119003382280">Computertilbehør</translation>
 <translation id="9001963517402879850">Hop!</translation>
+<translation id="9003263770394939629">Foreslået af Gemini. Administrer forbedret autofyld i indstillingerne.</translation>
 <translation id="9003639428623471314">Konvolut Kahu</translation>
 <translation id="9004367719664099443">VR-sessionen er i gang</translation>
 <translation id="9005998258318286617">PDF-dokumentet kunne ikke indlæses.</translation>
@@ -5130,9 +5188,11 @@ Yderligere oplysninger:
 <translation id="9063800855227801443">Der kan ikke tages screenshots af fortroligt indhold</translation>
 <translation id="9065203028668620118">Rediger</translation>
 <translation id="9065745800631924235">Søgningen <ph name="TEXT" /> i historikken</translation>
+<translation id="9066116644715286230">{NUM_TABS,plural, =1{Oplysninger om fanedeling. Deler 1 fane fra {WEBSITE_LIST_STR}}one{Oplysninger om fanedeling. Deler {NUM_TABS} fane fra {WEBSITE_LIST_STR}}other{Oplysninger om fanedeling. Deler {NUM_TABS} faner fra {WEBSITE_LIST_STR}}}</translation>
 <translation id="90695670378604968">Plast (mat)</translation>
 <translation id="9069693763241529744">Blokeret af en udvidelse</translation>
 <translation id="9073799351042754113">Du har valgt at deaktivere sikkerhedsadvarsler for dette website.</translation>
+<translation id="907426083053157749"><ph name="MANUFACTURER" />-telefon</translation>
 <translation id="9075717835386447447">Gyldenbrun 1</translation>
 <translation id="9078170656887151974">For at kunne give dig forslag og forbedre denne funktion deles sidens webadresse og indhold med Google. Du kan til enhver tid ombestemme dig og <ph name="LEARN_MORE" />.</translation>
 <translation id="9078912659001679888">Blendere og saftpressere</translation>
@@ -5144,7 +5204,6 @@ Yderligere oplysninger:
 <translation id="9090243919347147717">Vedhæftede filer</translation>
 <translation id="9090548458280093580">Søg i din historik ved hjælp af AI</translation>
 <translation id="9090993752571911635">Internetudbydere</translation>
-<translation id="9092305980625216393">Bruges ofte til vejrudsigter, lokale nyheder m.m.</translation>
 <translation id="9093723786115107672">Nattøj</translation>
 <translation id="9094424186948667194">Tilgå andre apps og tjenester på denne enhed</translation>
 <translation id="9094544726794842788">Hvis du giver et dislike, åbnes der en formular, hvor du kan indsende detaljeret feedback om, hvorfor du ikke kan lide disse resultater</translation>
@@ -5270,7 +5329,6 @@ Yderligere oplysninger:
 <translation id="964050462028070434">Administrer adgangskoder og adgangsnøgler…</translation>
 <translation id="964681140808832181">Ja, jeg vil annullere</translation>
 <translation id="969892804517981540">Officiel version</translation>
-<translation id="970182982363142444">Når funktionen er aktiveret, deler Chrome alle faner i dette vindue for at hjælpe dig med at få mere relevante svar. Du kan aktivere dette for alle chatsamtaler i</translation>
 <translation id="97054401902912338">Få flere oplysninger om indholdsfiltre</translation>
 <translation id="973788791897303708">Denne fanegruppe er fuld</translation>
 <translation id="975560348586398090">{COUNT,plural, =0{Ingen}=1{1 element}one{# element}other{# elementer}}</translation>

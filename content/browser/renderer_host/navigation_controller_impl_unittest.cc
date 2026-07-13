@@ -25,6 +25,7 @@
 #include "build/build_config.h"
 #include "content/browser/browser_url_handler_impl.h"
 #include "content/browser/renderer_host/frame_navigation_entry.h"
+#include "content/browser/renderer_host/initiator_navigation_state_impl.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
 #include "content/browser/renderer_host/navigation_entry_restore_context_impl.h"
 #include "content/browser/renderer_host/navigation_request.h"
@@ -4020,11 +4021,10 @@ TEST_F(NavigationControllerTest, NoURLRewriteForSubframes) {
   controller_impl().NavigateFromFrameProxy(
       subframe_node->current_frame_host(), kSrcDoc,
       nullptr /* initiator_frame_token */,
-      ChildProcessHost::kInvalidUniqueID /* initiator_process_id */,
-      url::Origin::Create(kUrl2), /* initiator_base_url= */ std::nullopt,
-      true /* is_renderer_initiated */, main_test_rfh()->GetSiteInstance(),
-      Referrer(), ui::PAGE_TRANSITION_LINK,
-      false /* should_replace_current_entry */,
+      ChildProcessId() /* initiator_process_id */, url::Origin::Create(kUrl2),
+      /* initiator_base_url= */ std::nullopt, true /* is_renderer_initiated */,
+      main_test_rfh()->CreateInitiatorStateFromCurrentFrame(), Referrer(),
+      ui::PAGE_TRANSITION_LINK, false /* should_replace_current_entry */,
       blink::NavigationDownloadPolicy(), "GET", nullptr, "",
       network::mojom::SourceLocation::New(), nullptr,
       false /* is_form_submission */, std::nullopt,
@@ -4065,10 +4065,11 @@ TEST_F(NavigationControllerTest,
   const bool should_replace_current_entry = true;
   other_controller.NavigateFromFrameProxy(
       frame, other_contents_url, nullptr /* initiator_frame_token */,
-      ChildProcessHost::kInvalidUniqueID /* initiator_process_id */,
+      ChildProcessId() /* initiator_process_id */,
       url::Origin::Create(main_url), /* initiator_base_url= */ std::nullopt,
-      true /* is_renderer_initiated */, main_test_rfh()->GetSiteInstance(),
-      Referrer(), ui::PAGE_TRANSITION_LINK, should_replace_current_entry,
+      true /* is_renderer_initiated */,
+      main_test_rfh()->CreateInitiatorStateFromCurrentFrame(), Referrer(),
+      ui::PAGE_TRANSITION_LINK, should_replace_current_entry,
       blink::NavigationDownloadPolicy(), "GET", nullptr, "",
       network::mojom::SourceLocation::New(), nullptr,
       false /* is_form_submission */, std::nullopt,
@@ -4450,11 +4451,10 @@ TEST_F(NavigationControllerFencedFrameTest, NoURLRewriteForFencedFrames) {
   fenced_frame_tree->controller().NavigateFromFrameProxy(
       fenced_frame_root, GURL(kTestRewriteURL),
       nullptr /* initiator_frame_token */,
-      ChildProcessHost::kInvalidUniqueID /* initiator_process_id */,
-      url::Origin::Create(kUrl2), /* initiator_base_url= */ std::nullopt,
-      true /* is_renderer_initiated */, fenced_frame_root->GetSiteInstance(),
-      Referrer(), ui::PAGE_TRANSITION_LINK,
-      false /* should_replace_current_entry */,
+      ChildProcessId() /* initiator_process_id */, url::Origin::Create(kUrl2),
+      /* initiator_base_url= */ std::nullopt, true /* is_renderer_initiated */,
+      main_test_rfh()->CreateInitiatorStateFromCurrentFrame(), Referrer(),
+      ui::PAGE_TRANSITION_LINK, false /* should_replace_current_entry */,
       blink::NavigationDownloadPolicy(), "GET", nullptr, "",
       network::mojom::SourceLocation::New(), nullptr,
       false /* is_form_submission */, std::nullopt,

@@ -129,10 +129,10 @@
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/execution_engine.h"
 #include "chrome/browser/download/download_item_web_app_data.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/common/actor.mojom-shared.h"
 #endif
 
@@ -290,6 +290,20 @@ bool IsForceSaveToCloud(download::DownloadDangerType danger_type) {
 std::string GetMimeType(const base::FilePath& path) {
 #if BUILDFLAG(IS_ANDROID)
   if (path.IsContentUri()) {
+    if (base::FeatureList::IsEnabled(
+            download::features::kRemapGenericMimeType)) {
+      // Determine the MIME type registered with the content URI. If it is a
+      // generic MIME type (e.g., application/octet-stream), attempt to deduce a
+      // more specific MIME type from the display name extension.
+      std::string mime_type = base::GetContentUriMimeType(path);
+      std::u16string display_name;
+      if (base::MaybeGetFileDisplayName(path, &display_name)) {
+        mime_type = DownloadUtils::RemapGenericMimeType(
+            mime_type, GURL(), base::UTF16ToUTF8(display_name));
+      }
+      return mime_type;
+    }
+
     // Here we should determine the MIME type from the display name of the
     // content URI. GetContentUriMimeType() will return the current MIME type
     // that is registered with the URI. As a result, calling it will not change
@@ -905,19 +919,17 @@ bool ChromeDownloadManagerDelegate::IsDownloadReadyForCompletion(
                 enterprise_obfuscation::DownloadObfuscationData::kUserDataKey));
 
     if (obfuscation_data && obfuscation_data->is_obfuscated) {
+      // Ensure that deobfuscation is run only once.
+      obfuscation_data->is_obfuscated = false;
       base::ThreadPool::PostTaskAndReplyWithResult(
           FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
           base::BindOnce(&enterprise_obfuscation::DeobfuscateFileInPlace,
                          item->GetFullPath()),
           base::BindOnce(
               &ChromeDownloadManagerDelegate::OnDeobfuscationComplete,
-              weak_ptr_factory_.GetWeakPtr(),
+              weak_ptr_factory_.GetWeakPtr(), item->GetId(),
               std::move(internal_complete_callback)));
 
-      // Ensure that deobfuscation is ran only once.
-      // TODO(crbug.com/367259664): Move to `OnDeobfuscationComplete` after
-      // adding better error handling.
-      obfuscation_data->is_obfuscated = false;
       return false;
     }
   }
@@ -991,10 +1003,14 @@ bool ChromeDownloadManagerDelegate::IsDownloadReadyForCompletion(
              IsApkFile(item) && state->is_complete() && !item->IsDangerous() &&
              item->GetDangerType() !=
                  download::DOWNLOAD_DANGER_TYPE_USER_VALIDATED &&
-             !item->IsUserConfirmed()) {
+             !item->IsUserConfirmed() &&
+             download_prefs_->download_restriction() != policy::DownloadRestriction::MALICIOUS_FILES) {
     // Don't complete the download of a non-dangerous file until the user
     // consents.
-    DownloadController::GetInstance()->ShowDangerousDownloadDialog(item);
+    if (DownloadController::GetInstance()->ShowDangerousDownloadDialog(item)) {
+      DownloadItemModel model{item};
+      MaybeRecordDangerousDownloadWarningShown(model);
+    }
     return false;
 #endif  // BUILDFLAG(IS_ANDROID)
   } else if (!state->is_complete() &&
@@ -1010,11 +1026,19 @@ bool ChromeDownloadManagerDelegate::IsDownloadReadyForCompletion(
 
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
 void ChromeDownloadManagerDelegate::OnDeobfuscationComplete(
+    uint32_t download_id,
     base::OnceClosure callback,
     base::expected<void, enterprise_obfuscation::Error> deobfuscation_result) {
+  download::DownloadItem* item =
+      download_manager_ ? download_manager_->GetDownload(download_id) : nullptr;
+  if (!item) {
+    return;
+  }
+
   if (!deobfuscation_result.has_value()) {
-    // TODO(crbug.com/367259664): Add better error handling for deobfuscation.
     DVLOG(1) << "Failed to deobfuscate download file.";
+    item->Cancel(/*user_cancel=*/false);
+    return;
   }
 
   if (callback) {
@@ -1070,12 +1094,7 @@ bool ChromeDownloadManagerDelegate::ShouldOpenDownload(
         &ChromeDownloadManagerDelegate::OnInstallerDone,
         weak_ptr_factory_.GetWeakPtr(), token, std::move(callback)));
 
-    if (extensions::UserScript::IsURLUserScript(item->GetURL(),
-                                                item->GetMimeType())) {
-      installer->InstallUserScript(item->GetFullPath(), item->GetURL());
-    } else {
-      installer->InstallCrx(item->GetFullPath());
-    }
+    installer->InstallCrx(item->GetFullPath());
 
     // The status text and percent complete indicator will change now
     // that we are installing a CRX.  Update observers so that they pick
@@ -1316,9 +1335,11 @@ void ChromeDownloadManagerDelegate::OpenDownload(DownloadItem* download) {
     return;
   }
 
-  Browser* browser = chrome::ScopedTabbedBrowserDisplayer(profile_).browser();
-  CHECK(browser && browser->CanSupportWindowFeature(
-                       Browser::WindowFeature::kFeatureTabStrip));
+  BrowserWindowInterface* browser =
+      chrome::ScopedTabbedBrowserDisplayer(profile_).browser_window_interface();
+  CHECK(browser &&
+        WindowFeatureController::From(browser)->CanSupportWindowFeature(
+            WindowFeatureController::WindowFeature::kFeatureTabStrip));
   content::OpenURLParams params(
       net::FilePathToFileURL(download->GetTargetFilePath()),
       content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
@@ -1446,6 +1467,7 @@ void ChromeDownloadManagerDelegate::ReserveVirtualPath(
     const base::FilePath& virtual_path,
     bool create_directory,
     DownloadPathReservationTracker::FilenameConflictAction conflict_action,
+    const base::FilePath& containment_directory,
     DownloadTargetDeterminerDelegate::ReservedPathCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(!virtual_path.empty());
@@ -1454,7 +1476,8 @@ void ChromeDownloadManagerDelegate::ReserveVirtualPath(
   base::PathService::Get(chrome::DIR_USER_DOCUMENTS, &document_dir);
   DownloadPathReservationTracker::GetReservedPath(
       download, virtual_path, download_prefs_->DownloadPath(), document_dir,
-      create_directory, conflict_action, std::move(callback));
+      create_directory, conflict_action, std::move(callback),
+      containment_directory);
 }
 
 #if BUILDFLAG(IS_ANDROID)

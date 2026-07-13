@@ -29,13 +29,10 @@ HTMLUserMediaElementMediaStream& HTMLUserMediaElementMediaStream::From(
 // static
 MediaStream* HTMLUserMediaElementMediaStream::stream(
     HTMLUserMediaElement& element) {
+  if (element.IsLegacyMode()) {
+    return nullptr;
+  }
   return From(element).GetMediaStream();
-}
-
-// static
-DOMException* HTMLUserMediaElementMediaStream::error(
-    HTMLUserMediaElement& element) {
-  return From(element).error_.Get();
 }
 
 HTMLUserMediaElementMediaStream::HTMLUserMediaElementMediaStream(
@@ -44,7 +41,6 @@ HTMLUserMediaElementMediaStream::HTMLUserMediaElementMediaStream(
 
 void HTMLUserMediaElementMediaStream::Trace(Visitor* visitor) const {
   visitor->Trace(media_stream_);
-  visitor->Trace(error_);
   Supplement<HTMLUserMediaElement>::Trace(visitor);
 }
 

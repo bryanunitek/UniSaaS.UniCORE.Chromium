@@ -90,6 +90,7 @@
 #include "third_party/blink/renderer/core/layout/custom/layout_custom.h"
 #include "third_party/blink/renderer/core/layout/flex/layout_flexible_box.h"
 #include "third_party/blink/renderer/core/layout/forms/layout_fieldset.h"
+#include "third_party/blink/renderer/core/layout/geometry/axis.h"
 #include "third_party/blink/renderer/core/layout/geometry/transform_state.h"
 #include "third_party/blink/renderer/core/layout/grid/layout_grid.h"
 #include "third_party/blink/renderer/core/layout/grid_lanes/layout_grid_lanes.h"
@@ -552,14 +553,6 @@ bool LayoutObject::IsMenuList() const {
   NOT_DESTROYED();
   if (const auto* select = DynamicTo<HTMLSelectElement>(GetNode())) {
     return select->UsesMenuList();
-  }
-  return false;
-}
-
-bool LayoutObject::IsListBox() const {
-  NOT_DESTROYED();
-  if (const auto* select = DynamicTo<HTMLSelectElement>(GetNode())) {
-    return !select->UsesMenuList();
   }
   return false;
 }
@@ -1350,6 +1343,43 @@ static inline bool ObjectIsRelayoutBoundary(const LayoutObject* object) {
     return false;
   }
 
+  // Make sure our fragment is safe to use.
+  {
+    const auto& fragment = layout_result->GetPhysicalFragment();
+    if (fragment.IsLayoutObjectDestroyedOrMoved()) {
+      return false;
+    }
+
+    // Fragmented nodes cannot be relayout roots.
+    if (fragment.GetBreakToken()) {
+      return false;
+    }
+
+    // Any propagated layout-objects will affect the our container chain.
+    if (fragment.HasPropagatedLayoutObjects()) {
+      return false;
+    }
+
+    // If a box has any OOF descendants, they are propagated up the tree to
+    // accumulate their static-position.
+    if (fragment.HasOutOfFlowPositionedDescendants()) {
+      return false;
+    }
+
+    // Anchors should be propagated across the layout boundaries, even when
+    // `contain: strict` is explicitly set.
+    if (fragment.HasChildAnchors()) {
+      return false;
+    }
+
+    // A box which doesn't establish a new formatting context can pass a whole
+    // bunch of state (floats, margins) to an arbitrary sibling, causing that
+    // sibling to position/size differently.
+    if (!fragment.IsFormattingContextRoot()) {
+      return false;
+    }
+  }
+
   // Positioned objects always have self-painting layers and are safe to use as
   // relayout boundaries.
   bool is_svg_root = box->IsSVGRoot();
@@ -1368,10 +1398,10 @@ static inline bool ObjectIsRelayoutBoundary(const LayoutObject* object) {
   // TODO(crbug.com/40280256): Ignoring position-area means we may not allow
   // using the object as a relayout boundary even if position-area causes the
   // object to not rely on static position.
-  const ComputedStyle* style = box->Style();
+  const ComputedStyle& style = box->StyleRef();
   if (box->IsOutOfFlowPositioned() &&
-      (style->HasAutoLeftAndRightIgnoringPositionArea() ||
-       style->HasAutoTopAndBottomIgnoringPositionArea())) {
+      (style.HasAutoLeftAndRightIgnoringPositionArea() ||
+       style.HasAutoTopAndBottomIgnoringPositionArea())) {
     return false;
   }
 
@@ -1387,41 +1417,6 @@ static inline bool ObjectIsRelayoutBoundary(const LayoutObject* object) {
   // the grid, as we need the cached information of the grid to recompute the
   // out of flow item's containing block rect.
   if (box->ContainingBlock()->IsLayoutGridOrGridLanes()) {
-    return false;
-  }
-
-  // Make sure our fragment is safe to use.
-  const auto& fragment = layout_result->GetPhysicalFragment();
-  if (fragment.IsLayoutObjectDestroyedOrMoved()) {
-    return false;
-  }
-
-  // Fragmented nodes cannot be relayout roots.
-  if (fragment.GetBreakToken()) {
-    return false;
-  }
-
-  // Any propagated layout-objects will affect the our container chain.
-  if (fragment.HasPropagatedLayoutObjects()) {
-    return false;
-  }
-
-  // If a box has any OOF descendants, they are propagated up the tree to
-  // accumulate their static-position.
-  if (fragment.HasOutOfFlowPositionedDescendants()) {
-    return false;
-  }
-
-  // Anchors should be propagated across the layout boundaries, even when
-  // `contain: strict` is explicitly set.
-  if (fragment.HasChildAnchors()) {
-    return false;
-  }
-
-  // A box which doesn't establish a new formating context can pass a whole
-  // bunch of state (floats, margins) to an arbitrary sibling, causing that
-  // sibling to position/size differently.
-  if (!fragment.IsFormattingContextRoot()) {
     return false;
   }
 
@@ -1446,7 +1441,7 @@ static inline bool ObjectIsRelayoutBoundary(const LayoutObject* object) {
   // height will allow the object to grow and shrink based on the content
   // inside. The same goes for for logical width, if this objects is inside a
   // shrink-to-fit container, for instance.
-  if (!style->Width().IsFixed() || !style->Height().IsFixed()) {
+  if (!style.Width().IsFixed() || !style.Height().IsFixed()) {
     return false;
   }
 
@@ -1692,7 +1687,7 @@ void LayoutObject::ClearIntrinsicLogicalWidthsDirty() {
 bool LayoutObject::IsFontFallbackValid() const {
   NOT_DESTROYED();
   return StyleRef().GetFont()->IsFallbackValid() &&
-         FirstLineStyle()->GetFont()->IsFallbackValid();
+         FirstLineStyleRef().GetFont()->IsFallbackValid();
 }
 
 void LayoutObject::InvalidateSubtreeLayoutForFontUpdates() {
@@ -1829,6 +1824,22 @@ const LayoutBox* LayoutObject::ContainingScrollContainer(
   if (const PaintLayer* scroll_container_layer =
           ContainingScrollContainerLayer(ignore_layout_view_for_fixed_pos)) {
     return scroll_container_layer->GetLayoutBox();
+  }
+  return nullptr;
+}
+
+const LayoutBox* LayoutObject::ContainingScrollContainer(
+    PhysicalAxis axis) const {
+  NOT_DESTROYED();
+  const LayoutObject* current = this;
+  while (const LayoutBox* container = current->ContainingScrollContainer()) {
+    const ComputedStyle& style = container->StyleRef();
+    if (axis == PhysicalAxis::kHorizontal
+            ? style.IsOverflowValueScrollableX()
+            : style.IsOverflowValueScrollableY()) {
+      return container;
+    }
+    current = container;
   }
   return nullptr;
 }
@@ -1971,6 +1982,16 @@ gfx::Rect LayoutObject::AbsoluteBoundingBoxRect(
   for (auto& quad : quads)
     result.Union(quad.BoundingBox());
   return gfx::ToEnclosingRect(result);
+}
+
+gfx::Rect LayoutObject::AbsoluteBoundingBoxRectForUnboundedElement() const {
+  NOT_DESTROYED();
+  DCHECK(RuntimeEnabledFeatures::UnboundedElementEnabled());
+  if (const auto* box_model = DynamicTo<LayoutBoxModelObject>(this)) {
+    PhysicalRect overflow = box_model->VisualOverflowRectIncludingFilters();
+    return ToEnclosingRect(LocalToAbsoluteRect(overflow));
+  }
+  return AbsoluteBoundingBoxRect();
 }
 
 PhysicalRect LayoutObject::AbsoluteBoundingBoxRectHandlingEmptyInline(
@@ -3151,21 +3172,6 @@ void LayoutObject::StyleWillChange(StyleDifference diff,
       GetDocument().SetDraggableRegionsDirty(true);
     }
 
-    bool background_color_changed =
-        ResolveColorFast(GetCSSPropertyBackgroundColor()) !=
-        ResolveColorFast(new_style, GetCSSPropertyBackgroundColor());
-
-    if (diff.text_decoration_or_color_changed || background_color_changed ||
-        style_->GetFontDescription() != new_style.GetFontDescription() ||
-        style_->GetWritingDirection() != new_style.GetWritingDirection() ||
-        style_->InsideLink() != new_style.InsideLink() ||
-        style_->VerticalAlign() != new_style.VerticalAlign() ||
-        style_->GetTextAlign() != new_style.GetTextAlign() ||
-        style_->TextIndent() != new_style.TextIndent()) {
-      if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache())
-        cache->StyleChanged(this);
-    }
-
     if (style_->ContentVisibility() != new_style.ContentVisibility()) {
       if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache()) {
         if (GetNode()) {
@@ -3325,15 +3331,19 @@ void LayoutObject::StyleDidChange(
     }
   }
 
+  if (diff.ax_style_changed) {
+    if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache()) {
+      cache->StyleChanged(this);
+    }
+  }
+
   if (diff.disable_scroll_anchoring) {
     SetScrollAnchorDisablingStyleChanged(true);
   }
 
   if (diff.opacity_changed && IsDocumentElement() &&
       old_style->Opacity() == 0.f && style_->Opacity() != 0.f) {
-    if (const LocalFrameView* frame_view = GetFrameView()) {
-      frame_view->GetPaintTimingDetector().ReportIgnoredContent();
-    }
+    PaintTimingDetector::From(GetDocument()).ReportIgnoredContent();
   }
 
   // Don't check for paint invalidation here; we need to wait until the layer
@@ -3379,8 +3389,7 @@ void LayoutObject::StyleDidChange(
   if (StyleRef().AnchorName())
     MarkMayContainAnchor();
 
-  if (MayContainAnchor() && old_style &&
-      RuntimeEnabledFeatures::CSSAnchorWithTransformsEnabled()) {
+  if (MayContainAnchor() && old_style) {
     // If there's an anchor here, and the new style might want to run animations
     // on the compositor, anchors may affect layout of the anchored elements.
     // Mark for layout to update the anchor references and thus request main
@@ -3830,10 +3839,9 @@ PhysicalOffset LayoutObject::OffsetFromOverscrollContainer(
   for (wtf_size_t i = 0; i < affecting_overscroll_areas; ++i) {
     auto* area_parent =
         overscroll_areas[i]->GetPseudoElement(kPseudoIdOverscrollAreaParent);
-    CHECK(area_parent) << i;
-    auto* area_parent_object = area_parent->GetLayoutObject();
-    CHECK(area_parent_object) << i;
-    offset += OffsetFromScrollableContainer(area_parent_object, mode);
+    if (auto* area_parent_object = area_parent->GetLayoutObject()) {
+      offset += OffsetFromScrollableContainer(area_parent_object, mode);
+    }
   }
   return offset;
 }
@@ -3919,15 +3927,21 @@ void LayoutObject::WillBeDestroyed() {
   NOT_DESTROYED();
   DCHECK(!IsText());
 
+  const LocalFrame* frame = GetFrame();
+  if (frame) {
+    frame->GetInputMethodController().LayoutObjectWillBeDestroyed(*this);
+  }
+
   // Destroy any leftover anonymous children.
   LayoutObjectChildList* children = VirtualChildren();
   if (children)
     children->DestroyLeftoverChildren();
 
-  if (LocalFrame* frame = GetFrame()) {
+  if (frame) {
     // If this layoutObject is being autoscrolled, stop the autoscrolling.
-    if (frame->GetPage())
-      frame->GetPage()->GetAutoscrollController().StopAutoscrollIfNeeded(this);
+    if (const Page* page = frame->GetPage()) {
+      page->GetAutoscrollController().StopAutoscrollIfNeeded(this);
+    }
   }
 
   Remove();
@@ -4305,7 +4319,7 @@ void LayoutObject::ScheduleRelayout() {
       layout_view = View();
       if (layout_view) {
         if (LocalFrameView* frame_view = layout_view->GetFrameView())
-          frame_view->ScheduleRelayoutOfSubtree(this);
+          frame_view->ScheduleRelayoutOfSubtree(*this);
       }
     }
   }
@@ -4466,7 +4480,7 @@ void LayoutObject::AddDraggableRegions(Vector<DraggableRegionValue>& regions) {
 
   DraggableRegionValue region;
   region.draggable =
-      StyleRef().DraggableRegionMode() == EDraggableRegionMode::kDrag;
+      StyleRef().DraggableRegionMode() == EDraggableRegionMode::kMove;
   region.bounds = abs_bounds;
   regions.push_back(region);
 }
@@ -4534,10 +4548,10 @@ void LayoutObject::ImageNotifyFinished(ImageResourceContent* image) {
   if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache())
     cache->ImageLoaded(this);
 
-  if (LocalDOMWindow* window = GetDocument().domWindow())
+  if (LocalDOMWindow* window = GetDocument().domWindow()) {
     ImageElementTiming::From(*window).NotifyImageFinished(*this, image);
-  if (LocalFrameView* frame_view = GetFrameView())
-    frame_view->GetPaintTimingDetector().NotifyImageFinished(*this, image);
+    PaintTimingDetector::From(GetDocument()).NotifyImageFinished(*this, image);
+  }
 
   if (!image->ErrorOccurred()) {
     if (const std::optional<AdProvenance>& ad_provenance =
@@ -4687,10 +4701,10 @@ Element* LayoutObject::OffsetParent(const Element* base) const {
 
 void LayoutObject::NotifyImageFullyRemoved(ImageResourceContent* image) {
   NOT_DESTROYED();
-  if (LocalDOMWindow* window = GetDocument().domWindow())
+  if (LocalDOMWindow* window = GetDocument().domWindow()) {
     ImageElementTiming::From(*window).NotifyImageRemoved(this, image);
-  if (LocalFrameView* frame_view = GetFrameView())
-    frame_view->GetPaintTimingDetector().NotifyImageRemoved(*this, image);
+    PaintTimingDetector::From(GetDocument()).NotifyImageRemoved(*this, image);
+  }
 }
 
 PositionWithAffinity LayoutObject::CreatePositionWithAffinity(
@@ -5424,9 +5438,7 @@ void LayoutObject::InvalidateSubtreePositionTry(bool mark_style_dirty) {
 bool LayoutObject::IsBackdropForOverscrollAreaParent() const {
   NOT_DESTROYED();
   const auto* pseudo = DynamicTo<PseudoElement>(GetNode());
-  return pseudo && pseudo->GetPseudoId() == kPseudoIdBackdrop &&
-         pseudo->UltimateOriginatingElement().GetPseudoElement(
-             kPseudoIdOverscrollAreaParent);
+  return pseudo && pseudo->GetPseudoId() == kPseudoIdOverscrollBackdrop;
 }
 
 }  // namespace blink

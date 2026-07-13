@@ -48,6 +48,7 @@
 #import "ios/components/credential_provider_extension/password_util.h"
 
 using app_group::UserDefaultsStringForKey;
+using webauthn::PasskeyUserVerificationStatus;
 
 namespace {
 
@@ -76,21 +77,15 @@ enum class PasskeyCreationEligibility {
   kExcludedPasskey,
 };
 
-enum class PasskeyUserVerificationStatus {
-  kNotRequired,
-  kRequired,
-  kCompleted
-};
-
 }  // namespace
 
 // TODO(crbug.com/454307667): Add unit tests for the whole file.
 @interface CredentialProviderViewController () <
     ConfirmationAlertActionHandler,
     CredentialResponseHandler,
+    MultiProfilePasskeyCreationViewControllerDelegate,
     PasskeyKeychainProviderBridgeDelegate,
     PasskeyWelcomeScreenViewControllerDelegate,
-    MultiProfilePasskeyCreationViewControllerDelegate,
     UIAdaptivePresentationControllerDelegate>
 
 // Interface for the persistent credential store.
@@ -823,7 +818,7 @@ enum class PasskeyUserVerificationStatus {
                              (ReauthenticationResultBlock)completionHandler {
   __weak __typeof__(self) weakSelf = self;
   auto handlerWrapper = ^(ReauthenticationResult result) {
-    if (result == ReauthenticationResult::kSuccess) {
+    if (result != ReauthenticationResult::kFailure) {
       weakSelf.userVerificationStatus =
           PasskeyUserVerificationStatus::kCompleted;
     }

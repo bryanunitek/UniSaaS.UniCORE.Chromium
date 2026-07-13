@@ -32,7 +32,6 @@
 #include "base/types/expected.h"
 #include "base/version.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
-#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_install_command_helper.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_install_source.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/non_installed_bundle_inspection_context.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
@@ -388,15 +387,11 @@ TEST_F(InstallIsolatedWebAppCommandTest, CommandLocksOnAppId) {
   base::test::TestFuture<base::expected<InstallIsolatedWebAppCommandSuccess,
                                         InstallIsolatedWebAppCommandError>>
       test_future;
-  auto command_helper =
-      std::make_unique<IsolatedWebAppInstallCommandHelper>(url_info);
-
   auto command = std::make_unique<InstallIsolatedWebAppCommand>(
       url_info, IsolatedWebAppInstallSource::FromDevUi(CreateDevProxySource()),
       /*expected_version=*/std::nullopt, *profile(),
       /*optional_keep_alive=*/nullptr,
-      /*optional_profile_keep_alive=*/nullptr, test_future.GetCallback(),
-      std::move(command_helper));
+      /*optional_profile_keep_alive=*/nullptr, test_future.GetCallback());
 
   EXPECT_THAT(
       command->InitialLockRequestForTesting(),
@@ -719,6 +714,52 @@ TEST_F(InstallIsolatedWebAppCommandTest,
   EXPECT_THAT(histogram_tester_.GetAllSamples("WebApp.Isolated.InstallError"),
               BucketsAre(base::Bucket(
                   /*IWAInstallError::kCantValidateManifest*/ 5, 1)));
+}
+
+TEST_F(InstallIsolatedWebAppCommandTest, UpdateManifestUrlIgnoredInDevMode) {
+  auto app =
+      IsolatedWebAppBuilder(ManifestBuilder().SetUpdateManifestUrl(GURL(
+                                "https://example.com/update_manifest.json")))
+          .BuildBundle(test::GetDefaultEd25519KeyPair());
+  auto install_source =
+      IsolatedWebAppInstallSource::FromDevUi(IwaSourceBundleDevModeWithFileOp(
+          app->path(), IwaSourceBundleDevFileOp::kCopy));
+  app->FakeInstallPageState(profile());
+  app->TrustSigningKey();
+  IsolatedWebAppUrlInfo url_info = CreateEd25519IsolatedWebAppUrlInfo();
+
+  EXPECT_THAT(ExecuteCommand(Parameters{.url_info = url_info,
+                                        .install_source = install_source}),
+              HasValue());
+
+  const WebApp* installed_app =
+      web_app_registrar().GetAppById(url_info.app_id());
+  EXPECT_NE(installed_app, nullptr);
+  EXPECT_EQ(installed_app->isolation_data()->update_manifest_url(),
+            std::nullopt);
+}
+
+TEST_F(InstallIsolatedWebAppCommandTest, UpdateManifestUrlSavedInProdMode) {
+  auto app =
+      IsolatedWebAppBuilder(ManifestBuilder().SetUpdateManifestUrl(GURL(
+                                "https://example.com/update_manifest.json")))
+          .BuildBundle(test::GetDefaultEd25519KeyPair());
+  auto install_source = IsolatedWebAppInstallSource::FromExternalPolicy(
+      IwaSourceBundleProdModeWithFileOp(app->path(),
+                                        IwaSourceBundleProdFileOp::kCopy));
+  app->FakeInstallPageState(profile());
+  app->TrustSigningKey();
+  IsolatedWebAppUrlInfo url_info = CreateEd25519IsolatedWebAppUrlInfo();
+
+  EXPECT_THAT(ExecuteCommand(Parameters{.url_info = url_info,
+                                        .install_source = install_source}),
+              HasValue());
+
+  const WebApp* installed_app =
+      web_app_registrar().GetAppById(url_info.app_id());
+  EXPECT_NE(installed_app, nullptr);
+  EXPECT_EQ(installed_app->isolation_data()->update_manifest_url(),
+            GURL("https://example.com/update_manifest.json"));
 }
 
 TEST_F(InstallIsolatedWebAppCommandTest, FailsWhenAppInstalledAlready) {

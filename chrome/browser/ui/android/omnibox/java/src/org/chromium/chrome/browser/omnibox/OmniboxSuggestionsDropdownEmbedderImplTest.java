@@ -40,6 +40,7 @@ import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.layouts.LayoutType;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdownEmbedder.OmniboxAlignment;
@@ -84,7 +85,6 @@ public class OmniboxSuggestionsDropdownEmbedderImplTest {
     private @Mock View mHorizontalAlignmentView;
     private @Mock DisplayAndroid mDisplay;
     private @Mock InsetObserver mInsetObserver;
-    private @Mock LocationBarDataProvider mLocationBarDataProvider;
     private @Mock TopInsetProvider mTopInsetProvider;
     private @Mock Callback<OmniboxAlignment> mAlignmentChanged;
 
@@ -94,6 +94,8 @@ public class OmniboxSuggestionsDropdownEmbedderImplTest {
     private @ControlsPosition int mControlsPosition = ControlsPosition.TOP;
     private final SettableNonNullObservableSupplier<Integer> mFuseboxStateSupplier =
             ObservableSuppliers.createNonNull(FuseboxState.DISABLED);
+    private final SettableNonNullObservableSupplier<Integer> mFuseboxLayoutModeSupplier =
+            ObservableSuppliers.createNonNull(FuseboxLayoutMode.TOOLBAR);
 
     @Before
     public void setUp() {
@@ -129,7 +131,7 @@ public class OmniboxSuggestionsDropdownEmbedderImplTest {
                         () -> 0,
                         () -> mBottomWindowPadding,
                         mFuseboxStateSupplier,
-                        mLocationBarDataProvider,
+                        mFuseboxLayoutModeSupplier,
                         mTopInsetProvider);
     }
 
@@ -277,7 +279,7 @@ public class OmniboxSuggestionsDropdownEmbedderImplTest {
                         () -> 0,
                         () -> 0,
                         mFuseboxStateSupplier,
-                        mLocationBarDataProvider,
+                        mFuseboxLayoutModeSupplier,
                         mTopInsetProvider);
         impl.recalculateOmniboxAlignment();
         OmniboxAlignment alignment = impl.getCurrentAlignment();
@@ -375,7 +377,7 @@ public class OmniboxSuggestionsDropdownEmbedderImplTest {
                         () -> keyboardHeight,
                         () -> mBottomWindowPadding,
                         mFuseboxStateSupplier,
-                        mLocationBarDataProvider,
+                        mFuseboxLayoutModeSupplier,
                         mTopInsetProvider);
 
         impl.recalculateOmniboxAlignment();

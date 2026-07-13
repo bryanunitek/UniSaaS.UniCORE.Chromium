@@ -310,6 +310,7 @@ export class SlimWebviewElement extends CrLitElement {
   private onBeforeSendHeadersParamsInternal: OnBeforeSendHeadersParams|null =
       null;
   private allowedOriginsParamsInternal: OriginCheckParams|null = null;
+  private userAgentOverrideInternal: string = '';
 
   constructor() {
     super();
@@ -339,6 +340,20 @@ export class SlimWebviewElement extends CrLitElement {
     this.allowedOriginsParamsInternal = params;
   }
 
+  getUserAgent(): string {
+    return this.userAgentOverrideInternal || navigator.userAgent;
+  }
+
+  setUserAgentOverride(userAgentOverride: string) {
+    this.userAgentOverrideInternal = userAgentOverride;
+    if (this.guestInstanceId === null ||
+        this.guestInstanceId === GUEST_INSTANCE_ID_PENDING) {
+      return;
+    }
+    BrowserProxyImpl.getInstance().handler.setUserAgentOverride(
+        this.guestInstanceId, userAgentOverride);
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     this.maybeSetupEventDispatcher();
@@ -363,7 +378,7 @@ export class SlimWebviewElement extends CrLitElement {
 
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
-    if (changedProperties.has('src')) {
+    if (changedProperties.has('src') && this.src) {
       if (this.guestInstanceId === null) {
         this.guestInstanceId = GUEST_INSTANCE_ID_PENDING;
         this.createGuest();
@@ -411,6 +426,11 @@ export class SlimWebviewElement extends CrLitElement {
     if (this.allowedOriginsParams !== null) {
       createParams.storage['allowedOrigins'] =
           this.allowedOriginsParams.toValue();
+    }
+    if (this.userAgentOverrideInternal) {
+      createParams.storage['userAgentOverride'] = {
+        stringValue: this.userAgentOverrideInternal,
+      };
     }
     const result =
         await BrowserProxyImpl.getInstance().handler.createGuest(createParams);

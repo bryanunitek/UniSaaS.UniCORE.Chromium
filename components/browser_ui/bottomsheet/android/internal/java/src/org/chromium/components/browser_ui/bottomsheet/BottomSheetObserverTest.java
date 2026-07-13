@@ -56,6 +56,9 @@ public class BottomSheetObserverTest {
         /** A {@link CallbackHelper} that can wait for the onOffsetChanged event. */
         public final CallbackHelper mOffsetChangedCallbackHelper = new CallbackHelper();
 
+        /** A {@link CallbackHelper} that can wait for the onContainerBottomMarginChanged event. */
+        public final CallbackHelper mBottomMarginChangedCallbackHelper = new CallbackHelper();
+
         /** A {@link CallbackHelper} that can wait for the onSheetContentChanged event. */
         public final CallbackHelper mContentChangedCallbackHelper = new CallbackHelper();
 
@@ -67,6 +70,8 @@ public class BottomSheetObserverTest {
 
         /** The last value that the onOffsetChanged event sent. */
         private float mLastOffsetChangedValue;
+
+        private int mLastBottomMargin;
 
         @Override
         public void onSheetOffsetChanged(float heightFraction, float offsetPx) {
@@ -101,6 +106,16 @@ public class BottomSheetObserverTest {
         /** @return The last value passed in to {@link #onSheetOffsetChanged(float)}. */
         public float getLastOffsetChangedValue() {
             return mLastOffsetChangedValue;
+        }
+
+        @Override
+        public void onContainerBottomMarginChanged(int bottomMargin) {
+            mLastBottomMargin = bottomMargin;
+            mBottomMarginChangedCallbackHelper.notifyCalled();
+        }
+
+        public int getLastBottomMargin() {
+            return mLastBottomMargin;
         }
     }
 
@@ -155,7 +170,8 @@ public class BottomSheetObserverTest {
                                     false,
                                     () -> 0,
                                     /* desktopWindowStateManager= */ null,
-                                    insetObserver);
+                                    insetObserver,
+                                    /* enableLargeFormFactorUi= */ false);
                         });
 
         mTestSupport = new BottomSheetTestSupport(mBottomSheetController);
@@ -394,12 +410,29 @@ public class BottomSheetObserverTest {
         callbackHelper.waitForCallback(callbackCount, 1);
         assertEquals(1f, mObserver.getLastOffsetChangedValue(), MathUtils.EPSILON);
 
-        // Halfway between peek and full should send 0.5.
+        // Halfway between peek and full should send 0.5 (adjusted for display pixel rounding and
+        // browser controls).
+        // We must wait for the sheet to transition out of FULL state into HALF state before
+        // calculating expectedMidFraction. While in FULL state, getOffsetFromBrowserControls()
+        // returns 0; once in HALF state, it returns the active controls offset needed for exact
+        // math.
         callbackCount = callbackHelper.getCallCount();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mTestSupport.setSheetOffsetFromBottom(midPeekFull, StateChangeReason.NONE));
         callbackHelper.waitForCallback(callbackCount, 1);
-        assertEquals(0.5f, mObserver.getLastOffsetChangedValue(), MathUtils.EPSILON);
+
+        float containerHeight = mBottomSheetController.getContainerHeight();
+        float offsetWithControls =
+                mTestSupport.getCurrentOffsetPx() - mTestSupport.getOffsetFromBrowserControls();
+        float screenRatio = containerHeight > 0 ? offsetWithControls / containerHeight : 0;
+        float expectedMidFraction =
+                MathUtils.clamp(
+                        (screenRatio - mTestSupport.getHiddenRatio())
+                                / (mTestSupport.getFullRatio() - mTestSupport.getHiddenRatio()),
+                        0,
+                        1);
+
+        assertEquals(expectedMidFraction, mObserver.getLastOffsetChangedValue(), MathUtils.EPSILON);
     }
 
     @Test
@@ -453,5 +486,16 @@ public class BottomSheetObserverTest {
         // Check the offset.
         assertEquals(
                 wrappedContentHeight, mBottomSheetController.getCurrentOffset(), MathUtils.EPSILON);
+    }
+
+    @Test
+    @MediumTest
+    public void testBottomMarginChangedEvent() throws TimeoutException {
+        CallbackHelper callbackHelper = mObserver.mBottomMarginChangedCallbackHelper;
+        int callbackCount = callbackHelper.getCallCount();
+        int newMargin = 100;
+        ThreadUtils.runOnUiThreadBlocking(() -> mTestSupport.setBottomMargin(newMargin));
+        callbackHelper.waitForCallback(callbackCount, 1);
+        assertEquals(newMargin, mObserver.getLastBottomMargin());
     }
 }

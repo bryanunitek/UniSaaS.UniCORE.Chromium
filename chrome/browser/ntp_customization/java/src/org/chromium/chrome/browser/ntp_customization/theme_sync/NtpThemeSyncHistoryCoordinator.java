@@ -11,18 +11,18 @@ import android.view.View;
 import android.view.ViewGroup;
 
 import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.SimpleItemAnimator;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ntp_customization.BottomSheetDelegate;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
-import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo.NtpThemeColorId;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataColor;
-import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataCustomizedColor;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataGroup;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataManager;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -30,6 +30,7 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /** Coordinator for the NTP theme sync history. */
 @NullMarked
@@ -43,7 +44,7 @@ public class NtpThemeSyncHistoryCoordinator {
 
     private NtpBackgroundDataGroup @Nullable [] mNtpBackgroundDataGroups;
     private @Nullable NtpThemeSyncHistoryRecyclerViewAdaptor mRecyclerViewAdaptor;
-    private @Nullable NtpBackgroundDataBase mLastSelectedNtpBackgroundData;
+    private @Nullable NtpBackgroundDataBase mInitiallySelectedNtpBackgroundData;
     private int mLastSelectedIndex;
 
     public NtpThemeSyncHistoryCoordinator(
@@ -59,6 +60,7 @@ public class NtpThemeSyncHistoryCoordinator {
         mPropertyModel = new PropertyModel(NtpThemeSyncHistoryProperties.ALL_KEYS);
         PropertyModelChangeProcessor.create(
                 mPropertyModel, historyContainerView, NtpThemeSyncHistoryContainerViewBinder::bind);
+        setupRecyclerView(historyContainerView);
 
         mNtpBackgroundDataManager = new NtpBackgroundDataManager(mContext);
         mPropertyModel.set(NtpThemeSyncHistoryProperties.IS_VISIBLE, true);
@@ -76,16 +78,31 @@ public class NtpThemeSyncHistoryCoordinator {
         mDataShowingList = new ArrayList<>();
     }
 
-    /** Prepare data before showing the NTP theme history. */
+    /** Setups the recycler view. */
+    private void setupRecyclerView(ViewGroup parentView) {
+        RecyclerView recyclerView =
+                parentView.findViewById(R.id.ntp_theme_sync_history_recycler_view);
+        RecyclerView.ItemAnimator animator = recyclerView.getItemAnimator();
+
+        if (animator instanceof SimpleItemAnimator) {
+            // Stops the flashing effect on item updates.
+            ((SimpleItemAnimator) animator).setSupportsChangeAnimations(false);
+        }
+    }
+
+    /**
+     * Prepare data before showing the NTP theme history.
+     *
+     * @return The initially selected index in the showing list.
+     */
     int prepareData() {
         mDataShowingList.clear();
 
         // The default option is placed at the first.
         mDataShowingList.add(mDefaultNtpBackgroundData);
-        int lastSelectedIndex = 0;
-        boolean isDefaultTheme =
-                NtpCustomizationConfigManager.getInstance().getBackgroundType()
-                        == NtpCustomizationUtils.NtpBackgroundType.DEFAULT;
+        int lastSelectedIndex = RecyclerView.NO_POSITION;
+        NtpBackgroundDataBase currentNtpBackgroundData =
+                NtpCustomizationConfigManager.getInstance().getNtpBackgroundData();
 
         if (mNtpBackgroundDataGroups == null) {
             // Adds all history data to the list.
@@ -100,12 +117,19 @@ public class NtpThemeSyncHistoryCoordinator {
 
         NtpBackgroundDataGroup localGroup = mNtpBackgroundDataGroups[PlatformType.ANDROID_LOCAL];
         assumeNonNull(localGroup);
-        if (!localGroup.isEmpty()) {
-            // The last selected index is set to the first item from local selected history if the
-            // current selected theme isn't the default one, and the local group list isn't empty.
-            if (!isDefaultTheme) {
-                lastSelectedIndex = 1;
+        if (currentNtpBackgroundData == null) {
+            // Sets the index to the default theme if there isn't any NTP theme set before.
+            lastSelectedIndex = 0;
+        } else if (!localGroup.isEmpty()) {
+            int index = localGroup.indexOf(currentNtpBackgroundData);
+            if (index != -1) {
+                // The index is set to the item from local selected history which matches the
+                // current theme.
+                lastSelectedIndex = index + 1;
             }
+        }
+
+        if (!localGroup.isEmpty()) {
             mDataShowingList.addAll(localGroup.getList());
         }
 
@@ -131,7 +155,10 @@ public class NtpThemeSyncHistoryCoordinator {
     /** Called before showing the NTP theme customization history items. */
     public void prepareToShow() {
         mLastSelectedIndex = prepareData();
-        mLastSelectedNtpBackgroundData = mDataShowingList.get(mLastSelectedIndex);
+        if (mInitiallySelectedNtpBackgroundData == null
+                && mLastSelectedIndex != RecyclerView.NO_POSITION) {
+            mInitiallySelectedNtpBackgroundData = mDataShowingList.get(mLastSelectedIndex);
+        }
 
         mRecyclerViewAdaptor =
                 new NtpThemeSyncHistoryRecyclerViewAdaptor(
@@ -149,45 +176,19 @@ public class NtpThemeSyncHistoryCoordinator {
 
         NtpCustomizationConfigManager.getInstance()
                 .onBackgroundDataChanged(mContext, backgroundData);
-        mLastSelectedNtpBackgroundData = backgroundData;
     }
 
     /** Returns whether to recreate the activity to apply the new theme color. */
     private boolean shouldRecreateActivity(NtpBackgroundDataBase backgroundData) {
-        boolean isDifferentColor = true;
-        if (isColorTheme(backgroundData)) {
-            // We check the following color theme cases to see if color matches.
-            if (backgroundData instanceof NtpBackgroundDataColor ntpBackgroundDataColor
-                    && mLastSelectedNtpBackgroundData
-                            instanceof NtpBackgroundDataColor lastSelectedBackgroundDataColor) {
-                isDifferentColor =
-                        !lastSelectedBackgroundDataColor
-                                .getNtpThemeColorInfo()
-                                .equals(ntpBackgroundDataColor.getNtpThemeColorInfo());
-            } else if (backgroundData instanceof NtpBackgroundDataCustomizedColor customizedColor
-                    && mLastSelectedNtpBackgroundData
-                            instanceof
-                            NtpBackgroundDataCustomizedColor lastSelectedCustomizedColor) {
-                isDifferentColor =
-                        !customizedColor
-                                .getNtpThemeColorFromHexInfo()
-                                .equals(lastSelectedCustomizedColor.getNtpThemeColorFromHexInfo());
-            }
-        }
-        return isDifferentColor;
+        return !Objects.equals(mInitiallySelectedNtpBackgroundData, backgroundData);
     }
 
     /** Called to destroy the NtpThemeSyncHistoryCoordinator. */
     public void destroy() {
         mDataShowingList.clear();
-        mLastSelectedNtpBackgroundData = null;
+        mInitiallySelectedNtpBackgroundData = null;
         mPropertyModel.set(NtpThemeSyncHistoryProperties.MORE_OPTIONS_CLICK_LISTENER, null);
         mPropertyModel.set(NtpThemeSyncHistoryProperties.RECYCLER_VIEW_LAYOUT_MANAGER, null);
-    }
-
-    private boolean isColorTheme(NtpBackgroundDataBase backgroundData) {
-        return backgroundData instanceof NtpBackgroundDataColor
-                || backgroundData instanceof NtpBackgroundDataCustomizedColor;
     }
 
     PropertyModel getPropertyModelForTesting() {

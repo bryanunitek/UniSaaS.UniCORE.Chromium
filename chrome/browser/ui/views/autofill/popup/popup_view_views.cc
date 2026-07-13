@@ -46,6 +46,7 @@
 #include "chrome/browser/ui/views/autofill/popup/popup_loading_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_no_suggestions_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_personal_context_notice_view.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_row_content_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_factory_utils.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_search_bar_view.h"
@@ -67,7 +68,6 @@
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/favicon/core/large_icon_service.h"
-#include "components/feature_engagement/public/feature_constants.h"
 #include "components/image_fetcher/core/image_fetcher_service.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/password_manager/core/browser/password_sync_util.h"
@@ -130,7 +130,7 @@ int GetContentsVerticalPadding() {
       DISTANCE_CONTENT_LIST_VERTICAL_SINGLE);
 }
 
-bool CanShowRootPopup(AutofillSuggestionController& controller) {
+bool CanShowRootPopup(AutofillPopupController& controller) {
 #if BUILDFLAG(IS_MAC)
   // It's possible for the container_view to not be in a window. In that case,
   // cancel the popup since we can't fully set it up.
@@ -323,7 +323,9 @@ bool PopupViewViews::Show(
   MaybeAnnounceCurrentTabAndFootnote();
   MaybeAnnouncePasswordRecoveryPopup();
   MaybeAnnounceLoadingState();
-  MaybeA11yFocusInformationalSuggestion();
+  if (!MaybeA11yFocusInformationalSuggestion()) {
+    return false;
+  }
 
   return !CanActivate() || (GetWidget() && GetWidget()->IsActive());
 }
@@ -811,7 +813,9 @@ void PopupViewViews::OnSuggestionsChanged(bool prefer_prev_arrow_side) {
   MaybeAutoSelectSuggestion();
   MaybeAnnouncePasswordRecoveryPopup();
   MaybeAnnounceLoadingState();
-  MaybeA11yFocusInformationalSuggestion();
+  if (!MaybeA11yFocusInformationalSuggestion()) {
+    return;
+  }
   ShowIPHFeaturePromos();
 }
 
@@ -829,14 +833,18 @@ void PopupViewViews::AxAnnounce(const std::u16string& text) {
 }
 
 base::WeakPtr<AutofillPopupView> PopupViewViews::CreateSubPopupView(
-    base::WeakPtr<AutofillSuggestionController> controller) {
+    base::WeakPtr<AutofillPopupController> controller) {
   if (GetWidget() && controller) {
-    return (new PopupViewViews(
-                static_cast<AutofillPopupController&>(*controller).GetWeakPtr(),
-                weak_ptr_factory_.GetWeakPtr(), GetWidget()))
+    return (new PopupViewViews(controller, weak_ptr_factory_.GetWeakPtr(),
+                               GetWidget()))
         ->GetWeakPtr();
   }
   return nullptr;
+}
+
+std::optional<size_t> PopupViewViews::GetIndexOfSubPopupAnchorSuggestion()
+    const {
+  return row_with_open_sub_popup_;
 }
 
 bool PopupViewViews::HasFocus() const {
@@ -1111,13 +1119,19 @@ void PopupViewViews::InitViews() {
       views::BoxLayout::Orientation::kVertical));
 
   if (search_bar_config_) {
+    const bool is_at_memory =
+        controller_ &&
+        controller_->GetMainFillingProduct() == FillingProduct::kAtMemory;
     search_bar_ = AddChildView(std::make_unique<PopupSearchBarView>(
         search_bar_config_->placeholder, *this,
-        controller_ &&
-            controller_->GetMainFillingProduct() == FillingProduct::kAtMemory,
-        controller_ && controller_->IsSearching()));
+        /*show_indicator=*/is_at_memory,
+        /*show_search_icon_sparkle=*/is_at_memory,
+        /*debounce_delay=*/
+        is_at_memory ? base::TimeDelta()
+                     : PopupSearchBarView::kInputChangeCallbackDelay));
     search_bar_->SetProperty(views::kMarginsKey,
                              gfx::Insets::VH(GetContentsVerticalPadding(), 0));
+    search_bar_->SetLoading(controller_ && controller_->IsSearching());
     AddChildView(std::make_unique<PopupSeparatorView>(/*vertical_padding=*/0));
   }
 
@@ -1197,8 +1211,8 @@ void PopupViewViews::CreateSuggestionViews() {
               body_container->AddChildView(std::make_unique<PopupTitleView>(
                   suggestions[current_line_number].main_text.value)));
           break;
-        case SuggestionType::kMixedFormMessage:
         case SuggestionType::kInsecureContextPaymentDisabledMessage:
+        case SuggestionType::kMixedFormMessage:
           rows_.push_back(
               body_container->AddChildView(std::make_unique<PopupWarningView>(
                   suggestions[current_line_number])));
@@ -1208,6 +1222,15 @@ void PopupViewViews::CreateSuggestionViews() {
               body_container->AddChildView(std::make_unique<PopupLoadingView>(
                   suggestions[current_line_number]
                       .expected_number_of_suggestions.value_or(1))));
+          break;
+        }
+        case SuggestionType::kPersonalContextNotice: {
+          rows_.push_back(body_container->AddChildView(
+              std::make_unique<PopupPersonalContextNoticeView>(
+                  /*a11y_selection_delegate=*/*this,
+                  /*selection_delegate=*/*this, controller(),
+                  current_line_number,
+                  std::make_unique<PopupRowContentView>())));
           break;
         }
         // The default section contains all selectable rows and includes
@@ -1224,64 +1247,13 @@ void PopupViewViews::CreateSuggestionViews() {
                   std::move(filter_match), password_favicon_loader_.get()));
           rows_.push_back(row_view);
 
-          const base::Feature* const feature =
-              suggestions[current_line_number].iph_metadata.feature;
           // Set appropriate element ids for IPH targets, it is important to
           // set them earlier to make sure the elements are discoverable later
           // during popup's visibility change and the promo bubble showing.
-          if (feature == &feature_engagement::
-                             kIPHAutofillVirtualCardSuggestionFeature ||
-              feature == &feature_engagement::
-                             kIPHAutofillDisabledVirtualCardSuggestionFeature ||
-              feature == &feature_engagement::
-                             kIPHAutofillCardInfoRetrievalSuggestionFeature ||
-              feature == &feature_engagement::
-                             kIPHAutofillDownstreamCardAwarenessFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillCreditCardSuggestionEntryElementId);
-          } else if (feature ==
-                     &feature_engagement::
-                         kIPHAutofillVirtualCardCVCSuggestionFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillStandaloneCvcSuggestionElementId);
-          } else if (feature ==
-                     &feature_engagement::
-                         kIPHAutofillExternalAccountProfileSuggestionFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillSuggestionElementId);
-          } else if (feature == &feature_engagement::
-                                    kIPHAutofillCreditCardBenefitFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillCreditCardBenefitElementId);
-          } else if (feature ==
-                     &feature_engagement::
-                         kIPHAutofillBnplAffirmOrZipSuggestionFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillBnplAffirmOrZipSuggestionElementId);
-          } else if (feature ==
-                     &feature_engagement::
-                         kIPHAutofillBnplAffirmZipOrKlarnaSuggestionFeature) {
-            row_view->SetProperty(
-                views::kElementIdentifierKey,
-                kAutofillBnplAffirmZipOrKlarnaSuggestionElementId);
-          } else if (feature ==
-                     &feature_engagement::
-                         kIPHAutofillHomeWorkProfileSuggestionFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillHomeWorkSuggestionElementId);
-          } else if (feature == &feature_engagement::
-                                    kIPHAutofillEnableLoyaltyCardsFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillEnableLoyaltyCardsElementId);
-          } else if (feature ==
-                     &feature_engagement::
-                         kIPHAutofillAccountNameEmailSuggestionFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillAccountNameEmailSuggestionElementId);
-          } else if (feature ==
-                     &feature_engagement::kIPHAutofillAiValuablesFeature) {
-            row_view->SetProperty(views::kElementIdentifierKey,
-                                  kAutofillAiValuablesElementId);
+          if (ui::ElementIdentifier element_id =
+                  GetAutofillPopupCellElementIdentifier(
+                      suggestions[current_line_number].iph_metadata.feature)) {
+            row_view->SetProperty(views::kElementIdentifierKey, element_id);
           }
       }
     }
@@ -1361,10 +1333,6 @@ void PopupViewViews::CreateSuggestionViews() {
           std::make_unique<PopupBnplFootnoteView>(
               controller(), /*a11y_selection_delegate=*/*this,
               base::BindRepeating(&DefaultA11yAnnouncer))));
-    } else if (suggestions[current_line_number].type ==
-               SuggestionType::kPersonalContextNotice) {
-      rows_.push_back(footer_container_->AddChildView(
-          std::make_unique<PopupPersonalContextNoticeView>()));
     } else {
       rows_.push_back(footer_container_->AddChildView(CreatePopupRowView(
           controller(), /*a11y_selection_delegate=*/*this,
@@ -1686,21 +1654,23 @@ bool PopupViewViews::SelectParentPopupContentCell() {
   return true;
 }
 
-void PopupViewViews::MaybeA11yFocusInformationalSuggestion() {
+bool PopupViewViews::MaybeA11yFocusInformationalSuggestion() {
   if (rows_.size() != 1) {
-    return;
+    return true;
   }
 
   if (auto* warning_view = std::get_if<PopupWarningView*>(&rows_[0]);
       warning_view && *warning_view) {
     PopupWarningView* view_ptr = *warning_view;
-    TrackAndRun(
+    return TrackAndRun(
         view_ptr, [this, view_ptr]() { NotifyAXSelection(*view_ptr); },
         [view_ptr]() {
           view_ptr->NotifyAccessibilityEventDeprecated(ax::mojom::Event::kFocus,
                                                        true);
         });
   }
+
+  return true;
 }
 
 base::WeakPtr<AutofillPopupView> PopupViewViews::GetWeakPtr() {
@@ -1740,7 +1710,7 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
 
 // static
 base::WeakPtr<AutofillPopupView> AutofillPopupView::Create(
-    base::WeakPtr<AutofillSuggestionController> controller,
+    base::WeakPtr<AutofillPopupController> controller,
     std::optional<const AutofillPopupView::SearchBarConfig> search_bar_config,
     std::optional<const AutofillPopupView::TabbedPaneConfig>
         tabbed_pane_config) {
@@ -1748,10 +1718,8 @@ base::WeakPtr<AutofillPopupView> AutofillPopupView::Create(
     return nullptr;
   }
 
-  // On Desktop, all controllers are `AutofillPopupController`s.
-  return (new PopupViewViews(
-              static_cast<AutofillPopupController&>(*controller).GetWeakPtr(),
-              std::move(search_bar_config), std::move(tabbed_pane_config)))
+  return (new PopupViewViews(controller, std::move(search_bar_config),
+                             std::move(tabbed_pane_config)))
       ->GetWeakPtr();
 }
 

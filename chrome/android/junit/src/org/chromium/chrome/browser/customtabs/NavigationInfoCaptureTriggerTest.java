@@ -5,9 +5,10 @@
 package org.chromium.chrome.browser.customtabs;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+
+import static org.chromium.ui.test.util.MockitoHelper.clearInvocations;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -35,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 public class NavigationInfoCaptureTriggerTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Callback<Tab> mDelegate;
+    @Mock private Tab mTab;
     private NavigationInfoCaptureTrigger mTrigger;
 
     @Before
@@ -44,23 +46,23 @@ public class NavigationInfoCaptureTriggerTest {
     }
 
     /**
-     * Tests the normal flow where onload is called, then first meaningful paint happens soon
-     * after. We want the capture to trigger after first meaningful paint.
+     * Tests the normal flow where onload is called, then first meaningful paint happens soon after.
+     * We want the capture to trigger after first meaningful paint.
      */
     @Test
     @Feature({"CustomTabs"})
     public void testNormalFlow() {
-        mTrigger.onLoadFinished(null);
+        mTrigger.onLoadFinished(mTab);
 
         // If we run everything on the Looper, the backup onload capture will trigger. Therefore
         // run long enough for the primary onload to trigger.
         ShadowLooper.idleMainLooper(2, TimeUnit.SECONDS);
         verify(mDelegate, times(0)).onResult(any());
 
-        mTrigger.onFirstMeaningfulPaint(null);
+        mTrigger.onFirstMeaningfulPaint(mTab);
         verifyCaptured(1);
 
-        mTrigger.onHide(null);
+        mTrigger.onHide(mTab);
         verifyCaptured(1);
     }
 
@@ -71,24 +73,24 @@ public class NavigationInfoCaptureTriggerTest {
     @Test
     @Feature({"CustomTabs"})
     public void testDelayedOnload() {
-        mTrigger.onFirstMeaningfulPaint(null);
+        mTrigger.onFirstMeaningfulPaint(mTab);
         verifyCaptured(0);
 
-        mTrigger.onLoadFinished(null);
+        mTrigger.onLoadFinished(mTab);
         verifyCaptured(1);
 
-        mTrigger.onHide(null);
+        mTrigger.onHide(mTab);
         verifyCaptured(1);
     }
 
     /**
-     * Tests the flow where first meaningful paint and onload don't occur and we capture during
-     * on hide as a backup.
+     * Tests the flow where first meaningful paint and onload don't occur and we capture during on
+     * hide as a backup.
      */
     @Test
     @Feature({"CustomTabs"})
     public void testOnHide() {
-        mTrigger.onHide(null);
+        mTrigger.onHide(mTab);
         verifyCaptured(1);
     }
 
@@ -96,7 +98,7 @@ public class NavigationInfoCaptureTriggerTest {
     @Test
     @Feature({"CustomTabs"})
     public void testBackupOnload() {
-        mTrigger.onLoadFinished(null);
+        mTrigger.onLoadFinished(mTab);
 
         ShadowLooper.idleMainLooper(2, TimeUnit.SECONDS);
         verify(mDelegate, times(0)).onResult(any());
@@ -108,8 +110,8 @@ public class NavigationInfoCaptureTriggerTest {
     @Test
     @Feature({"CustomTabs"})
     public void testCancelOnNavigation() {
-        mTrigger.onLoadFinished(null);
-        mTrigger.onFirstMeaningfulPaint(null);
+        mTrigger.onLoadFinished(mTab);
+        mTrigger.onFirstMeaningfulPaint(mTab);
 
         mTrigger.onNewNavigation();
         verifyCaptured(0);
@@ -118,7 +120,6 @@ public class NavigationInfoCaptureTriggerTest {
     /** Tests that navigation resets the state. */
     @Test
     @Feature({"CustomTabs"})
-    @SuppressWarnings("unchecked")
     public void testResetOnNavigation() {
         testNormalFlow();
 
@@ -137,9 +138,9 @@ public class NavigationInfoCaptureTriggerTest {
     @Test
     @Feature({"CustomTabs"})
     public void testMultipleFmps() {
-        mTrigger.onLoadFinished(null);
-        mTrigger.onFirstMeaningfulPaint(null);
-        mTrigger.onFirstMeaningfulPaint(null);
+        mTrigger.onLoadFinished(mTab);
+        mTrigger.onFirstMeaningfulPaint(mTab);
+        mTrigger.onFirstMeaningfulPaint(mTab);
         verifyCaptured(1);
     }
 

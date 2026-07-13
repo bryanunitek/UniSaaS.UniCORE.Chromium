@@ -457,7 +457,9 @@ class MockHostResolverBase::ServiceEndpointRequestImpl
     return nullptr;
   }
 
-  bool IsStaleWhileRefresing() const override { return false; }
+  bool IsStaleWhileRefreshing() const override {
+    return resolver_ ? resolver_->is_stale_while_refreshing_ : false;
+  }
 
   void ChangeRequestPriority(RequestPriority priority) override {
     priority_ = priority;
@@ -1179,7 +1181,8 @@ int MockHostResolverBase::ResolveFromIPLiteralOrCache(
         source == HostResolverSource::LOCAL_ONLY ? HostResolverSource::ANY
                                                  : source;
     HostCache::Key key(GetCacheHost(endpoint), dns_query_type, flags,
-                       effective_source, network_anonymization_key);
+                       effective_source, network_anonymization_key,
+                       handles::kInvalidNetworkHandle);
     const std::pair<const HostCache::Key, HostCache::Entry>* cache_result;
     HostCache::EntryStaleness stale_info = HostCache::kNotStale;
     if (cache_usage ==
@@ -1248,7 +1251,8 @@ int MockHostResolverBase::DoSynchronousResolution(RequestBase& request) {
     HostCache::Key key(
         GetCacheHost(request.request_endpoint()),
         request.parameters().dns_query_type, request.host_resolver_flags(),
-        request.parameters().source, request.network_anonymization_key());
+        request.parameters().source, request.network_anonymization_key(),
+        handles::kInvalidNetworkHandle);
     // Storing a failure with TTL 0 so that it overwrites previous value.
     base::TimeDelta ttl;
     if (error == OK) {

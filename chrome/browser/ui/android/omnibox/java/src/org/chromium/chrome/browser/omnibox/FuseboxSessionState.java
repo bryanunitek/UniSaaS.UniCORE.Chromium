@@ -10,7 +10,6 @@ import org.chromium.base.Callback;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.UserData;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
-import org.chromium.base.supplier.OneShotCallback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridge;
@@ -19,9 +18,11 @@ import org.chromium.chrome.browser.omnibox.fusebox.FuseboxAttachmentModelList.Fu
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxMetrics;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteController;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.metrics.OmniboxEventProtos.OmniboxEventProto.PageClassification;
 import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.AutocompleteInput.AutocompleteState;
 import org.chromium.components.omnibox.AutocompleteRequestType;
 import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxFeatures;
@@ -29,6 +30,7 @@ import org.chromium.components.omnibox.OmniboxFocusReason;
 import org.chromium.components.omnibox.TextSelection;
 import org.chromium.components.omnibox.ToolModeUtils;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.url.GURL;
 
 import java.util.Optional;
 
@@ -77,7 +79,8 @@ public class FuseboxSessionState implements UserData {
     private @Nullable ComposeboxQueryControllerBridge mComposeBoxQueryControllerBridge;
     protected @Nullable AutocompleteController mAutocomplete;
     private @Nullable FuseboxAttachmentModelList mFuseboxAttachmentModelList;
-    private @Nullable OneShotCallback<Profile> mPendingProfileCallback;
+    private @Nullable Callback<Profile> mPendingProfileCallback;
+    private @Nullable MonotonicObservableSupplier<Profile> mProfileSupplier;
     private @Nullable WebContents mWebContents;
     private boolean mIsActive;
 
@@ -142,6 +145,7 @@ public class FuseboxSessionState implements UserData {
             MonotonicObservableSupplier<Profile> profileSupplier,
             @Nullable Runnable onFullyActivated) {
         mWebContents = webContents;
+        mProfileSupplier = profileSupplier;
         if (mIsActive) {
             // This session is being re-activated. It has already been fully initialized so simply
             // emit the event.
@@ -157,9 +161,16 @@ public class FuseboxSessionState implements UserData {
         // On eligible LFF devices the Omnibox should, by default, present the
         // current page URL (if the URL is eligible for display).
         if (OmniboxCapabilities.hasDesktopExperience(context)
-                && UrlBarData.shouldShowUrl(mAutocompleteInput.getPageUrl(), false)) {
-            var editUrl = UrlUtilities.stripScheme(mAutocompleteInput.getPageUrl().getSpec());
-            mAutocompleteInput.setInitialUserText(editUrl);
+                && UrlBarData.shouldShowUrl(
+                        mAutocompleteInput.getPageUrl(), /* isOffTheRecord= */ false)) {
+            GURL pageUrl = mAutocompleteInput.getPageUrl();
+            String initialUserText = pageUrl.getSpec();
+            // Roughly mirror UrlFormatter#formatUrlForDisplayOmitScheme().
+            initialUserText = UrlUtilities.stripScheme(initialUserText);
+            if (canStripTrailingSlash(pageUrl)) {
+                initialUserText = UrlUtilities.stripTrailingSlash(initialUserText);
+            }
+            mAutocompleteInput.setInitialUserText(initialUserText);
         } else {
             mAutocompleteInput.setInitialUserText("");
         }
@@ -169,7 +180,9 @@ public class FuseboxSessionState implements UserData {
                 && mAutocompleteInput.getPageClassification()
                         != PageClassification.ANDROID_SEARCH_WIDGET_VALUE
                 && mAutocompleteInput.getPageClassification()
-                        != PageClassification.ANDROID_SHORTCUTS_WIDGET_VALUE) {
+                        != PageClassification.ANDROID_SHORTCUTS_WIDGET_VALUE
+                && mAutocompleteInput.getPageClassification()
+                        != PageClassification.ANDROID_HUB_VALUE) {
             mAutocompleteInput
                     .setUserText(mAutocompleteInput.getInitialUserText())
                     .setSelection(
@@ -184,9 +197,8 @@ public class FuseboxSessionState implements UserData {
         // requesting multiple session controllers.
         if (mPendingProfileCallback != null) return;
 
-        mPendingProfileCallback =
-                new OneShotCallback<>(
-                        profileSupplier, p -> setUpSessionControllers(p, onFullyActivated));
+        mPendingProfileCallback = p -> setUpSessionControllers(p, onFullyActivated);
+        profileSupplier.addSyncObserverAndCallIfNonNull(mPendingProfileCallback);
     }
 
     /**
@@ -198,6 +210,13 @@ public class FuseboxSessionState implements UserData {
         if (!mIsActive) return;
 
         mAutocompleteInput.reset();
+        mAutocompleteInput.setAutocompleteState(AutocompleteState.DISABLED);
+
+        if (mProfileSupplier != null && mPendingProfileCallback != null) {
+            mProfileSupplier.removeObserver(mPendingProfileCallback);
+            mPendingProfileCallback = null;
+        }
+
         tearDownSessionControllers();
         mWebContents = null;
         mIsActive = false;
@@ -211,7 +230,10 @@ public class FuseboxSessionState implements UserData {
      */
     private void setUpSessionControllers(Profile profile, @Nullable Runnable onFullyActivated) {
         // Record the event that we're not waiting for profile anymore.
-        mPendingProfileCallback = null;
+        if (mProfileSupplier != null && mPendingProfileCallback != null) {
+            mProfileSupplier.removeObserver(mPendingProfileCallback);
+            mPendingProfileCallback = null;
+        }
 
         // If the session became inactive while we wait for the profile - don't accept the new
         // profile.
@@ -285,6 +307,7 @@ public class FuseboxSessionState implements UserData {
         mAutocomplete = null;
         mMetrics = null;
         mProfile = null;
+        mProfileSupplier = null;
     }
 
     private void linkSessionControllers() {
@@ -370,5 +393,14 @@ public class FuseboxSessionState implements UserData {
     /** Revert all overrides for testing. */
     public static void resetInstanceForTesting() {
         sInstanceForTesting = null;
+    }
+
+    private static boolean canStripTrailingSlash(GURL url) {
+        return url.isValid()
+                && !url.getScheme().equals(UrlConstants.FILE_SCHEME)
+                && !url.getScheme().equals(UrlConstants.FILESYSTEM_SCHEME)
+                && url.getQuery().isEmpty()
+                && url.getRef().isEmpty()
+                && url.getPath().equals("/");
     }
 }

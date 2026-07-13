@@ -8,7 +8,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.about_settings.AboutChromeSettings;
 import org.chromium.chrome.browser.about_settings.LegalInformationSettings;
 import org.chromium.chrome.browser.appearance.settings.AppearanceSettingsFragment;
-import org.chromium.chrome.browser.autofill.options.AutofillOptionsFragment;
 import org.chromium.chrome.browser.autofill.settings.AndroidPaymentAppsFragment;
 import org.chromium.chrome.browser.autofill.settings.AutofillBuyNowPayLaterFragment;
 import org.chromium.chrome.browser.autofill.settings.AutofillCardBenefitsFragment;
@@ -20,6 +19,8 @@ import org.chromium.chrome.browser.autofill.settings.AutofillTravelFragment;
 import org.chromium.chrome.browser.autofill.settings.FinancialAccountsManagementFragment;
 import org.chromium.chrome.browser.autofill.settings.HomeOfTransactionsFragment;
 import org.chromium.chrome.browser.autofill.settings.NonCardPaymentMethodsManagementFragment;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
+import org.chromium.chrome.browser.autofill.settings.personal_context.AutofillPersonalContextFragment;
 import org.chromium.chrome.browser.browsing_data.ClearBrowsingDataFragment;
 import org.chromium.chrome.browser.commerce.PriceNotificationSettingsFragment;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchSettingsFragment;
@@ -134,6 +135,7 @@ public final class SearchIndexProviderRegistry {
                     AutofillBuyNowPayLaterFragment.SEARCH_INDEX_DATA_PROVIDER,
                     AutofillCardBenefitsFragment.SEARCH_INDEX_DATA_PROVIDER,
                     AutofillIdentityDocsFragment.SEARCH_INDEX_DATA_PROVIDER,
+                    AutofillPersonalContextFragment.SEARCH_INDEX_DATA_PROVIDER,
                     AutofillPaymentMethodsFragment.SEARCH_INDEX_DATA_PROVIDER,
                     AutofillProfilesFragment.SEARCH_INDEX_DATA_PROVIDER,
                     AutofillShoppingFragment.SEARCH_INDEX_DATA_PROVIDER,

@@ -7,6 +7,7 @@
 #include <tuple>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/numerics/safe_conversions.h"
@@ -166,25 +167,24 @@ void PluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
   if (response_head->mime_type == pdf::kPDFMimeType) {
     // A generic MIME handler extension called
     // chrome.mimeHandler.abortAndFallbackToNativeHandler() on a prior
-    // navigation for this embedder frame. Peek (not consume) at the
-    // fallback mark so the aborted extension does not re-claim its own
-    // response across the whole redirect chain -- the mark is cleared in
-    // `DidFinishNavigation()` once the re-fetch settles. Route the
-    // application/pdf response to the user agent's built-in PDF viewer.
-    // When the prior stream buffered the response body, take it now and
-    // replay it below instead of re-reading the reload's network body.
-    // The cached body is consumable only by the OOPIF PDF stream
-    // pipeline; the legacy MimeHandlerView GuestView path has no hook
-    // for a pre-fetched body pipe, so leave the pipe parked and let the
-    // reload re-fetch from the network.
+    // navigation for this embedder frame. Peek (not consume) at the fallback
+    // mark so the aborted extension does not re-claim its own response on
+    // reload -- the mark is cleared in `DidFinishNavigation()` once the
+    // re-fetch settles. Route the application/pdf response to the user agent's
+    // built-in PDF viewer. When the prior stream buffered the response body,
+    // take it now and replay it below instead of re-reading the reload's
+    // network body. The cached body is consumable only by the OOPIF PDF stream
+    // pipeline; the legacy MimeHandlerView GuestView path has no hook for a
+    // pre-fetched body pipe, so leave the pipe parked and let the reload
+    // re-fetch from the network.
     auto* stream_manager =
         MimeHandlerStreamManager::FromWebContents(web_contents);
-    if (stream_manager &&
-        stream_manager->IsPendingNativeFallback(frame_tree_node_id_)) {
+    if (stream_manager && stream_manager->IsPendingNativeFallback(
+                              frame_tree_node_id_, response_url)) {
       extension_id = extension_misc::kPdfExtensionId;
       if (chrome_pdf::features::IsOopifPdfEnabled()) {
-        cached_body =
-            stream_manager->TakeCachedFallbackBody(frame_tree_node_id_);
+        cached_body = stream_manager->TakeCachedFallbackBody(
+            frame_tree_node_id_, response_url);
       }
     }
   }
@@ -281,7 +281,7 @@ void PluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
            producer_handle->WriteAllData(base::as_byte_span(payload)));
 
   network::URLLoaderCompletionStatus status(net::OK);
-  status.decoded_body_length = base::checked_cast<int64_t>(payload.size());
+  status.decoded_body_length = base::ByteSize(payload.size());
   new_client->OnComplete(status);
 
   mojo::PendingRemote<network::mojom::URLLoader> original_loader;
@@ -348,13 +348,14 @@ void PluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
     // responses).
     network::URLLoaderCompletionStatus completion_status(net::OK);
     completion_status.decoded_body_length =
-        base::checked_cast<int64_t>(cached_body->decoded_body_size);
+        base::ByteSize(cached_body->decoded_body_size);
     if (response_head->content_length >= 0) {
-      completion_status.encoded_body_length = response_head->content_length;
+      completion_status.encoded_body_length =
+          base::ByteSize(base::as_unsigned(response_head->content_length));
     }
     if (response_head->encoded_data_length >= 0) {
       completion_status.encoded_data_length =
-          response_head->encoded_data_length;
+          base::ByteSize(base::as_unsigned(response_head->encoded_data_length));
     }
     completion_client->OnComplete(completion_status);
   } else {

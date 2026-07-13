@@ -21,7 +21,6 @@ source_set("optimization_guide") {
     "optimization_guide_web_contents_observer.h",
     "prediction/chrome_profile_download_service_tracker.h",
     "prediction/prediction_model_download_client.h",
-    "private_ai_model_execution_fetcher.h",
   ]
   public_deps = [
     "//base",
@@ -68,7 +67,6 @@ source_set("impl") {
     "optimization_guide_web_contents_observer.cc",
     "prediction/chrome_profile_download_service_tracker.cc",
     "prediction/prediction_model_download_client.cc",
-    "private_ai_model_execution_fetcher.cc",
   ]
   public_deps = [ "//chrome/browser:browser_public_dependencies" ]
   deps = [
@@ -83,11 +81,10 @@ source_set("impl") {
     "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/signin",
     "//chrome/browser/sync",
+    "//components/component_updater/installer_policies:installer_policies_with_content_deps",
     "//components/metrics_services_manager",
     "//components/no_state_prefetch/browser",
     "//components/private_ai",
-    "//components/private_ai:proto",
-    "//components/private_ai/phosphor",
     "//components/user_prefs",
     "//components/variations",
     "//components/variations/service",
@@ -97,6 +94,7 @@ source_set("impl") {
   if (is_android) {
     deps += [
       "//base",
+      "//chrome/browser/commerce/price_tracking/android:price_tracking_notification_bridge",
       "//chrome/browser/optimization_guide/android:jni_headers",
       "//chrome/browser/optimization_guide/android:native",
     ]
@@ -116,6 +114,7 @@ source_set("optimization_guide_on_device_model_installer") {
 
   deps = [
     "//base",
+    "//build:branding_buildflags",
     "//chrome/browser:browser_process",
     "//components/component_updater",
     "//components/crx_file",
@@ -162,6 +161,7 @@ if (!is_android) {
       "model_execution/model_execution_browsertest.cc",
       "model_execution/model_execution_live_test.cc",
       "model_execution/model_execution_validation_browsertest.cc",
+      "model_execution/on_device_model_browsertest.cc",
       "optimization_guide_keyed_service_browsertest.cc",
       "optimization_guide_tab_url_provider_browsertest.cc",
       "prediction/prediction_manager_browsertest.cc",
@@ -195,7 +195,6 @@ source_set("unit_tests") {
     "chrome_model_quality_logs_uploader_service_unittest.cc",
     "model_execution/optimization_guide_global_state_unittest.cc",
     "prediction/chrome_profile_download_service_tracker_unittest.cc",
-    "private_ai_model_execution_fetcher_unittest.cc",
   ]
   deps = [
     ":optimization_guide",
@@ -204,9 +203,6 @@ source_set("unit_tests") {
     "//components/component_updater:test_support",
     "//components/optimization_guide/core:test_support",
     "//components/prefs:test_support",
-    "//components/private_ai",
-    "//components/private_ai:proto",
-    "//components/private_ai:testing",
     "//components/unified_consent",
     "//components/variations:test_support",
   ]

@@ -627,6 +627,46 @@ TEST_F(FormInputAccessoryMediatorTest, DidSelectSuggestion_NoReauth) {
   EXPECT_OCMOCK_VERIFY(formInputSuggestionProviderMock);
 }
 
+// Tests that selecting a suggestion after disconnect does not trigger anything
+// and does not forward to the provider.
+TEST_F(FormInputAccessoryMediatorTest, DidSelectSuggestion_AfterDisconnect) {
+  id formInputSuggestionProviderMock =
+      OCMProtocolMock(@protocol(FormInputSuggestionsProvider));
+  [mediator_ injectCurrentProvider:formInputSuggestionProviderMock];
+
+  FormActivityParams params = CreateFormActivityParams(/*field_type=*/"text");
+  TestFormSuggestionProvider* testSuggestionProvider =
+      [[TestFormSuggestionProvider alloc] init];
+  [testSuggestionProvider
+      setType:SuggestionProviderType::SuggestionProviderTypeAutofill];
+  FormSuggestion* suggestion = [FormSuggestion
+      suggestionWithValue:@"value"
+       displayDescription:@"display-description"
+                     icon:nil
+                     type:autofill::SuggestionType::kCreditCardEntry
+                  payload:autofill::Suggestion::Payload()
+           requiresReauth:NO];
+  suggestion = [FormSuggestion copy:suggestion
+                       andSetParams:params
+                           provider:testSuggestionProvider];
+
+  const NSInteger suggestionIndex = 0;
+
+  // Disconnect the mediator first.
+  [mediator_ disconnect];
+
+  // We reject any calls to didSelectSuggestion on the provider.
+  [[formInputSuggestionProviderMock reject] didSelectSuggestion:[OCMArg any]
+                                                        atIndex:suggestionIndex
+                                                     completion:[OCMArg any]];
+
+  [mediator_ didSelectSuggestion:suggestion
+                         atIndex:suggestionIndex
+                      completion:nil];
+
+  EXPECT_OCMOCK_VERIFY(formInputSuggestionProviderMock);
+}
+
 // Tests that suggestion refreshes triggered by `keyboardWillShow` are not
 // throttled when none of the feature flags are enabled.
 // The relationship of the two feature flags used in this test and a few other
@@ -798,4 +838,34 @@ TEST_F(FormInputAccessoryMediatorTest, keyboardWillShowRefresh_Suppressed) {
 
   task_environment_.FastForwardBy(kDelayForAcceptingOptionalUpdates);
   EXPECT_EQ(count, 0);
+}
+// Tests that shouldShowRPId returns YES if and only if the suggestion RP ID
+// does not match the active WebState's host.
+TEST_F(FormInputAccessoryMediatorTest, ShouldShowRPId) {
+  FormInputAccessoryMediator* mediator =
+      [[FormInputAccessoryMediator alloc] initWithConsumer:consumer_
+                                                   handler:handler_
+                                              webStateList:&web_state_list_
+                                       personalDataManager:nullptr
+                                      profilePasswordStore:nullptr
+                                      accountPasswordStore:nullptr
+                                      securityAlertHandler:nil
+                                    reauthenticationModule:nil
+                                         engagementTracker:nullptr];
+  [mediator injectWebState:GetActiveFakeWebState()];
+
+  // Set active web state host.
+  GetActiveFakeWebState()->SetCurrentURL(GURL("https://foo.com/login"));
+
+  // Same origin should return NO.
+  EXPECT_FALSE([mediator shouldShowRPId:@"foo.com"]);
+
+  // Different origin should return YES.
+  EXPECT_TRUE([mediator shouldShowRPId:@"bar.com"]);
+
+  // Empty or nil cases should return NO.
+  EXPECT_FALSE([mediator shouldShowRPId:@""]);
+  EXPECT_FALSE([mediator shouldShowRPId:nil]);
+
+  [mediator disconnect];
 }

@@ -185,7 +185,7 @@ IN_PROC_BROWSER_TEST_F(SidePanelInteractiveTest, SidePanelNotShownOnPwa) {
                   true));
 
   // Install an app using second_tab_url.
-  auto app_id = web_app::test::InstallDummyWebApp(browser()->profile(),
+  auto app_id = web_app::test::InstallDummyWebApp(browser()->GetProfile(),
                                                   "App Name", second_tab_url);
 
   // Move second_tab contents to app, simulating open pwa from omnibox intent
@@ -288,7 +288,7 @@ class PinnedSidePanelInteractiveTest : public InteractiveFeaturePromoTest {
   void SetUpOnMainThread() override {
     InteractiveFeaturePromoTest::SetUpOnMainThread();
     PinnedToolbarActionsModel* const actions_model =
-        PinnedToolbarActionsModel::Get(browser()->profile());
+        PinnedToolbarActionsModel::Get(browser()->GetProfile());
     actions_model->UpdatePinnedState(kActionShowChromeLabs, false);
     actions_model->UpdatePinnedState(kActionTabSearch, false);
     views::test::WaitForAnimatingLayoutManager(
@@ -501,7 +501,7 @@ IN_PROC_BROWSER_TEST_F(
       /*default_content_width_callback=*/base::NullCallback()));
 
   PinnedToolbarActionsModel* const actions_model =
-      PinnedToolbarActionsModel::Get(browser()->profile());
+      PinnedToolbarActionsModel::Get(browser()->GetProfile());
 
   actions_model->UpdatePinnedState(kActionSidePanelShowBookmarks, true);
 
@@ -801,4 +801,44 @@ IN_PROC_BROWSER_TEST_F(SidePanelAnimationPerfUiTest,
              },
              testing::Gt(0), "Check fps is nonzero.")),
          Else(Log("Compositor failed to render during test."))));
+}
+
+IN_PROC_BROWSER_TEST_F(PinnedSidePanelInteractiveTest,
+                       PinActiveItemHighlightsButton) {
+  auto* registry = SidePanelRegistry::From(browser());
+  auto* entry = registry->GetEntryForKey(SidePanelEntry::Key(SidePanelEntryId::kReadingList));
+  ASSERT_TRUE(entry);
+  entry->set_should_show_ephemerally_in_toolbar(false);
+
+  RunTestSequence(
+      // Ensure the side panel isn't open and action is not pinned.
+      EnsureNotPresent(kSidePanelElementId),
+      CheckActionPinnedToToolbar(kActionSidePanelShowReadingList, false),
+
+      // Open reading list side panel.
+      ShowSidePanelForKey(SidePanelEntryKey(SidePanelEntry::Id::kReadingList)),
+      WaitForShow(kSidePanelElementId),
+
+      // Since ephemeral is disabled, no button for reading list should be added
+      // yet.
+      CheckActionPinnedToToolbar(kActionSidePanelShowReadingList, false),
+
+      // Pin reading list action.
+      Do(([&]() {
+        PinnedToolbarActionsModel::Get(browser()->GetProfile())
+            ->UpdatePinnedState(kActionSidePanelShowReadingList, true);
+      })),
+
+      // Verify it is pinned and highlighted immediately.
+      CheckActionPinnedToToolbar(kActionSidePanelShowReadingList, true),
+      CheckPinnedToolbarActionsContainerChildInkDropState(0, true),
+
+      // Unpin reading list action while open.
+      Do(([&]() {
+        PinnedToolbarActionsModel::Get(browser()->GetProfile())
+            ->UpdatePinnedState(kActionSidePanelShowReadingList, false);
+      })),
+
+      // Verify it is no longer pinned and is removed from the toolbar.
+      CheckActionPinnedToToolbar(kActionSidePanelShowReadingList, false));
 }

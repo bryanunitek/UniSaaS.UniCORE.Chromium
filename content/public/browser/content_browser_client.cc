@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
@@ -49,6 +50,7 @@
 #include "content/public/browser/process_selection_deferring_condition.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/responsiveness_calculator_delegate.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/sms_fetcher.h"
 #include "content/public/browser/tracing_delegate.h"
 #include "content/public/browser/url_loader_request_interceptor.h"
@@ -71,6 +73,7 @@
 #include "net/ssl/client_cert_store.h"
 #include "sandbox/policy/features.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
+#include "sandbox/policy/switches.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/device/public/cpp/geolocation/location_provider.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
@@ -179,7 +182,7 @@ bool ContentBrowserClient::IsExplicitNavigation(ui::PageTransition transition) {
 
 bool ContentBrowserClient::ShouldUseProcessPerSite(
     BrowserContext* browser_context,
-    const GURL& site_url) {
+    const SecurityPrincipal& security_principal) {
   DCHECK(browser_context);
   return false;
 }
@@ -306,8 +309,9 @@ bool ContentBrowserClient::ShouldStayInParentProcessForNTP(
   return false;
 }
 
-bool ContentBrowserClient::IsSuitableHost(RenderProcessHost* process_host,
-                                          const GURL& site_url) {
+bool ContentBrowserClient::IsSuitableHost(
+    RenderProcessHost* process_host,
+    const SecurityPrincipal& security_principal) {
   return true;
 }
 
@@ -426,6 +430,12 @@ bool ContentBrowserClient::IsInitialWebUIURL(const GURL& url) {
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 bool ContentBrowserClient::IsTopChromeWebUIURL(const GURL& url) {
+  return false;
+}
+
+bool ContentBrowserClient::ShouldAllowMojoJsBindingsForSite(
+    BrowserContext* browser_context,
+    const GURL& site_url) {
   return false;
 }
 
@@ -1156,8 +1166,16 @@ bool ContentBrowserClient::WillInterceptWebSocket(RenderFrameHost*) {
   return false;
 }
 
-uint32_t ContentBrowserClient::GetWebSocketOptions(RenderFrameHost* frame) {
-  return network::mojom::kWebSocketOptionNone;
+ContentBrowserClient::WebSocketOptions::WebSocketOptions() = default;
+ContentBrowserClient::WebSocketOptions::~WebSocketOptions() = default;
+ContentBrowserClient::WebSocketOptions::WebSocketOptions(WebSocketOptions&&) =
+    default;
+
+ContentBrowserClient::WebSocketOptions
+ContentBrowserClient::GetWebSocketOptions(RenderFrameHost* frame) {
+  ContentBrowserClient::WebSocketOptions options;
+  options.options = network::mojom::kWebSocketOptionNone;
+  return options;
 }
 
 void ContentBrowserClient::CreateWebSocket(
@@ -1167,7 +1185,8 @@ void ContentBrowserClient::CreateWebSocket(
     const net::SiteForCookies& site_for_cookies,
     const std::optional<std::string>& user_agent,
     mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
-        handshake_client) {
+        handshake_client,
+    ContentBrowserClient::WebSocketOptions options) {
   // NOTREACHED because WillInterceptWebSocket returns false.
   NOTREACHED();
 }
@@ -1303,6 +1322,10 @@ UsbDelegate* ContentBrowserClient::GetUsbDelegate() {
   return nullptr;
 }
 
+SensorDelegate* ContentBrowserClient::GetSensorDelegate() {
+  return nullptr;
+}
+
 FontAccessDelegate* ContentBrowserClient::GetFontAccessDelegate() {
   return nullptr;
 }
@@ -1421,6 +1444,11 @@ bool ContentBrowserClient::ShouldSandboxAudioService() {
 
 bool ContentBrowserClient::ShouldSandboxNetworkService() {
   return sandbox::policy::features::IsNetworkSandboxEnabled();
+}
+
+bool ContentBrowserClient::ShouldSandboxWebNNCompilerService() {
+  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
+      sandbox::policy::switches::kDisableWebNNCompilerSandbox);
 }
 
 bool ContentBrowserClient::ShouldRunOutOfProcessSystemDnsResolution() {
@@ -1806,6 +1834,13 @@ RenderFrameHost* ContentBrowserClient::GetPostMessageTargetOverride(
     const url::Origin& source_origin,
     const std::optional<url::Origin>& target_origin) {
   return nullptr;
+}
+
+bool ContentBrowserClient::IsSecureContextRoot(
+    RenderFrameHost* parent_frame,
+    FrameTreeNodeId frame_tree_node_id,
+    const GURL& url) {
+  return false;
 }
 
 bool ContentBrowserClient::IsCrossOriginSubframeAllowedToShowFilePicker(

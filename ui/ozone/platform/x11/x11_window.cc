@@ -14,6 +14,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
+#include "base/nix/xdg_util.h"
 #include "net/base/network_interfaces.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkRegion.h"
@@ -264,8 +265,23 @@ X11Window::~X11Window() {
   Close();
 }
 
+base::WeakPtr<X11Window> X11Window::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void X11Window::Initialize(PlatformWindowInitProperties properties) {
   CreateXWindow(properties);
+
+  std::string startup_id = properties.startup_id;
+  if (startup_id.empty()) {
+    if (auto token = base::nix::TakeXdgActivationToken()) {
+      startup_id = token.value();
+    }
+  }
+  if (!startup_id.empty()) {
+    connection_->SetStringProperty(xwindow_, x11::GetAtom("_NET_STARTUP_ID"),
+                                   x11::Atom::STRING, startup_id);
+  }
 
   // It can be a status icon window.  If it fails to initialize, don't provide
   // it with a native window handle, close ourselves and let the client destroy
@@ -641,6 +657,10 @@ void X11Window::SetTitle(const std::u16string& title) {
                                  x11::GetAtom("UTF8_STRING"), utf8str);
   connection_->SetStringProperty(xwindow_, x11::Atom::WM_NAME,
                                  x11::GetAtom("UTF8_STRING"), utf8str);
+  connection_->SetStringProperty(xwindow_, x11::Atom::WM_ICON_NAME,
+                                 x11::Atom::STRING, utf8str);
+  connection_->SetStringProperty(xwindow_, x11::GetAtom("_NET_WM_ICON_NAME"),
+                                 x11::GetAtom("UTF8_STRING"), utf8str);
 }
 
 void X11Window::SetCapture() {
@@ -838,6 +858,11 @@ PlatformWindowState X11Window::GetPlatformWindowState() const {
 void X11Window::Activate() {
   if (!IsVisible() || !activatable_) {
     return;
+  }
+
+  if (auto token = base::nix::TakeXdgActivationToken()) {
+    connection_->SetStringProperty(xwindow_, x11::GetAtom("_NET_STARTUP_ID"),
+                                   x11::Atom::STRING, token.value());
   }
 
   BeforeActivationStateChanged();
@@ -1416,7 +1441,11 @@ uint32_t X11Window::DispatchEvent(const PlatformEvent& event) {
   auto& current_xevent = *connection_->dispatching_event();
 
   if (event->IsMouseEvent()) {
+    auto weak_this = weak_ptr_factory_.GetWeakPtr();
     X11WindowManager::GetInstance()->MouseOnWindow(this);
+    if (!weak_this) {
+      return POST_DISPATCH_STOP_PROPAGATION;
+    }
   }
 #if BUILDFLAG(USE_ATK)
   if (HandleAsAtkEvent(current_xevent)) {
@@ -1458,6 +1487,8 @@ void X11Window::DispatchUiEvent(ui::Event* event, const x11::Event& xev) {
   auto* located_events_grabber = window_manager->located_events_grabber();
   if (event->IsLocatedEvent() && located_events_grabber &&
       located_events_grabber != this) {
+    base::WeakPtr<X11Window> weak_grabber =
+        located_events_grabber->GetWeakPtr();
     if (event->IsMouseEvent() ||
         (event->IsTouchEvent() &&
          event->type() == ui::EventType::kTouchPressed)) {
@@ -1465,17 +1496,23 @@ void X11Window::DispatchUiEvent(ui::Event* event, const x11::Event& xev) {
       // event's location and dispatch to the other.
       const gfx::Point target_origin =
           located_events_grabber->GetBoundsInPixels().origin();
-      if (!weak_this) {
+      if (!weak_this || !weak_grabber ||
+          window_manager->located_events_grabber() != weak_grabber.get()) {
         return;
       }
       const gfx::Point current_origin = GetBoundsInPixels().origin();
-      if (!weak_this) {
+      if (!weak_this || !weak_grabber ||
+          window_manager->located_events_grabber() != weak_grabber.get()) {
         return;
       }
       ConvertEventLocationToTargetWindowLocation(target_origin, current_origin,
                                                  event->AsLocatedEvent());
     }
-    return located_events_grabber->DispatchUiEvent(event, xev);
+    if (weak_grabber &&
+        window_manager->located_events_grabber() == weak_grabber.get()) {
+      weak_grabber->DispatchUiEvent(event, xev);
+    }
+    return;
   }
 
   // If after CoalescePendingMotionEvents the type of xev is resolved to
@@ -1733,17 +1770,28 @@ int X11Window::UpdateDrag(const gfx::Point& connection_point) {
       XDragDropClient::GetForWindow(target_current_context->source_window());
   gfx::PointF local_point_in_dip =
       platform_window_delegate_->ConvertScreenPointToLocalDIP(connection_point);
+  base::WeakPtr<X11Window> alive = weak_ptr_factory_.GetWeakPtr();
   if (!notified_enter_) {
     drop_handler->OnDragEnter(local_point_in_dip, suggested_operations,
                               GetKeyModifiers(source_client));
+    if (!alive) {
+      return DragDropTypes::DRAG_NONE;
+    }
 
     // TODO(crbug.com/40073696): Factor DataFetched out of Enter callback.
     drop_handler->OnDragDataAvailable(std::move(data));
+    if (!alive) {
+      return DragDropTypes::DRAG_NONE;
+    }
 
     notified_enter_ = true;
   }
-  allowed_drag_operations_ = drop_handler->OnDragMotion(
+  int allowed_operations = drop_handler->OnDragMotion(
       local_point_in_dip, suggested_operations, GetKeyModifiers(source_client));
+  if (!alive) {
+    return DragDropTypes::DRAG_NONE;
+  }
+  allowed_drag_operations_ = allowed_operations;
   return allowed_drag_operations_;
 }
 
@@ -1767,7 +1815,11 @@ void X11Window::OnBeforeDragLeave() {
   if (!drop_handler) {
     return;
   }
+  base::WeakPtr<X11Window> alive = weak_ptr_factory_.GetWeakPtr();
   drop_handler->OnDragLeave();
+  if (!alive) {
+    return;
+  }
   notified_enter_ = false;
 }
 
@@ -1782,8 +1834,12 @@ DragOperation X11Window::PerformDrop() {
     return DragOperation::kNone;
   }
 
+  base::WeakPtr<X11Window> alive = weak_ptr_factory_.GetWeakPtr();
   drop_handler->OnDragDrop(GetKeyModifiers(
       XDragDropClient::GetForWindow(target_current_context->source_window())));
+  if (!alive) {
+    return DragOperation::kNone;
+  }
   notified_enter_ = false;
   return PreferredDragOperation(allowed_drag_operations_);
 }
@@ -1820,6 +1876,10 @@ scoped_refptr<X11Cursor> X11Window::GetLastCursor() {
 
 gfx::Size X11Window::GetSize() {
   return GetBoundsInPixels().size();
+}
+
+base::WeakPtr<ui::X11DesktopWindowMoveClient::Delegate> X11Window::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void X11Window::QuitDragLoop() {
@@ -1875,16 +1935,11 @@ void X11Window::CreateXWindow(const PlatformWindowInitProperties& properties) {
                              : connection_->default_screen().white_pixel;
 
   switch (properties.type) {
-    case PlatformWindowType::kMenu:
-      req.override_redirect = x11::Bool32(true);
-      break;
-    case PlatformWindowType::kTooltip:
-      req.override_redirect = x11::Bool32(true);
-      break;
-    case PlatformWindowType::kPopup:
-      req.override_redirect = x11::Bool32(true);
-      break;
+    case PlatformWindowType::kBubble:
     case PlatformWindowType::kDrag:
+    case PlatformWindowType::kMenu:
+    case PlatformWindowType::kPopup:
+    case PlatformWindowType::kTooltip:
       req.override_redirect = x11::Bool32(true);
       break;
     default:

@@ -18,7 +18,10 @@ export function getHtml(this: ContextualTasksAppElement) {
           .darkMode="${this.darkMode_}"
           .isAiPage="${this.isAiPage_}"
           .isAimEligible="${this.isAimEligible_}"
+          .isUserSignedIn="${this.isUserSignedIn_}"
           .enableOpenInNewTabButton="${this.isAiPage_ && !this.isErrorPageVisible_}"
+          .onboardingTooltipShowing="${this.onboardingTooltipShowing_}"
+          .lensSearchTooltipShowing="${this.lensSearchTooltipShowing_}"
           @new-thread-click="${this.onNewThreadClick_}">
       </top-toolbar>
     </div>
@@ -49,9 +52,16 @@ export function getHtml(this: ContextualTasksAppElement) {
     </div>
 <if expr="not is_android">
     ${this.showOnboardingTooltip_ ? html`
-      <contextual-tasks-onboarding-tooltip id="onboardingTooltip">
+      <contextual-tasks-onboarding-tooltip id="onboardingTooltip"
+          @onboarding-tooltip-dismissed="${this.onOnboardingTooltipDismissed_}">
       </contextual-tasks-onboarding-tooltip>
     ` : ''}
+    ${this.showLensSearchTooltip_ ? html`
+      <contextual-tasks-lens-search-tooltip id="lensSearchTooltip"
+          @lens-search-tooltip-dismissed="${this.onLensSearchTooltipDismissed_}">
+      </contextual-tasks-lens-search-tooltip>
+    ` : ''}
+
     ${this.showSmartTabSharingTryItIph_ ? html`
       <contextual-tasks-banner-promo id="stsTryItPromo"
           style="${this.getBannerPromoBoundsStyles_()}"
@@ -60,12 +70,7 @@ export function getHtml(this: ContextualTasksAppElement) {
           @dismiss="${this.onStsTryItDismiss_}"
           @accept="${this.onStsTryItAccept_}">
         <span slot="header">$i18n{stsTryItHeader}</span>
-        <span slot="body">
-          $i18n{stsTryItBody}
-          <a href="chrome://settings/ai"
-              target="_blank">$i18n{stsTryItLink}</a>
-          $i18n{stsTryItBodyEnd}
-        </span>
+        <span slot="body">$i18n{stsTryItBody}</span>
       </contextual-tasks-banner-promo>
     ` : ''}
     ${this.showSmartTabSharingDefaultOnIph_ ? html`
@@ -89,7 +94,7 @@ export function getHtml(this: ContextualTasksAppElement) {
     <contextual-tasks-composebox id="composebox"
           style="${this.getComposeboxBoundsStyles()}"
           ?hidden="${this.isComposeboxHidden_()}"
-          .isZeroState="${!!this.isZeroState_}"
+          .isZeroState="${this.isZeroState_}"
           .isSidePanel="${!this.isShownInTab_}"
           .isLensOverlayShowing="${this.isLensOverlayShowing_}"
           .isOverlayOpenForAimVisualSearch="${

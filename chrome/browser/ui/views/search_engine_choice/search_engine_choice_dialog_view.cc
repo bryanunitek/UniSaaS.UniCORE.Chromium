@@ -13,6 +13,7 @@
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/search_engine_choice/search_engine_choice_tab_helper.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
@@ -71,7 +72,8 @@ void SearchEngineChoiceDialog::Show(
       &browser, boundary_dimensions_for_test, zoom_factor_for_test);
 
   SearchEngineChoiceDialogService* dialog_service =
-      SearchEngineChoiceDialogServiceFactory::GetForProfile(browser.profile());
+      SearchEngineChoiceDialogServiceFactory::GetForProfile(
+          browser.GetProfile());
   if (!dialog_service->RegisterDialog(browser,
                                       dialogView->GetCloseViewClosure())) {
     // The dialog was rejected. Abort, don't show anything.
@@ -86,7 +88,7 @@ void SearchEngineChoiceDialog::Show(
 }
 
 bool CanWindowHeightFitSearchEngineChoiceDialog(Browser& browser) {
-  int max_dialog_height = browser.window()
+  int max_dialog_height = BrowserWindow::FromBrowser(&browser)
                               ->GetWebContentsModalDialogHost()
                               ->GetMaximumDialogSize()
                               .height();
@@ -109,7 +111,7 @@ SearchEngineChoiceDialogView::SearchEngineChoiceDialogView(
 
   // Create the web view in the native dialog.
   web_view_ =
-      AddChildView(std::make_unique<views::WebView>(browser->profile()));
+      AddChildView(std::make_unique<views::WebView>(browser->GetProfile()));
 }
 
 SearchEngineChoiceDialogView::~SearchEngineChoiceDialogView() = default;
@@ -136,11 +138,11 @@ void SearchEngineChoiceDialogView::Initialize() {
     preferred_dialog_height = boundary_dimensions_for_test_->height();
   }
 
-  int max_width = browser_->window()
+  int max_width = BrowserWindow::FromBrowser(browser_)
                       ->GetWebContentsModalDialogHost()
                       ->GetMaximumDialogSize()
                       .width();
-  int max_height = browser_->window()
+  int max_height = BrowserWindow::FromBrowser(browser_)
                        ->GetWebContentsModalDialogHost()
                        ->GetMaximumDialogSize()
                        .height();

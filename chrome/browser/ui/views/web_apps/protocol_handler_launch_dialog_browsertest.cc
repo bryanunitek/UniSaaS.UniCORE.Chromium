@@ -15,7 +15,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/web_apps/protocol_handler_launch_dialog_view.h"
-#include "chrome/browser/ui/views/web_apps/sub_apps_install_dialog_controller.h"
+#include "chrome/browser/ui/views/web_apps/sub_apps/sub_apps_install_dialog_controller.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
@@ -79,7 +79,7 @@ class ProtocolHandlerLaunchDialogBrowserTest : public WebAppBrowserTestBase {
     views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
                                          "ProtocolHandlerLaunchDialogView");
     GURL protocol_url("web+test://test");
-    webapps::AppId test_app_id = InstallTestWebApp(browser()->profile());
+    webapps::AppId test_app_id = InstallTestWebApp(browser()->GetProfile());
 
     base::RunLoop run_loop;
     auto dialog_finished = base::BindLambdaForTesting(
@@ -89,7 +89,7 @@ class ProtocolHandlerLaunchDialogBrowserTest : public WebAppBrowserTestBase {
           EXPECT_EQ(expected_remember_user_choice, remember_user_choice);
         });
 
-    ShowWebAppProtocolLaunchDialog(protocol_url, browser()->profile(),
+    ShowWebAppProtocolLaunchDialog(protocol_url, browser()->GetProfile(),
                                    test_app_id, std::move(dialog_finished));
 
     waiter.WaitIfNeededAndGet()->CloseWithReason(reason);
@@ -149,8 +149,8 @@ class WebAppProtocolHandlerIntentPickerDialogInteractiveBrowserTest
     views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
                                          "ProtocolHandlerLaunchDialogView");
     GURL protocol_url("web+test://test");
-    webapps::AppId test_app_id = InstallTestWebApp(browser()->profile());
-    ShowWebAppProtocolLaunchDialog(protocol_url, browser()->profile(),
+    webapps::AppId test_app_id = InstallTestWebApp(browser()->GetProfile());
+    ShowWebAppProtocolLaunchDialog(protocol_url, browser()->GetProfile(),
                                    test_app_id, base::DoNothing());
     waiter.WaitIfNeededAndGet()->CloseWithReason(
         views::Widget::ClosedReason::kEscKeyPressed);
@@ -186,9 +186,7 @@ class ProtocolHandlerLaunchDialogIwaTest
     EXPECT_TRUE(content::ExecJs(iwa_contents,
                                 base::ReplaceStringPlaceholders(
                                     R"(
-              navigator.subApps.add({
-                "$1": {"installURL": "$1"}
-              })
+              window.subApps.add(["$1"]);
             )",
                                     {std::string(install_url)}, nullptr)));
 

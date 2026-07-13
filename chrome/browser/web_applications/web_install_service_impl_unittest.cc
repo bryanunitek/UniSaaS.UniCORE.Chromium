@@ -22,6 +22,10 @@
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/test_support/fake_message_dispatch_context.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
@@ -54,7 +58,8 @@ constexpr char kIconUrl[] = "https://example.com/app/icon.png";
 // `<install>` element, without going through either Blink entry point.
 class WebInstallServiceImplTest : public WebAppTest {
  public:
-  WebInstallServiceImplTest() {
+  WebInstallServiceImplTest()
+      : WebAppTest(WebAppTest::WithTestUrlLoaderFactory{}) {
     scoped_feature_list_.InitWithFeatures({blink::features::kWebAppInstallation,
                                            blink::features::kInstallElement},
                                           {});
@@ -163,6 +168,20 @@ class WebInstallServiceImplTest : public WebAppTest {
     page_state.valid_manifest_for_web_app = true;
     page_state.error_code = webapps::InstallableStatusCode::NO_ERROR_DETECTED;
     page_state.manifest_url = GURL(kManifestUrl);
+  }
+
+  // Calls InstallFromManifest() with the given manifest URL and waits for the
+  // mojo callback.
+  blink::mojom::WebInstallServiceResult InstallFromManifestUrl(
+      const GURL& manifest_url) {
+    auto options = blink::mojom::ManifestInstallOptions::New();
+    options->manifest_url = manifest_url;
+
+    base::test::TestFuture<blink::mojom::WebInstallServiceResult> future;
+    service_remote_->InstallFromManifest(std::move(options),
+                                         future.GetCallback());
+    EXPECT_TRUE(future.Wait());
+    return future.Get();
   }
 
  private:
@@ -337,7 +356,8 @@ TEST_F(WebInstallServiceImplTest, InstallFromElement_ElementUmaHistograms) {
 // These test the guard checks in the static factory method.
 ///////////////////////////////////////////////////////////////////////////////
 
-// CreateIfAllowed from a child iframe resets the receiver.
+// CreateIfAllowed from a child iframe reports a bad message and does not bind
+// the receiver.
 TEST_F(WebInstallServiceImplTest, CreateIfAllowed_ChildFrame) {
   content::RenderFrameHost* child_rfh =
       content::RenderFrameHostTester::For(web_contents()->GetPrimaryMainFrame())
@@ -346,17 +366,15 @@ TEST_F(WebInstallServiceImplTest, CreateIfAllowed_ChildFrame) {
   child_rfh = content::NavigationSimulator::NavigateAndCommitFromDocument(
       GURL("https://child.example.com"), child_rfh);
 
+  mojo::FakeMessageDispatchContext fake_dispatch_context;
+  mojo::test::BadMessageObserver bad_message_observer;
+
   mojo::Remote<blink::mojom::WebInstallService> remote;
   WebInstallServiceImpl::CreateIfAllowed(child_rfh,
                                          remote.BindNewPipeAndPassReceiver());
 
-  // The receiver should have been reset because the frame is not the primary
-  // main frame.
-  base::test::TestFuture<blink::mojom::WebInstallServiceResult, const GURL&>
-      future;
-  remote->Install(/*options=*/nullptr, future.GetCallback());
-  remote.FlushForTesting();
-  EXPECT_FALSE(remote.is_connected());
+  EXPECT_EQ(bad_message_observer.WaitForBadMessage(),
+            "WebInstall not allowed in subframes");
 }
 
 // CreateIfAllowed with a non-HTTP(S) scheme resets the receiver.
@@ -743,6 +761,41 @@ TEST_F(WebInstallServiceImplRateLimitTest,
 
   EXPECT_FALSE(IsInstalledWithManifestId(GURL(kCrossOriginUrl),
                                          GURL("chrome://settings")));
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// InstallFromManifest URL scheme validation tests.
+///////////////////////////////////////////////////////////////////////////////
+
+TEST_F(WebInstallServiceImplTest, InstallFromManifest_HttpRejected) {
+  BindService();
+  EXPECT_EQ(InstallFromManifestUrl(GURL("http://example.com/manifest.json")),
+            blink::mojom::WebInstallServiceResult::kDataError);
+}
+
+TEST_F(WebInstallServiceImplTest, InstallFromManifest_FileSchemeRejected) {
+  BindService();
+  EXPECT_EQ(InstallFromManifestUrl(GURL("file:///tmp/manifest.json")),
+            blink::mojom::WebInstallServiceResult::kDataError);
+}
+
+TEST_F(WebInstallServiceImplTest, InstallFromManifest_DataSchemeRejected) {
+  BindService();
+  EXPECT_EQ(
+      InstallFromManifestUrl(GURL("data:application/json,{\"name\":\"App\"}")),
+      blink::mojom::WebInstallServiceResult::kDataError);
+}
+
+TEST_F(WebInstallServiceImplTest, InstallFromManifest_BlobSchemeRejected) {
+  BindService();
+  EXPECT_EQ(InstallFromManifestUrl(GURL("blob:https://example.com/some-uuid")),
+            blink::mojom::WebInstallServiceResult::kDataError);
+}
+
+TEST_F(WebInstallServiceImplTest, InstallFromManifest_ChromeSchemeRejected) {
+  BindService();
+  EXPECT_EQ(InstallFromManifestUrl(GURL("chrome://settings/manifest.json")),
+            blink::mojom::WebInstallServiceResult::kDataError);
 }
 
 }  // namespace

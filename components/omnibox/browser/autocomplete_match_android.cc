@@ -40,7 +40,8 @@ jclass AutocompleteMatch::GetClazz(JNIEnv* env) {
 }
 
 ScopedJavaLocalRef<jobject> AutocompleteMatch::GetOrCreateJavaObject(
-    JNIEnv* env) const {
+    JNIEnv* env,
+    const TemplateURLService* template_url_service) const {
   // Short circuit if we already built the match.
   if (java_match_)
     return ScopedJavaLocalRef<jobject>(*java_match_);
@@ -105,6 +106,8 @@ ScopedJavaLocalRef<jobject> AutocompleteMatch::GetOrCreateJavaObject(
     }
   }
 
+  int starter_pack_id = static_cast<int>(StarterPackId(template_url_service));
+
   java_match_ = std::make_unique<ScopedJavaGlobalRef<jobject>>(
       Java_AutocompleteMatch_build(
           env, reinterpret_cast<intptr_t>(this), type, temp_subtypes,
@@ -121,7 +124,7 @@ ScopedJavaLocalRef<jobject> AutocompleteMatch::GetOrCreateJavaObject(
           matching_tab_group_uuid
               ? std::make_optional(matching_tab_group_uuid->AsLowercaseString())
               : std::nullopt,
-          associated_keyword, j_suggest_template));
+          associated_keyword, j_suggest_template, document_type));
 
   return ScopedJavaLocalRef<jobject>(*java_match_);
 }

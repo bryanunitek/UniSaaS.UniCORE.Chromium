@@ -233,21 +233,27 @@ bool CanRequestCredentialBypassInterstitialForOpenid4vpProtocolWithDCQL(
       continue;
     }
 
+    bool is_phone =
+        std::ranges::all_of(vct_values, CanVctValueBypassInterstitial);
+    if (is_phone && !vct_values.empty()) {
+      continue;
+    }
+
     bool is_mdl =
         format && *format == kMdocFormat && doctype_value == kMdlDocumentType;
     if (is_mdl) {
+      if (claims.empty()) {
+        return false;
+      }
       continue;
     }
 
     bool is_sdjwt = format && (*format == "dc+sd-jwt" ||
                                *format == "dc-authorization+sd-jwt");
     if (is_sdjwt) {
-      continue;
-    }
-
-    bool is_phone =
-        std::ranges::all_of(vct_values, CanVctValueBypassInterstitial);
-    if (is_phone && !vct_values.empty()) {
+      if (claims.empty()) {
+        return false;
+      }
       continue;
     }
 
@@ -433,20 +439,20 @@ DigitalIdentityRequestImpl::DigitalIdentityRequestImpl(
 
 DigitalIdentityRequestImpl::~DigitalIdentityRequestImpl() = default;
 
-std::optional<VirtualWallet::Behavior>
-DigitalIdentityRequestImpl::GetVirtualWalletBehavior() {
+std::optional<VirtualWallet::Action>
+DigitalIdentityRequestImpl::GetVirtualWalletAction() {
   VirtualWallet* wallet =
       DigitalCredentialEnvironment::GetInstance()->MaybeGetVirtualWallet(
           FrameTreeNode::From(&render_frame_host()));
   if (!wallet) {
     return std::nullopt;
   }
-  return wallet->behavior();
+  return wallet->action();
 }
 
-bool DigitalIdentityRequestImpl::HandleVirtualWalletBehavior() {
-  std::optional<VirtualWallet::Behavior> behavior = GetVirtualWalletBehavior();
-  if (!behavior) {
+bool DigitalIdentityRequestImpl::HandleVirtualWalletAction() {
+  std::optional<VirtualWallet::Action> action = GetVirtualWalletAction();
+  if (!action) {
     return false;
   }
 
@@ -457,16 +463,16 @@ bool DigitalIdentityRequestImpl::HandleVirtualWalletBehavior() {
   RequestDigitalIdentityStatus status;
   std::optional<DigitalIdentityProvider::DigitalCredential> credential;
 
-  switch (*behavior) {
-    case VirtualWallet::Behavior::kRespond:
+  switch (*action) {
+    case VirtualWallet::Action::kRespond:
       credential = wallet->GetCredential();
       status = credential ? RequestDigitalIdentityStatus::kSuccess
                           : RequestDigitalIdentityStatus::kError;
       break;
-    case VirtualWallet::Behavior::kDecline:
+    case VirtualWallet::Action::kDecline:
       status = RequestDigitalIdentityStatus::kErrorUserDeclined;
       break;
-    case VirtualWallet::Behavior::kWait:
+    case VirtualWallet::Action::kWait:
       // Leave the request's promise pending.
       return true;
   }
@@ -565,8 +571,14 @@ void DigitalIdentityRequestImpl::Get(
     return;
   }
 
+  if (origin().opaque()) {
+    ReportBadMessageAndDeleteThis(
+        "DigitalIdentityRequest is not allowed in opaque origins.");
+    return;
+  }
+
   if (render_frame_host().IsNestedWithinFencedFrame()) {
-    mojo::ReportBadMessage(
+    ReportBadMessageAndDeleteThis(
         "DigitalIdentityRequest should not be allowed in fenced frame "
         "trees.");
     return;
@@ -606,13 +618,13 @@ void DigitalIdentityRequestImpl::Get(
     return;
   }
 
-  if (HandleVirtualWalletBehavior()) {
+  if (HandleVirtualWalletAction()) {
     return;
   }
 
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kUseFakeUIForDigitalIdentity)) {
-    // Post delayed task to enable testing abort.
+    // Post delayed task to simulate successful user resolution.
     std::string fake_protocol = digital_credential_requests[0]->protocol;
     GetUIThreadTaskRunner()->PostDelayedTask(
         FROM_HERE,
@@ -648,13 +660,24 @@ void DigitalIdentityRequestImpl::Get(
     return;
   }
 
-  update_interstitial_on_abort_callback_ =
-      provider_->ShowDigitalIdentityInterstitial(
-          *WebContents::FromRenderFrameHost(&render_frame_host()), origin(),
-          *interstitial_type,
-          base::BindOnce(&DigitalIdentityRequestImpl::OnInterstitialDone,
-                         weak_ptr_factory_.GetWeakPtr(),
-                         std::move(request_to_send)));
+  // ShowDigitalIdentityInterstitial can synchronously exit fullscreen on
+  // Windows, which can spin the message loop and destroy the WebContents and
+  // `this`. We use a WeakPtr to guard against this potential UAF.
+  base::WeakPtr<DigitalIdentityRequestImpl> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
+
+  auto abort_callback = provider_->ShowDigitalIdentityInterstitial(
+      *WebContents::FromRenderFrameHost(&render_frame_host()), origin(),
+      *interstitial_type,
+      base::BindOnce(&DigitalIdentityRequestImpl::OnInterstitialDone,
+                     weak_ptr_factory_.GetWeakPtr(),
+                     std::move(request_to_send)));
+
+  if (!weak_this) {
+    return;
+  }
+
+  update_interstitial_on_abort_callback_ = std::move(abort_callback);
 }
 
 void DigitalIdentityRequestImpl::Create(
@@ -670,8 +693,14 @@ void DigitalIdentityRequestImpl::Create(
     return;
   }
 
+  if (origin().opaque()) {
+    ReportBadMessageAndDeleteThis(
+        "DigitalIdentityRequest is not allowed in opaque origins.");
+    return;
+  }
+
   if (render_frame_host().IsNestedWithinFencedFrame()) {
-    mojo::ReportBadMessage(
+    ReportBadMessageAndDeleteThis(
         "DigitalIdentityRequest should not be allowed in fenced frame "
         "trees.");
     return;
@@ -707,7 +736,7 @@ void DigitalIdentityRequestImpl::Create(
     return;
   }
 
-  if (HandleVirtualWalletBehavior()) {
+  if (HandleVirtualWalletAction()) {
     return;
   }
 
@@ -721,7 +750,7 @@ void DigitalIdentityRequestImpl::Create(
 
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kUseFakeUIForDigitalIdentity)) {
-    // Post delayed task to enable testing abort+.
+    // Post delayed task to simulate successful user resolution.
     GetUIThreadTaskRunner()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&DigitalIdentityRequestImpl::CompleteRequest,
@@ -758,8 +787,14 @@ void DigitalIdentityRequestImpl::Abort() {
     return;
   }
 
+  base::WeakPtr<DigitalIdentityRequestImpl> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
   if (update_interstitial_on_abort_callback_) {
     std::move(update_interstitial_on_abort_callback_).Run();
+  }
+
+  if (!weak_this) {
+    return;
   }
 
   CompleteRequestWithError(RequestStatusForMetrics::kErrorAborted);

@@ -31,7 +31,6 @@ import org.chromium.base.Log;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.blink.mojom.DisplayMode;
-import org.chromium.blink.mojom.ImmersivePlaybackConfirmationStatus;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -70,6 +69,9 @@ import org.chromium.chrome.browser.util.PictureInPictureWindowOptions;
 import org.chromium.chrome.browser.util.WindowFeatures;
 import org.chromium.components.embedder_support.contextmenu.ContextMenuUtils;
 import org.chromium.components.embedder_support.delegate.WebContentsDelegateAndroid;
+import org.chromium.content_public.browser.ImmersivePlaybackConfirmationStatus;
+import org.chromium.content_public.browser.ImmersiveProjectionType;
+import org.chromium.content_public.browser.ImmersiveStereoMode;
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.common.ResourceRequestBody;
@@ -319,8 +321,7 @@ public class ActivityTabWebContentsDelegateAndroid extends TabWebContentsDelegat
         }
 
         Tab sourceTab = fromWebContents(sourceWebContents);
-        if (sourceTab == null
-                || !ChromeFeatureList.isEnabled(ChromeFeatureList.GROUP_NEW_TAB_WITH_PARENT)) {
+        if (sourceTab == null) {
             return true;
         }
 
@@ -613,19 +614,25 @@ public class ActivityTabWebContentsDelegateAndroid extends TabWebContentsDelegat
     }
 
     @Override
-    public void requestImmersivePlaybackConfirmation(JniOnceCallback<Integer> callback) {
+    public void requestImmersivePlaybackConfirmation(
+            @ImmersiveStereoMode int stereoMode,
+            @ImmersiveProjectionType int projectionType,
+            JniOnceCallback<Integer> callback) {
         if (!isImmersivePlaybackEnabled() || mImmersivePlaybackSnackbarController == null) {
             callback.onResult(ImmersivePlaybackConfirmationStatus.FAILED);
             return;
         }
 
         mImmersivePlaybackSnackbarController.show(
-                (status, stereoMode, projectionType) -> {
+                (status, selectedStereoMode, selectedProjectionType) -> {
                     // Pack the results into a single integer:
                     // status (4 bits) | stereoMode (4 bits) | projectionType (4 bits).
-                    int packedResult = status | (stereoMode << 4) | (projectionType << 8);
+                    int packedResult =
+                            status | (selectedStereoMode << 4) | (selectedProjectionType << 8);
                     callback.onResult(packedResult);
                 },
+                stereoMode,
+                projectionType,
                 // TODO(b/512831252): Instead of using a delay, we should properly handle
                 // interference with the ExclusiveAccess feature snackbars.
                 /* delayMs= */ 2000);

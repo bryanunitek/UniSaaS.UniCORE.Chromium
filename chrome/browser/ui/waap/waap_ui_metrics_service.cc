@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/waap/waap_ui_metrics_service.h"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 
@@ -16,6 +17,8 @@
 #include "chrome/browser/ui/waap/waap_ui_metrics_service_factory.h"
 #include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "components/startup_metric_utils/common/startup_metric_utils.h"
+#include "third_party/perfetto/include/perfetto/tracing/tracing.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace {
 
@@ -80,12 +83,13 @@ enum class InitialWebUIView {
 void EmitHistogramWithTraceEvent(const char* event_name,
                                  base::TimeTicks start_ticks,
                                  base::TimeTicks end_ticks) {
-  TRACE_EVENT_BEGIN("waap", perfetto::DynamicString(event_name),
-                    perfetto::Track(reinterpret_cast<uintptr_t>(event_name)),
+  auto track = perfetto::NamedTrack(perfetto::DynamicString(event_name));
+  if (perfetto::Tracing::IsInitialized()) {
+    base::TrackEvent::SetTrackDescriptor(track, track.Serialize());
+  }
+  TRACE_EVENT_BEGIN("waap", perfetto::DynamicString(event_name), track,
                     start_ticks);
-  TRACE_EVENT_END("waap",
-                  perfetto::Track(reinterpret_cast<uintptr_t>(event_name)),
-                  end_ticks);
+  TRACE_EVENT_END("waap", track, end_ticks);
 
   const base::TimeDelta delta = end_ticks - start_ticks;
   base::UmaHistogramLongTimes100(event_name, delta);
@@ -97,12 +101,13 @@ void EmitReloadButtonHistogramWithTraceEvent(const char* event_name,
                                              base::TimeTicks start_ticks,
                                              base::TimeTicks end_ticks) {
   const base::TimeDelta duration = end_ticks - start_ticks;
-  TRACE_EVENT_BEGIN("waap", perfetto::DynamicString(event_name),
-                    perfetto::Track(reinterpret_cast<uintptr_t>(event_name)),
+  auto track = perfetto::NamedTrack(perfetto::DynamicString(event_name));
+  if (perfetto::Tracing::IsInitialized()) {
+    base::TrackEvent::SetTrackDescriptor(track, track.Serialize());
+  }
+  TRACE_EVENT_BEGIN("waap", perfetto::DynamicString(event_name), track,
                     start_ticks);
-  TRACE_EVENT_END("waap",
-                  perfetto::Track(reinterpret_cast<uintptr_t>(event_name)),
-                  end_ticks);
+  TRACE_EVENT_END("waap", track, end_ticks);
   base::UmaHistogramCustomTimes(event_name, duration, base::Milliseconds(1),
                                 base::Minutes(3), 100);
 }
@@ -134,10 +139,12 @@ void RecordStartupPaintMetric(std::string_view paint_metric_base,
     return;
   }
 
-  std::string scenario_suffix;
   if (startup_metric_utils::GetBrowser().IsFirstRun()) {
-    scenario_suffix = ".FirstRun";
-  } else if (SessionRestore::IsAnySessionRestored()) {
+    return;
+  }
+
+  std::string scenario_suffix;
+  if (SessionRestore::IsAnySessionRestored()) {
     scenario_suffix = ".SessionRestore";
   }
 
@@ -165,6 +172,7 @@ void RecordNewWindowPaintMetric(std::string_view paint_metric_base,
                                 base::TimeTicks paint_time) {
   const std::string_view with_existing_window_str =
       ExistingWindowToString(with_existing_window);
+
   // Record aggregated metric.
   EmitHistogramWithTraceEvent(
       base::StrCat({"InitialWebUI.NewWindow.AllSources.",
@@ -292,8 +300,9 @@ void WaapUIMetricsService::OnNewWindowBrowserWindowFirstPresentation(
     return;
   }
 
-  RecordNewWindowPaintMetric("BrowserWindow.FirstPaint.FromConstructor", source,
-                             with_existing_window, start_time, paint_time);
+  RecordNewWindowPaintMetric("BrowserWindow.FirstPaint.FromConstructor2",
+                             source, with_existing_window, start_time,
+                             paint_time);
 }
 
 void WaapUIMetricsService::OnNewWindowReloadButtonFirstPaint(
@@ -306,7 +315,7 @@ void WaapUIMetricsService::OnNewWindowReloadButtonFirstPaint(
     return;
   }
 
-  RecordNewWindowPaintMetric("ReloadButton.FirstPaint.FromConstructor", source,
+  RecordNewWindowPaintMetric("ReloadButton.FirstPaint.FromConstructor2", source,
                              with_existing_window, start_time, paint_time);
 }
 
@@ -321,7 +330,7 @@ void WaapUIMetricsService::OnNewWindowReloadButtonFirstContentfulPaint(
   }
 
   RecordNewWindowPaintMetric(
-      "ReloadButton.FirstContentfulPaint.FromConstructor", source,
+      "ReloadButton.FirstContentfulPaint.FromConstructor2", source,
       with_existing_window, start_time, paint_time);
 }
 
@@ -337,9 +346,10 @@ void WaapUIMetricsService::OnNewWindowBrowserWindowToReloadButtonFirstPaintGap(
     bool with_existing_window,
     base::TimeTicks browser_window_paint_time,
     base::TimeTicks reload_button_paint_time) {
-  RecordNewWindowPaintMetric(
-      "BrowserWindowToReloadButton.FirstPaintGap", source, with_existing_window,
-      browser_window_paint_time, reload_button_paint_time);
+  RecordNewWindowPaintMetric("BrowserWindowToReloadButton.FirstPaintGap2",
+                             source, with_existing_window,
+                             browser_window_paint_time,
+                             reload_button_paint_time);
 }
 
 void WaapUIMetricsService::OnStartupBrowserWindowShowRequestedToFirstPaint(
@@ -355,7 +365,7 @@ void WaapUIMetricsService::OnNewWindowBrowserWindowShowRequestedToFirstPaint(
     base::TimeTicks request_time,
     base::TimeTicks paint_time) {
   RecordNewWindowPaintMetric(
-      "BrowserWindow.ShowRequestedToFirstPaint.FromConstructor", source,
+      "BrowserWindow.ShowRequestedToFirstPaint.FromConstructor2", source,
       with_existing_window, request_time, paint_time);
 }
 
@@ -371,7 +381,7 @@ void WaapUIMetricsService::OnNewWindowBrowserWindowClosedBeforeFirstPaint(
     bool with_existing_window,
     base::TimeTicks start_time,
     base::TimeTicks close_time) {
-  RecordNewWindowPaintMetric("BrowserWindow.ClosedBeforeFirstPaint", source,
+  RecordNewWindowPaintMetric("BrowserWindow.ClosedBeforeFirstPaint2", source,
                              with_existing_window, start_time, close_time);
 }
 
@@ -429,4 +439,21 @@ void WaapUIMetricsService::OnReloadButtonChangeVisibleModeToNextPaint(
   auto name = BuildReloadButtonHistogramName(
       "ChangeVisibleModeToNextPaintIn", ReloadButtonModeToString(new_mode));
   EmitReloadButtonHistogramWithTraceEvent(name.c_str(), start_ticks, end_ticks);
+}
+
+void WaapUIMetricsService::RecordReloadButtonInteractionToReload(
+    base::TimeTicks interaction_ticks,
+    base::TimeTicks execution_ticks,
+    WaapUIMetricsRecorder::ReloadButtonInputType input_type) {
+  const base::TimeDelta duration =
+      std::max(base::TimeDelta(), execution_ticks - interaction_ticks);
+  const std::string name = BuildReloadButtonHistogramName(
+      "InteractionToReload", ReloadButtonInputTypeToString(input_type));
+  base::UmaHistogramCustomTimes(name, duration, base::Milliseconds(1),
+                                base::Seconds(10), 100);
+
+  const std::string aggregated_name =
+      BuildReloadButtonHistogramName("InteractionToReload");
+  base::UmaHistogramCustomTimes(aggregated_name, duration,
+                                base::Milliseconds(1), base::Seconds(10), 100);
 }

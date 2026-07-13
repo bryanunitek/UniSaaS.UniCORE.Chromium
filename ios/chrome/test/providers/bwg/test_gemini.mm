@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import <UIKit/UIKit.h>
+
 #import "ios/public/provider/chrome/browser/bwg/gemini_api.h"
 
 namespace ios::provider {
@@ -9,8 +11,7 @@ namespace ios::provider {
 void ConfigureWithStartupConfiguration(
     GeminiStartupConfiguration* gemini_startup_configuration) {}
 
-// TODO(crbug.com/478259873): Replace with StartGeminiOverlay
-void StartBwgOverlay(GeminiConfiguration* gemini_configuration) {}
+void StartGeminiOverlay(GeminiConfiguration* gemini_configuration) {}
 
 const std::u16string GetPageContextShouldDetachScript() {
   return uR"JS(
@@ -26,8 +27,7 @@ const std::u16string GetPageContextShouldDetachScript() {
   )JS";
 }
 
-// TODO(crbug.com/478259873): Replace with CreateGeminiGateway
-id<BWGGatewayProtocol> CreateBWGGateway() {
+id<BWGGatewayProtocol> CreateGeminiGateway() {
   return nil;
 }
 
@@ -39,11 +39,24 @@ void ResetGemini() {}
 void UpdatePageAttachmentState(
     GeminiPageContextAttachmentState gemini_attachment_state) {}
 
+// Mock value used by unit tests to override the return value of IsProtectedUrl.
+static bool g_mock_protected_url = false;
+
+// Sets whether all URLs should be simulated as protected in tests.
+void SetMockProtectedUrl(bool is_protected) {
+  g_mock_protected_url = is_protected;
+}
+
+// Stub implementation for tests. Returns the mock value set by
+// SetMockProtectedUrl.
 bool IsProtectedUrl(std::string url) {
-  return false;
+  return g_mock_protected_url;
 }
 
 void UpdatePageContext(GeminiPageContext* gemini_page_context) {}
+
+void UpdateActivePageContext(GeminiPageContext* gemini_page_context,
+                             NSArray<GeminiPageContext*>* shared_tabs) {}
 
 NSArray<GeminiSettingsMetadata*>* GetEligibleSettings(
     AuthenticationService* auth_service) {
@@ -103,7 +116,11 @@ int GetLiveCaptionsNumberOfLines() {
 
 UIViewController* GetFloatyViewControllerWithConfiguration(
     GeminiConfiguration* gemini_configuration) {
-  return nil;
+  UIViewController* viewController = [[UIViewController alloc] init];
+  UITextField* textField = [[UITextField alloc] init];
+  textField.accessibilityIdentifier = @"GeminiTestTextField";
+  [viewController.view addSubview:textField];
+  return viewController;
 }
 
 }  // namespace ios::provider

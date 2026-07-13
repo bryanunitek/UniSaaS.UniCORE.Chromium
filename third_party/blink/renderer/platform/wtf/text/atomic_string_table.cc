@@ -4,8 +4,6 @@
 
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_table.h"
 
-#include <hwy/highway.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -74,35 +72,30 @@ ALWAYS_INLINE String SmallStringCacheGetOrInsert(uint64_t signature,
   return result;
 }
 
+// The compiler will conveniently combine this into a single 64-bit load for us,
+// as long as it is reasonably obvious that it can elide the bounds checks.
+ALWAYS_INLINE static uint64_t Read4Chars(base::span<const UChar> chars,
+                                         size_t start) {
+  static_assert(std::is_unsigned_v<UChar>);
+  return static_cast<uint64_t>(chars[start]) |
+         (static_cast<uint64_t>(chars[start + 1]) << 16) |
+         (static_cast<uint64_t>(chars[start + 2]) << 32) |
+         (static_cast<uint64_t>(chars[start + 3]) << 48);
+}
+
 ALWAYS_INLINE static bool IsOnly8Bit(base::span<const UChar> chars) {
-#if HWY_TARGET != HWY_SCALAR
-  namespace hw = hwy::HWY_NAMESPACE;
-  const hw::ScalableTag<uint16_t> d;
-  const auto v_limit = hw::Set(d, 0xFF);
-  size_t i = 0;
-  // SAFETY: HWY LoadU requires pointer access.
-  UNSAFE_BUFFERS({
-    const size_t lanes = hw::Lanes(d);
-    if (chars.size() >= lanes) {
-      for (; i + lanes <= chars.size(); i += lanes) {
-        const auto v =
-            hw::LoadU(d, reinterpret_cast<const uint16_t*>(chars.data() + i));
-        if (!hw::AllTrue(d, hw::Le(v, v_limit))) {
-          return false;
-        }
+  if (chars.size() >= 4) {
+    for (size_t i = 0; i + 3 < chars.size(); i += 4) {
+      if (Read4Chars(chars, i) & 0xFF00FF00FF00FF00ULL) {
+        return false;
       }
     }
-  });
-  for (; i < chars.size(); ++i) {
-    if (chars[i] > 0xFF) {
-      return false;
-    }
+    // NOTE: The tail will overlap already-tested characters,
+    // but that is completely OK.
+    return !(Read4Chars(chars, chars.size() - 4) & 0xFF00FF00FF00FF00ULL);
+  } else {
+    return !std::ranges::any_of(chars, [](UChar ch) { return ch & 0xFF00; });
   }
-  return true;
-#else
-  return std::ranges::all_of(
-      chars, [](UChar ch) { return static_cast<uint16_t>(ch) <= 255; });
-#endif
 }
 
 class UCharBuffer {
@@ -342,19 +335,14 @@ String AtomicStringTable::Add(base::span<const UChar> chars,
 
   const auto length = chars.size();
   if (encoding == AtomicStringUCharEncoding::kIs8Bit && length <= 7) {
-    uint64_t signature = 0;
-    auto signature_bytes =
-        base::as_writable_bytes(base::span_from_ref(signature));
-    for (size_t i = 0; i < length; ++i) {
-      signature_bytes[i] = static_cast<LChar>(chars[i]);
+    uint64_t signature = length;
+    for (UChar ch : chars) {
+      signature = (signature << 8) | static_cast<uint16_t>(ch);
     }
-    signature_bytes[7] = static_cast<uint8_t>(length);
 
-    return SmallStringCacheGetOrInsert(signature, [&]() {
-      unsigned hash = StringHasher::ComputeHashAndMaskTop8Bits(
-          reinterpret_cast<const char*>(&signature), length);
-      UCharBuffer buffer(chars, hash, encoding);
-      return AddToStringTable<UCharBuffer, UCharBufferTranslator>(buffer);
+    return SmallStringCacheGetOrInsert(signature, [this, &chars]() {
+      return AddToStringTable<UCharBuffer, UCharBufferTranslator>(
+          UCharBuffer(chars, AtomicStringUCharEncoding::kIs8Bit));
     });
   }
 
@@ -413,13 +401,10 @@ String AtomicStringTable::Add(const StringView& string_view) {
   const auto length = string_view.length();
   if (length <= 7 && string_view.Is8Bit()) {
     base::span<const LChar> chars = string_view.Span8();
-    // Initialize the signature to zero to ensure padding for strings shorter
-    // than 7 bytes, as copy_prefix_from() does not write past the input.
-    uint64_t signature = 0;
-    auto signature_bytes =
-        base::as_writable_bytes(base::span_from_ref(signature));
-    signature_bytes.copy_prefix_from(base::as_bytes(chars));
-    signature_bytes[7] = static_cast<uint8_t>(length);
+    uint64_t signature = length;
+    for (LChar ch : chars) {
+      signature = (signature << 8) | static_cast<uint8_t>(ch);
+    }
 
     return SmallStringCacheGetOrInsert(signature, [this, &chars]() {
       return AddToStringTable<LCharBuffer, LCharBufferTranslator>(
@@ -447,13 +432,10 @@ String AtomicStringTable::Add(base::span<const LChar> chars) {
 
   const auto length = chars.size();
   if (length <= 7) {
-    // Initialize the signature to zero to ensure padding for strings shorter
-    // than 7 bytes, as copy_prefix_from() does not write past the input.
-    uint64_t signature = 0;
-    auto signature_bytes =
-        base::as_writable_bytes(base::span_from_ref(signature));
-    signature_bytes.copy_prefix_from(base::as_bytes(chars));
-    signature_bytes[7] = static_cast<uint8_t>(length);
+    uint64_t signature = length;
+    for (LChar ch : chars) {
+      signature = (signature << 8) | static_cast<uint8_t>(ch);
+    }
 
     return SmallStringCacheGetOrInsert(signature, [this, &chars]() {
       return AddToStringTable<LCharBuffer, LCharBufferTranslator>(

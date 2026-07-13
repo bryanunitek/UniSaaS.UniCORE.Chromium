@@ -8,12 +8,13 @@
 #include <cstring>
 #include <optional>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -199,6 +200,15 @@ const base::FeatureParam<base::TimeDelta>
     kGetAIPageContentMainFrameTimeoutParam{
         &kGetAIPageContentMainFrameTimeoutEnabled, "timeout",
         base::Seconds(30)};
+
+// Controls whether to enforce a timeout for GetImageBytes. If enabled, defaults
+// to 10 seconds.
+BASE_FEATURE(kGetAIPageContentGetImageBytesTimeoutEnabled,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+const base::FeatureParam<base::TimeDelta>
+    kGetAIPageContentGetImageBytesTimeoutParam{
+        &kGetAIPageContentGetImageBytesTimeoutEnabled, "timeout",
+        base::Seconds(10)};
 
 // The default value here is a bit of a guess.
 // TODO(crbug.com/40163041): This should be tuned once metrics are available.
@@ -509,35 +519,38 @@ base::TimeDelta GetOnDeviceModelRetentionTime() {
       base::Days(30));
 }
 
-base::ByteCount GetDiskSpaceRequiredForOnDeviceModelInstall() {
-  return base::MiB(base::GetFieldTrialParamByFeatureAsInt(
-      kOptimizationGuideOnDeviceModel,
-      "on_device_model_free_space_mb_required_to_install",
-      base::GiB(20).InMiB()));
+base::ByteSize GetDiskSpaceRequiredForOnDeviceModelInstall() {
+  return base::MiBU(
+      base::saturated_cast<uint64_t>(base::GetFieldTrialParamByFeatureAsInt(
+          kOptimizationGuideOnDeviceModel,
+          "on_device_model_free_space_mb_required_to_install",
+          base::GiBU(20).InMiB())));
 }
 
 bool IsFreeDiskSpaceSufficientForOnDeviceModelInstall(
-    base::ByteCount free_disk_space_bytes) {
+    base::ByteSize free_disk_space_bytes) {
   return GetDiskSpaceRequiredForOnDeviceModelInstall() <= free_disk_space_bytes;
 }
 
 bool IsFreeDiskSpaceTooLowForOnDeviceModelInstall(
-    base::ByteCount free_disk_space_bytes) {
-  return base::MiB(base::GetFieldTrialParamByFeatureAsInt(
-             kOptimizationGuideOnDeviceModel,
-             "on_device_model_free_space_mb_required_to_retain",
-             base::GiB(5).InMiB())) >= free_disk_space_bytes;
+    base::ByteSize free_disk_space_bytes) {
+  return base::MiBU(base::saturated_cast<uint64_t>(
+             base::GetFieldTrialParamByFeatureAsInt(
+                 kOptimizationGuideOnDeviceModel,
+                 "on_device_model_free_space_mb_required_to_retain",
+                 base::GiBU(5).InMiB()))) >= free_disk_space_bytes;
 }
 
-base::ByteCount GetDiskSpaceRequiredForBackgroundOnDeviceModelInstall() {
-  return base::MiB(base::GetFieldTrialParamByFeatureAsInt(
-      features::kOnDeviceModelBackgroundDownload,
-      "on_device_model_free_space_mb_required_to_background_install",
-      base::GiB(50).InMiB()));
+base::ByteSize GetDiskSpaceRequiredForBackgroundOnDeviceModelInstall() {
+  return base::MiBU(
+      base::saturated_cast<uint64_t>(base::GetFieldTrialParamByFeatureAsInt(
+          features::kOnDeviceModelBackgroundDownload,
+          "on_device_model_free_space_mb_required_to_background_install",
+          base::GiBU(50).InMiB())));
 }
 
 bool IsFreeDiskSpaceSufficientForBackgroundOnDeviceModelInstall(
-    base::ByteCount free_disk_space_bytes) {
+    base::ByteSize free_disk_space_bytes) {
   return GetDiskSpaceRequiredForBackgroundOnDeviceModelInstall() <=
          free_disk_space_bytes;
 }
@@ -551,10 +564,6 @@ bool GetOnDeviceModelRetractUnsafeContent() {
 
 bool ShouldUseTextSafetyClassifierModel() {
   return base::FeatureList::IsEnabled(kTextSafetyClassifier);
-}
-
-bool ShouldUseGeneralizedSafetyModel() {
-  return true;
 }
 
 double GetOnDeviceModelLanguageDetectionMinimumReliability() {
@@ -587,7 +596,7 @@ bool GetOnDeviceModelRetractRepeats() {
 int GetOnDeviceModelDefaultTopK() {
   static const base::FeatureParam<int> kTopK{
       &optimization_guide::features::kOptimizationGuideOnDeviceModel,
-      "on_device_model_topk", 3};
+      "on_device_model_topk", 64};
   return kTopK.Get();
 }
 
@@ -600,7 +609,7 @@ int GetOnDeviceModelMaxTopK() {
 
 double GetOnDeviceModelDefaultTemperature() {
   static const base::FeatureParam<double> kTemperature{
-      &kOptimizationGuideOnDeviceModel, "on_device_model_temperature", 0.8};
+      &kOptimizationGuideOnDeviceModel, "on_device_model_temperature", 1.0};
   return kTemperature.Get();
 }
 
@@ -639,6 +648,13 @@ std::optional<base::TimeDelta> GetMainFrameGetAIPageContentTimeout() {
     return std::nullopt;
   }
   return kGetAIPageContentMainFrameTimeoutParam.Get();
+}
+std::optional<base::TimeDelta> GetAIPageContentGetImageBytesTimeout() {
+  if (!base::FeatureList::IsEnabled(
+          kGetAIPageContentGetImageBytesTimeoutEnabled)) {
+    return std::nullopt;
+  }
+  return kGetAIPageContentGetImageBytesTimeoutParam.Get();
 }
 
 }  // namespace optimization_guide::features

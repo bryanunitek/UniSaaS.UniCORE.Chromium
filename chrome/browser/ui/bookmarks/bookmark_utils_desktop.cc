@@ -128,7 +128,7 @@ OpenedWebContentsSet OpenAllHelper(
   bookmarks::BookmarkNavigationWrapper nav_wrapper;
   Profile* profile = nullptr;
   if (browser) {
-    profile = browser->profile();
+    profile = browser->GetProfile();
   }
   bool opening_urls_in_incognito = false;
   if (profile) {
@@ -141,6 +141,12 @@ OpenedWebContentsSet OpenAllHelper(
   }
 
   for (const auto& bookmark_url : bookmark_urls) {
+    // Javascript URLs should not open in a new tab. See crbug.com/528757894.
+    if (disposition != WindowOpenDisposition::CURRENT_TAB &&
+        bookmark_url.url.SchemeIs(url::kJavaScriptScheme)) {
+      continue;
+    }
+
     const bool url_allowed_in_incognito =
         IsURLAllowedInIncognito(bookmark_url.url);
 
@@ -159,7 +165,7 @@ OpenedWebContentsSet OpenAllHelper(
       }
     }
     if (browser_to_use) {
-      profile = browser_to_use->profile();
+      profile = browser_to_use->GetProfile();
     }
     NavigateParams params(profile, bookmark_url.url,
                           ui::PAGE_TRANSITION_AUTO_BOOKMARK);
@@ -362,6 +368,11 @@ void DoOpen(Browser* browser,
     auto* const single_web_contents = *(opened_web_contents.begin());
     const int opened_web_contents_index =
         model->GetIndexOfWebContents(single_web_contents);
+    // Handle the situation where the bookmark is opened in a different window
+    // (happens when opening certain internal pages in incognito mode).
+    if (opened_web_contents_index == TabStripModel::kNoTab) {
+      return;
+    }
     model->AddToNewSplit(
         {opened_web_contents_index}, split_tabs::SplitTabVisualData(),
         split_tabs::SplitTabCreatedSource::kBookmarkContextMenu);
@@ -384,7 +395,7 @@ void DoOpen(Browser* browser,
 
     tab_groups::TabGroupSyncService* tab_group_sync_service =
         tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-            browser->profile());
+            browser->GetProfile());
 
     std::optional<base::Uuid> connected_group_id =
         GetConnectedTabGroupIdFromBookmarkFolder(tab_group_sync_service,
@@ -486,7 +497,8 @@ void DoOpenPromptConfirm(
   }
 
   tab_groups::TabGroupSyncService* tab_group_sync_service =
-      tab_groups::TabGroupSyncServiceFactory::GetForProfile(browser->profile());
+      tab_groups::TabGroupSyncServiceFactory::GetForProfile(
+          browser->GetProfile());
   std::optional<base::Uuid> connected_group_id =
       GetConnectedTabGroupIdFromBookmarkFolder(tab_group_sync_service,
                                                bookmark_folder_node_id);
@@ -544,7 +556,7 @@ void ShowBookmarkTabGroupDialogHelper(
     const std::u16string& title,
     std::vector<BookmarkEditor::EditDetails::BookmarkData> children,
     base::OnceClosure on_confirm_callback) {
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile);
   DCHECK(model && model->loaded());
 
@@ -560,7 +572,7 @@ void ShowBookmarkTabGroupDialogHelper(
       BookmarkEditor::SHOW_TREE,
       base::BindOnce(
           [](Browser* browser, base::OnceClosure callback) {
-            RecordBookmarksAdded(browser->profile());
+            RecordBookmarksAdded(browser->GetProfile());
             base::RecordAction(base::UserMetricsAction(
                 "BookmarkTabGroupConversion_ConvertToBookmarkConfirmed"));
             if (callback) {
@@ -705,7 +717,7 @@ void ShowBookmarkSavedTabGroupDialog(Browser* browser,
           [](Browser* browser, const base::Uuid& saved_guid) {
             tab_groups::TabGroupSyncService* tab_group_service =
                 tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-                    browser->profile());
+                    browser->GetProfile());
             if (!tab_group_service) {
               return;
             }

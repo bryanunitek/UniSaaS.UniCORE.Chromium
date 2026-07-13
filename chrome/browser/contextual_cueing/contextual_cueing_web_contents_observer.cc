@@ -40,27 +40,36 @@ void ContextualCueingWebContentsObserver::DidFinishNavigation(
     return;
   }
 
-  // Ignore reloads.
-  if (PageTransitionCoreTypeIs(navigation_handle->GetPageTransition(),
-                               ui::PAGE_TRANSITION_RELOAD)) {
-    return;
-  }
-  if (navigation_handle->GetPreviousPrimaryMainFrameURL() ==
-      navigation_handle->GetURL()) {
-    return;
-  }
+  const bool is_back_forward = (navigation_handle->GetPageTransition() &
+                                ui::PAGE_TRANSITION_FORWARD_BACK) != 0;
 
-  // Ignore fragment changes for cueing only.
-  if (navigation_handle->GetPreviousPrimaryMainFrameURL().GetWithoutRef() ==
-      navigation_handle->GetURL().GetWithoutRef()) {
-    return;
+  if (!is_back_forward) {
+    // Ignore reloads.
+    if (PageTransitionCoreTypeIs(navigation_handle->GetPageTransition(),
+                                 ui::PAGE_TRANSITION_RELOAD)) {
+      return;
+    }
+    if (navigation_handle->GetPreviousPrimaryMainFrameURL() ==
+        navigation_handle->GetURL()) {
+      return;
+    }
+
+    // Ignore fragment changes for cueing only.
+    if (navigation_handle->GetPreviousPrimaryMainFrameURL().GetWithoutRef() ==
+        navigation_handle->GetURL().GetWithoutRef()) {
+      return;
+    }
   }
 
   if (auto* controller =
           ContextualCueingController::GetForWebContents(GetWebContents())) {
-    controller->HideCue();
-    if (auto* tab = tabs::TabInterface::MaybeGetFromContents(&GetWebContents());
-        tab->IsActivated()) {
+    auto* tab = tabs::TabInterface::MaybeGetFromContents(&GetWebContents());
+    if (!tab) {
+      return;
+    }
+    controller->HideCueForTab(tab);
+    controller->HideAllCuesDependingOnTab(tab);
+    if (tab->IsActivated()) {
       controller->ActiveTabUrlChanged(navigation_handle->GetURL());
     }
   }

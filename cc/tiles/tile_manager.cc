@@ -881,7 +881,7 @@ bool TileManager::TilePriorityViolatesMemoryPolicy(
 }
 
 TileManager::PrioritizedWorkToSchedule TileManager::AssignGpuMemoryToTiles() {
-  TRACE_EVENT_BEGIN0("cc", "TileManager::AssignGpuMemoryToTiles");
+  TRACE_EVENT_BEGIN("cc", "TileManager::AssignGpuMemoryToTiles");
 
   DCHECK(resource_pool_);
   DCHECK(tile_task_manager_);
@@ -1132,11 +1132,10 @@ TileManager::PrioritizedWorkToSchedule TileManager::AssignGpuMemoryToTiles() {
   memory_stats_from_last_assign_.had_enough_memory =
       had_enough_memory_to_schedule_tiles_needed_now;
 
-  TRACE_EVENT_END2("cc", "TileManager::AssignGpuMemoryToTiles",
-                   "all_tiles_that_need_to_be_rasterized_are_scheduled",
-                   all_tiles_that_need_to_be_rasterized_are_scheduled_,
-                   "had_enough_memory_to_schedule_tiles_needed_now",
-                   had_enough_memory_to_schedule_tiles_needed_now);
+  TRACE_EVENT_END("cc", "all_tiles_that_need_to_be_rasterized_are_scheduled",
+                  all_tiles_that_need_to_be_rasterized_are_scheduled_,
+                  "had_enough_memory_to_schedule_tiles_needed_now",
+                  had_enough_memory_to_schedule_tiles_needed_now);
   image_controller_.cache()->RecordStats();
   return work_to_schedule;
 }
@@ -1477,20 +1476,6 @@ scoped_refptr<TileTask> TileManager::CreateRasterTask(
     resource = resource_pool_->TryAcquireResourceForPartialRaster(
         tile->id(), tile->invalidated_content_rect(), tile->invalidated_id(),
         &invalidated_rect, target_color_params.color_space, debug_name);
-
-    constexpr double kLogProbability = 0.001;
-    if (base::ShouldRecordSubsampledMetric(kLogProbability)) {
-      // Note this minimum area needs to be above zero to avoid division by zero
-      // error.
-      constexpr uint64_t kMinAreaForReporting = 256 * 256;
-      if (auto tile_area = tile->desired_texture_size().Area64();
-          tile_area >= kMinAreaForReporting) {
-        auto percentage_invalidated =
-            (100 * invalidated_rect.size().Area64()) / tile_area;
-        UMA_HISTOGRAM_PERCENTAGE("Compositing.TileManager.TileInvalidationArea",
-                                 percentage_invalidated);
-      }
-    }
   }
 
   bool partial_tile_decode = false;

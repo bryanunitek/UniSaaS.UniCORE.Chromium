@@ -9,6 +9,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <optional>
+
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -23,6 +25,7 @@
 #include "base/rand_util.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
@@ -48,8 +51,12 @@ constexpr base::TimeDelta kWaitForExitInterval = base::Seconds(10);
 
 class RunAsUserPreExecDelegate : public base::LaunchOptions::PreExecDelegate {
  public:
-  RunAsUserPreExecDelegate(bool new_session, int uid, int gid)
-      : new_session_(new_session), uid_(uid), gid_(gid) {}
+  RunAsUserPreExecDelegate(bool new_session,
+                           std::optional<uid_t> uid,
+                           std::optional<gid_t> gid)
+      : new_session_(new_session), uid_(uid), gid_(gid) {
+    CHECK(uid_.has_value() == gid_.has_value());
+  }
   ~RunAsUserPreExecDelegate() override = default;
 
   RunAsUserPreExecDelegate(const RunAsUserPreExecDelegate&) = delete;
@@ -62,15 +69,15 @@ class RunAsUserPreExecDelegate : public base::LaunchOptions::PreExecDelegate {
         RAW_LOG(FATAL, "Failed to create a new session.");
       }
     }
-    if (uid_ >= 0 || gid_ >= 0) {
+    if (uid_.has_value() || gid_.has_value()) {
       if (setgroups(0, nullptr) != 0) {
         RAW_LOG(FATAL, "Failed to clear supplementary groups");
       }
     }
-    if (gid_ >= 0 && setgid(gid_) != 0) {
+    if (gid_.has_value() && setgid(*gid_) != 0) {
       RAW_LOG(FATAL, "Failed to setgid");
     }
-    if (uid_ >= 0 && setuid(uid_) != 0) {
+    if (uid_.has_value() && setuid(*uid_) != 0) {
       RAW_LOG(FATAL, "Failed to setuid");
     }
     // Kill the child process when the parent is dead.
@@ -83,8 +90,8 @@ class RunAsUserPreExecDelegate : public base::LaunchOptions::PreExecDelegate {
 
  private:
   bool new_session_;
-  int uid_;
-  int gid_;
+  std::optional<uid_t> uid_;
+  std::optional<gid_t> gid_;
 };
 
 }  // namespace
@@ -212,7 +219,7 @@ void LinuxWorkerProcessLauncherDelegate::LaunchProcess(
 
   channel_ = std::move(server);
 
-  // TODO: crbug.com/475611769 - watch for process exits.
+  WatchForProcessExit();
 }
 
 void LinuxWorkerProcessLauncherDelegate::GetRemoteAssociatedInterface(
@@ -248,6 +255,7 @@ void LinuxWorkerProcessLauncherDelegate::KillProcess() {
     worker_process_.Terminate(kSuccessExitCode, /*wait=*/true);
     worker_process_.Close();
   }
+  process_exit_watcher_.Reset();
 }
 
 void LinuxWorkerProcessLauncherDelegate::OnChannelConnected(int32_t peer_pid) {
@@ -287,12 +295,15 @@ void LinuxWorkerProcessLauncherDelegate::WatchForProcessExit() {
   DCHECK(worker_process_.IsValid());
   DCHECK(process_exit_watcher_.is_null());
 
-  auto task_runner = base::ThreadPool::CreateSingleThreadTaskRunner(
-      {base::MayBlock(), base::TaskPriority::BEST_EFFORT});
+  auto task_runner = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::WithBaseSyncPrimitives(),
+       base::TaskPriority::BEST_EFFORT});
   process_exit_watcher_.emplace(
       task_runner, worker_process_.Duplicate(),
-      base::BindOnce(&LinuxWorkerProcessLauncherDelegate::OnProcessExited,
-                     weak_ptr_factory_.GetWeakPtr()));
+      base::BindPostTask(
+          base::SequencedTaskRunner::GetCurrentDefault(),
+          base::BindOnce(&LinuxWorkerProcessLauncherDelegate::OnProcessExited,
+                         weak_ptr_factory_.GetWeakPtr())));
 }
 
 void LinuxWorkerProcessLauncherDelegate::OnProcessExited(int exit_code) {
@@ -301,7 +312,9 @@ void LinuxWorkerProcessLauncherDelegate::OnProcessExited(int exit_code) {
   worker_process_.Close();
   process_exit_watcher_.Reset();
 
-  event_handler_->OnProcessExited(exit_code);
+  if (event_handler_) {
+    event_handler_->OnProcessExited(exit_code);
+  }
 }
 
 void LinuxWorkerProcessLauncherDelegate::ReportFatalError() {

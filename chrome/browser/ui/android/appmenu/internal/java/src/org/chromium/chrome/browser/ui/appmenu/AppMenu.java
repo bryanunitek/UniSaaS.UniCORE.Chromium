@@ -34,6 +34,7 @@ import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.base.Callback;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.SysUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
@@ -56,6 +57,7 @@ import org.chromium.ui.hierarchicalmenu.FlyoutController;
 import org.chromium.ui.hierarchicalmenu.FlyoutController.FlyoutHandler;
 import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController;
 import org.chromium.ui.interpolators.Interpolators;
+import org.chromium.ui.util.AttrUtils;
 import org.chromium.ui.widget.AnchoredPopupWindow;
 import org.chromium.ui.widget.FlyoutPopupSpecCalculator;
 import org.chromium.ui.widget.RectProvider;
@@ -253,6 +255,7 @@ class AppMenu implements OnKeyListener {
     private final int[] mTempLocation;
     private final AppMenuVisibilityDelegate mVisibilityDelegate;
     private final boolean mDisableVerticalScrollbar;
+    private final boolean mPositionBelowAnchor;
 
     private @Nullable Context mContext;
     private @Nullable ListView mListView;
@@ -290,6 +293,7 @@ class AppMenu implements OnKeyListener {
 
         mTempLocation = new int[2];
         mHierarchicalMenuController = hierarchicalMenuController;
+        mPositionBelowAnchor = DeviceInfo.isDesktop();
     }
 
     /**
@@ -405,7 +409,7 @@ class AppMenu implements OnKeyListener {
 
         int menuWidth;
         if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)) {
-            menuWidth = context.getResources().getDimensionPixelSize(R.dimen.menu_width_lff);
+            menuWidth = AttrUtils.getDimensionPixelSize(context, R.attr.appMenuWidth);
         } else {
             menuWidth = context.getResources().getDimensionPixelSize(R.dimen.menu_width);
         }
@@ -490,7 +494,8 @@ class AppMenu implements OnKeyListener {
                         anchorView,
                         popupWidth,
                         popupHeight,
-                        anchorView.getRootView().getLayoutDirection());
+                        anchorView.getRootView().getLayoutDirection(),
+                        mPositionBelowAnchor);
         popup.setContentView(contentView);
 
         mHierarchicalMenuController.setupFlyoutController(
@@ -621,7 +626,8 @@ class AppMenu implements OnKeyListener {
             View anchorView,
             int popupWidth,
             int popupHeight,
-            int viewLayoutDirection) {
+            int viewLayoutDirection,
+            boolean positionBelowAnchor) {
         anchorView.getLocationInWindow(tempLocation);
         int anchorViewX = tempLocation[0];
         int anchorViewY = tempLocation[1];
@@ -667,7 +673,11 @@ class AppMenu implements OnKeyListener {
             int yPos = anchorViewY - popupHeight + padding.bottom;
             return new int[] {xPos, yPos};
         } else {
-            offsets[1] = -negativeSoftwareVerticalOffset;
+            if (positionBelowAnchor) {
+                offsets[1] = anchorView.getHeight() - padding.top;
+            } else {
+                offsets[1] = -negativeSoftwareVerticalOffset;
+            }
             if (viewLayoutDirection != View.LAYOUT_DIRECTION_RTL) {
                 offsets[0] = anchorView.getWidth() - popupWidth;
             }
@@ -781,7 +791,10 @@ class AppMenu implements OnKeyListener {
             return 0;
         }
 
-        int anchorViewImpactHeight = mIsByPermanentButton ? mMenuSpec.anchorView.getHeight() : 0;
+        int anchorViewImpactHeight =
+                (mIsByPermanentButton || mPositionBelowAnchor)
+                        ? mMenuSpec.anchorView.getHeight()
+                        : 0;
 
         int availableScreenSpace =
                 mMenuSpec.visibleDisplayFrame.height()

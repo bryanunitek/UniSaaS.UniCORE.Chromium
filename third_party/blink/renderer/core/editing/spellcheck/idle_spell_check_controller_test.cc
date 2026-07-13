@@ -227,7 +227,7 @@ TEST_P(IdleSpellCheckControllerTest,
       "aaaaaaaaaaaaaaaaa</pre></form>");
   auto* option_element = QuerySelector("option");
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .Collapse(Position(option_element, 1))
           .Build(),
       SetSelectionOptions());
@@ -331,6 +331,44 @@ TEST_P(IdleSpellCheckControllerTest, SelectionFocusType) {
       IdleChecker().ForceInvocationForTesting();
       EXPECT_EQ(State::kInactive, IdleChecker().GetState());
     }
+  }
+}
+
+TEST_P(IdleSpellCheckControllerTest, ProgrammaticSelectionChangeToNewElement) {
+  IdleChecker().Deactivate();
+  SetBodyContent(
+      "<div id='div1' contenteditable='true' spellcheck='true'>foo</div>"
+      "<div id='div2' contenteditable='true' spellcheck='true'>bar</div>");
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(State::kInactive, IdleChecker().GetState());
+
+  // Focus div1 using a mouse user gesture.
+  Element* div1 = QuerySelector("#div1");
+  ASSERT_NE(div1, nullptr);
+  div1->Focus(FocusParams(SelectionBehaviorOnFocus::kRestore,
+                          mojom::blink::FocusType::kMouse,
+                          /*capabilities=*/nullptr));
+  GetDocument().GetFrame()->Selection().SetFrameIsFocused(true);
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(State::kHotModeRequested, IdleChecker().GetState());
+  EXPECT_EQ(div1, GetDocument().FocusedElement());
+  EXPECT_TRUE(div1->WasLastFocusFromUserGesture());
+
+  // Programmatically change selection to div2 (without user gesture).
+  Element* div2 = QuerySelector("#div2");
+  ASSERT_NE(div2, nullptr);
+  EXPECT_FALSE(div2->WasLastFocusFromUserGesture());
+
+  GetDocument().GetFrame()->Selection().SetSelection(
+      SelectionInDomTree::Builder().Collapse(Position(div2, 0)).Build(),
+      SetSelectionOptions());
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ(div2, GetDocument().FocusedElement());
+  if (IsUnrestricted()) {
+    EXPECT_EQ(State::kHotModeRequested, IdleChecker().GetState());
+  } else {
+    EXPECT_EQ(State::kInactive, IdleChecker().GetState());
   }
 }
 

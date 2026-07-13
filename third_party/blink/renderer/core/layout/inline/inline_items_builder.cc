@@ -363,6 +363,20 @@ bool InlineItemsBuilderTemplate<MappingBuilder>::AppendTextReusing(
   if (!old_item0.Length())
     return false;
 
+  // Abort reuse if the item was previously preceded by a block-in-inline.
+  // Removing a block-in-inline alters the whitespace collapsing context.
+  if (old_item0.Index() < original_data.items.size()) {
+    for (wtf_size_t i = old_item0.Index(); i > 0; --i) {
+      const InlineItem& prev_item = *original_data.items[i - 1];
+      if (prev_item.Length() > 0 || prev_item.Type() == InlineItem::kControl) {
+        break;
+      }
+      if (prev_item.Type() == InlineItem::kBlockInInline) [[unlikely]] {
+        return false;
+      }
+    }
+  }
+
   const String& original_string = original_data.text_content;
 
   // Don't reuse existing items if they might be affected by whitespace
@@ -642,7 +656,9 @@ void InlineItemsBuilderTemplate<MappingBuilder>::AppendText(
   }
 
   const wtf_size_t estimated_length = text_.length() + string.length();
-  if (estimated_length > text_.Capacity()) {
+  // Don't reserve on the first append, as it will reallocate the string buffer
+  // causing duplication.
+  if (!text_.empty() && estimated_length > text_.Capacity()) {
     // The reallocations may occur very frequently for large text such as log
     // files. We use a more aggressive expansion strategy, the same as
     // |Vector::ExpandCapacity| does for |Vector|s with inline storage.
@@ -1518,6 +1534,10 @@ void InlineItemsBuilderTemplate<MappingBuilder>::EnterBlock(
                      uchar::kPopDirectionalFormatting);
   }
 
+  if (style->GetTextEmphasisMark() != TextEmphasisMark::kNone) {
+    has_text_emphasis_ = true;
+  }
+
   if (style->IsDisplayListItem() && style->ListStyleType()) {
     is_block_level_ = false;
   }
@@ -1562,6 +1582,10 @@ void InlineItemsBuilderTemplate<MappingBuilder>::EnterInline(
                          uchar::kPopDirectionalFormatting);
         break;
     }
+  }
+
+  if (style->GetTextEmphasisMark() != TextEmphasisMark::kNone) {
+    has_text_emphasis_ = true;
   }
 
   has_ruby_ = has_ruby_ || node->IsInlineRubyText();
@@ -1741,6 +1765,7 @@ void InlineItemsBuilderTemplate<MappingBuilder>::DidFinishCollectInlines(
   data->has_out_of_flow_positioned_ = has_out_of_flow_positioned_;
   data->has_initial_letter_box_ = has_initial_letter_box_;
   data->has_ruby_ = has_ruby_;
+  data->has_text_emphasis_ = has_text_emphasis_;
   data->is_block_level_ = IsBlockLevel();
   data->changes_may_affect_earlier_lines_ = HasUnicodeBidiPlainText();
   data->is_bisect_line_break_disabled_ = is_bisect_line_break_disabled_;

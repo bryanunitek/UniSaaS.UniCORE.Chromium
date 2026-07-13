@@ -133,7 +133,7 @@ MatchBubbleParameters(
 }
 
 void MakeValidAccountCapabilities(AccountInfo* info) {
-  AccountCapabilitiesTestMutator mutator(&info->capabilities);
+  AccountCapabilitiesTestMutator mutator(info);
   mutator.set_is_subject_to_parental_controls(true);
   bool is_managed = info->IsManaged() == signin::Tribool::kTrue;
   mutator.set_is_subject_to_enterprise_features(is_managed);
@@ -434,7 +434,7 @@ TEST_F(DiceWebSigninInterceptorTest, ShouldShowEnterpriseBubble) {
   other_account_info = AccountInfo::Builder(other_account_info)
                            .SetHostedDomain("example.com")
                            .Build();
-  AccountCapabilitiesTestMutator(&other_account_info.capabilities)
+  AccountCapabilitiesTestMutator(&other_account_info)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(other_account_info);
   AccountInfo account_info =
@@ -454,7 +454,7 @@ TEST_F(DiceWebSigninInterceptorTest, ShouldShowEnterpriseBubble) {
   EXPECT_FALSE(interceptor()->ShouldShowEnterpriseBubble(account_info));
   account_info =
       AccountInfo::Builder(account_info).SetHostedDomain("example.com").Build();
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
   EXPECT_TRUE(interceptor()->ShouldShowEnterpriseBubble(account_info));
@@ -467,7 +467,7 @@ TEST_F(DiceWebSigninInterceptorTest, ShouldShowEnterpriseBubble) {
   // Two consumer accounts.
   account_info =
       AccountInfo::Builder(account_info).SetHostedDomain(std::string()).Build();
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_is_subject_to_account_level_enterprise_policies(false);
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
   EXPECT_FALSE(interceptor()->ShouldShowEnterpriseBubble(account_info));
@@ -475,7 +475,7 @@ TEST_F(DiceWebSigninInterceptorTest, ShouldShowEnterpriseBubble) {
   primary_account_info = AccountInfo::Builder(primary_account_info)
                              .SetHostedDomain("example.com")
                              .Build();
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(primary_account_info);
   EXPECT_TRUE(interceptor()->ShouldShowEnterpriseBubble(account_info));
@@ -500,7 +500,7 @@ TEST_F(DiceWebSigninInterceptorTest, ShouldEnforceEnterpriseProfileSeparation) {
   other_account_info = AccountInfo::Builder(other_account_info)
                            .SetHostedDomain("example.com")
                            .Build();
-  AccountCapabilitiesTestMutator(&other_account_info.capabilities)
+  AccountCapabilitiesTestMutator(&other_account_info)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(other_account_info);
   AccountInfo account_info =
@@ -516,7 +516,7 @@ TEST_F(DiceWebSigninInterceptorTest, ShouldEnforceEnterpriseProfileSeparation) {
       interceptor()->ShouldEnforceEnterpriseProfileSeparation(account_info));
   account_info =
       AccountInfo::Builder(account_info).SetHostedDomain("example.com").Build();
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(account_info);
   // Managed account intercepted.
@@ -533,7 +533,7 @@ TEST_F(DiceWebSigninInterceptorTest,
   AccountInfo account_info_1 =
       identity_test_env()->MakeAccountAvailable("bob@example.com");
   MakeValidAccountInfo(&account_info_1, "example.com");
-  AccountCapabilitiesTestMutator(&account_info_1.capabilities)
+  AccountCapabilitiesTestMutator(&account_info_1)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(account_info_1);
 
@@ -553,7 +553,7 @@ TEST_F(DiceWebSigninInterceptorTest,
       identity_test_env()->MakePrimaryAccountAvailable(
           "alice@example.com", signin::ConsentLevel::kSignin);
   MakeValidAccountInfo(&primary_account_info, "example.com");
-  AccountCapabilitiesTestMutator(&primary_account_info.capabilities)
+  AccountCapabilitiesTestMutator(&primary_account_info)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(primary_account_info);
 
@@ -1079,7 +1079,7 @@ TEST_F(DiceWebSigninInterceptorTest, ShouldShowEnterpriseBubbleWithoutUPA) {
                        .SetHostedDomain("example.com")
                        .Build();
   {
-    AccountCapabilitiesTestMutator(&account_info_1.capabilities)
+    AccountCapabilitiesTestMutator(&account_info_1)
         .set_is_subject_to_account_level_enterprise_policies(true);
   }
   identity_test_env()->UpdateAccountInfoForAccount(account_info_1);
@@ -1089,7 +1089,7 @@ TEST_F(DiceWebSigninInterceptorTest, ShouldShowEnterpriseBubbleWithoutUPA) {
   account_info_2 = AccountInfo::Builder(account_info_2)
                        .SetHostedDomain("example.com")
                        .Build();
-  AccountCapabilitiesTestMutator(&account_info_2.capabilities)
+  AccountCapabilitiesTestMutator(&account_info_2)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(account_info_2);
 
@@ -1831,14 +1831,95 @@ TEST_F(DiceWebSigninInterceptorTest,
       WebSigninInterceptor::SigninInterceptionType::kEnterpriseForced,
       account_info, AccountInfo(), SkColor(),
       /*show_link_data_option=*/true, /*show_managed_disclaimer=*/false);
+  base::OnceCallback<void(SigninInterceptionResult)> bubble_callback;
   EXPECT_CALL(*mock_delegate(),
               ShowSigninInterceptionBubble(
                   web_contents(), MatchBubbleParameters(expected_parameters),
-                  testing::_));
+                  testing::_))
+      .WillOnce(testing::WithArg<2>(
+          [&bubble_callback](
+              base::OnceCallback<void(SigninInterceptionResult)> callback) {
+            bubble_callback = std::move(callback);
+            return std::make_unique<
+                TestScopedWebSigninInterceptionBubbleHandle>();
+          }));
   MaybeIntercept(account_info.account_id);
   histogram_tester.ExpectUniqueSample(
       "Signin.Intercept.HeuristicOutcome",
       SigninInterceptionHeuristicOutcome::kInterceptEnterpriseForced, 1);
+
+  // Signin.SignIn.Offered should be recorded for enterprise.
+  histogram_tester.ExpectUniqueSample(
+      "Signin.SignIn.Offered",
+      signin_metrics::AccessPoint::kEnterpriseDialogAfterSigninInterception, 1);
+
+  ASSERT_TRUE(bubble_callback);
+  // Signin.SignIn.Started should not be recorded yet.
+  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
+
+  // Simulate user accepting the bubble.
+  std::move(bubble_callback).Run(SigninInterceptionResult::kAccepted);
+
+  // Signin.SignIn.Started should now be recorded.
+  histogram_tester.ExpectUniqueSample(
+      "Signin.SignIn.Started",
+      signin_metrics::AccessPoint::kEnterpriseDialogAfterSigninInterception, 1);
+}
+
+TEST_F(
+    DiceWebSigninInterceptorTest,
+    ConsumerAccountForcedEnterpriseInterceptionOnEmptyProfile_AcceptWithExistingProfile) {
+  base::ListValue profile_separation_exception_list;
+  profile_separation_exception_list.Append(base::Value("notexample.com"));
+  profile()->GetPrefs()->SetList(prefs::kProfileSeparationDomainExceptionList,
+                                 std::move(profile_separation_exception_list));
+
+  base::HistogramTester histogram_tester;
+  AccountInfo account_info =
+      identity_test_env()->MakeAccountAvailable("alice@gmail.com");
+  MakeValidAccountInfo(&account_info);
+  identity_test_env()->UpdateAccountInfoForAccount(account_info);
+
+  // Account info is already available, interception happens immediately.
+  WebSigninInterceptor::Delegate::BubbleParameters expected_parameters(
+      WebSigninInterceptor::SigninInterceptionType::kEnterpriseForced,
+      account_info, AccountInfo(), SkColor(),
+      /*show_link_data_option=*/true, /*show_managed_disclaimer=*/false);
+  base::OnceCallback<void(SigninInterceptionResult)> bubble_callback;
+  EXPECT_CALL(*mock_delegate(),
+              ShowSigninInterceptionBubble(
+                  web_contents(), MatchBubbleParameters(expected_parameters),
+                  testing::_))
+      .WillOnce(testing::WithArg<2>(
+          [&bubble_callback](
+              base::OnceCallback<void(SigninInterceptionResult)> callback) {
+            bubble_callback = std::move(callback);
+            return std::make_unique<
+                TestScopedWebSigninInterceptionBubbleHandle>();
+          }));
+  MaybeIntercept(account_info.account_id);
+  histogram_tester.ExpectUniqueSample(
+      "Signin.Intercept.HeuristicOutcome",
+      SigninInterceptionHeuristicOutcome::kInterceptEnterpriseForced, 1);
+
+  // Signin.SignIn.Offered should be recorded for enterprise.
+  histogram_tester.ExpectUniqueSample(
+      "Signin.SignIn.Offered",
+      signin_metrics::AccessPoint::kEnterpriseDialogAfterSigninInterception, 1);
+
+  ASSERT_TRUE(bubble_callback);
+  // Signin.SignIn.Started should not be recorded yet.
+  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
+
+  // Simulate user accepting the bubble with existing profile.
+  std::move(bubble_callback)
+      .Run(SigninInterceptionResult::kAcceptedWithExistingProfile);
+
+  // Signin.SignIn.Started should now be recorded under
+  // kEnterpriseDialogAfterSigninInterception.
+  histogram_tester.ExpectUniqueSample(
+      "Signin.SignIn.Started",
+      signin_metrics::AccessPoint::kEnterpriseDialogAfterSigninInterception, 1);
 }
 
 TEST_F(DiceWebSigninInterceptorTest, ConsumerAccountAllowedOnEmptyProfile) {
@@ -1878,7 +1959,7 @@ TEST_F(DiceWebSigninInterceptorTest,
   primary_account_info = AccountInfo::Builder(primary_account_info)
                              .SetHostedDomain("example.com")
                              .Build();
-  AccountCapabilitiesTestMutator(&primary_account_info.capabilities)
+  AccountCapabilitiesTestMutator(&primary_account_info)
       .set_is_subject_to_account_level_enterprise_policies(true);
   identity_test_env()->UpdateAccountInfoForAccount(primary_account_info);
 
@@ -2007,8 +2088,7 @@ TEST_P(DiceWebSigninInterceptorTestSupervisionMetrics, RecordMetrics) {
   MakeValidAccountInfoWithoutCapabilities(&intercepted_account_info);
 
   // Set supervised user capabilities and expectations.
-  AccountCapabilitiesTestMutator mutator(
-      &intercepted_account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&intercepted_account_info);
   mutator.set_is_subject_to_account_level_enterprise_policies(false);
   SinginInterceptSupervisionState expected_state;
   switch (IsSupervisedUser()) {

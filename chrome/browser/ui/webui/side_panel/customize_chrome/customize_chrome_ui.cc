@@ -315,6 +315,9 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
     }
     if (aim_eligibility_service->IsCreateImagesEligible()) {
       num_tools_eligible++;
+      if (base::FeatureList::IsEnabled(ntp_features::kNtpStarterChip)) {
+        num_tools_eligible++;
+      }
     }
     if (base::FeatureList::IsEnabled(ntp_features::kNtpNextCanvasChip) &&
         aim_eligibility_service->IsCanvasEligible()) {
@@ -483,10 +486,10 @@ void CustomizeChromeUI::CreateCustomizeColorSchemeModeHandler(
 }
 
 void CustomizeChromeUI::CreateThemeColorPickerHandler(
-    mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
-        handler,
     mojo::PendingRemote<theme_color_picker::mojom::ThemeColorPickerClient>
-        client) {
+        client,
+    mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
+        handler) {
   theme_color_picker_handler_ = std::make_unique<ThemeColorPickerHandler>(
       std::move(handler), std::move(client),
       NtpCustomBackgroundServiceFactory::GetForProfile(profile_),

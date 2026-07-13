@@ -339,45 +339,43 @@ public class BottomAttachedUiObserver
 
         //  For bottom-anchored UI, we should disable animations on appearance and enable
         // animations on disappearance.
-        if (ChromeFeatureList.sNavBarColorAnimation.isEnabled()) {
-            // Checks for bottom controls such as bottom tab group tool bar and read aloud mini
-            // player.
-            boolean nonBottomChinBottomControlsVisible = areNonBottomChinBottomControlsVisible();
+        // Checks for bottom controls such as bottom tab group tool bar and read aloud mini
+        // player.
+        boolean nonBottomChinBottomControlsVisible = areNonBottomChinBottomControlsVisible();
 
-            // Disable animations on tab group toolbar appearance (toolbar visible false -> true).
-            // Enable animations on tab group toolbar disappearance (toolbar visible true -> false).
-            // We still want to enable animations when scrolling on/off (toolbar visible false
-            // -> false or true -> true).
-            boolean disableAnimationsTabGroupToolbar =
-                    !mNonBottomChinBottomControlsVisible && nonBottomChinBottomControlsVisible;
-            mNonBottomChinBottomControlsVisible = nonBottomChinBottomControlsVisible;
+        // Disable animations on tab group toolbar appearance (toolbar visible false -> true).
+        // Enable animations on tab group toolbar disappearance (toolbar visible true -> false).
+        // We still want to enable animations when scrolling on/off (toolbar visible false
+        // -> false or true -> true).
+        boolean disableAnimationsTabGroupToolbar =
+                !mNonBottomChinBottomControlsVisible && nonBottomChinBottomControlsVisible;
+        mNonBottomChinBottomControlsVisible = nonBottomChinBottomControlsVisible;
 
-            if (disableAnimationsTabGroupToolbar) {
-                return true;
-            }
+        if (disableAnimationsTabGroupToolbar) {
+            return true;
+        }
 
-            boolean isBottomBarVisible =
-                    (BottomBarConfigUtils.isBottomBarEnabled(mContext)
-                                    || mBrowserControlsStateProvider.getControlsPosition()
-                                            == ControlsPosition.BOTTOM)
-                            && !BrowserControlsUtils.areBottomControlsOffScreen(
-                                    mBrowserControlsStateProvider);
+        boolean isBottomBarVisible =
+                (BottomBarConfigUtils.isBottomBarEnabled(mContext)
+                                || mBrowserControlsStateProvider.getControlsPosition()
+                                        == ControlsPosition.BOTTOM)
+                        && !BrowserControlsUtils.areBottomControlsOffScreen(
+                                mBrowserControlsStateProvider);
 
-            if (isBottomBarVisible) {
-                return true;
-            }
+        if (isBottomBarVisible) {
+            return true;
+        }
 
-            if (mBottomSheetVisible) {
-                return true;
-            }
+        if (mBottomSheetVisible) {
+            return true;
+        }
 
-            if (mOverlayPanelVisible) {
-                return true;
-            }
+        if (mOverlayPanelVisible) {
+            return true;
+        }
 
-            if (mKeyboardAccessoryVisible) {
-                return true;
-            }
+        if (mKeyboardAccessoryVisible) {
+            return true;
         }
 
         return false;
@@ -386,8 +384,33 @@ public class BottomAttachedUiObserver
     private boolean shouldMatchBottomSheetColor() {
         if (!mBottomSheetVisible) return false;
 
-        if (BottomSheetUtils.isContentActingAsBrowserControls(mBottomSheetController)) {
+        if (BottomSheetUtils.isContentActingAsBrowserControls(
+                mBottomSheetController,
+                ChromeFeatureList.sBottomSheetAsBrowserControls.isEnabled())) {
             return false;
+        }
+
+        if (BottomBarConfigUtils.isBottomBarEnabled(mContext)) {
+            if (mIsSheetAnchoredToBottomControls) {
+                // Unscrimmed bottom sheets are anchored to the browser controls and pushed up by a
+                // bottom margin equal to the controls' height. Because they do not cover the
+                // controls even when expanded, we should match the sheet's color ONLY if there are
+                // no other browser controls present besides the bottom chin.
+                return !mBottomControlsStacker.hasVisibleLayersOtherThan(
+                        Set.of(LayerType.BOTTOM_CHIN, LayerType.BOTTOM_SHEET));
+            } else if (isFullWidthBottomSheetExpanded()) {
+                // When a scrimmed bottom sheet is expanded (HALF or FULL) in full width, it has no
+                // bottom margin and covers the bottom controls and bottom chin, so the bottom sheet
+                // color should always be matched.
+                return true;
+            } else {
+                // When using bottom chin, the chin is covered by the sheet so sheet color could
+                // should not be used in partial width. When sheet is in full width, it covers the
+                // chin. So the chin's color is not impacted by the bottom sheet in any width
+                // setting. When the bottom chin is not in use, the sheet is attached to the nav bar
+                // directly, so bottom sheet color should be used.
+                return !mBottomControlsStacker.isLayerVisible(LayerType.BOTTOM_CHIN);
+            }
         }
 
         if (isFullWidthBottomSheetExpanded()) {

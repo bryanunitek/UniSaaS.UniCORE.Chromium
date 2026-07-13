@@ -14,7 +14,6 @@
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
-#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 
 using manual_fill::ManualFillDataType;
@@ -60,6 +59,10 @@ constexpr CGFloat kSegmentedControlHeight = 32;
 // Multiplier used to constraint the view's height.
 constexpr CGFloat kViewHeightMultiplier = 0.6;
 
+// Height used during the initial layout until the view is added to the view
+// hierarchy.
+constexpr CGFloat kInitialHeightPlaceholder = 400;
+
 // Height of the header's top view. Used for the narrow layout only.
 constexpr CGFloat kHeaderTopViewHeightNarrowLayout = 44;
 // Vertical spacing between the bottom of the header top view and segmented
@@ -84,6 +87,9 @@ int GetSegmentIndexForDataType(ManualFillDataType data_type) {
       return 1;
     case ManualFillDataType::kAddress:
       return 2;
+    case ManualFillDataType::kAtMemory:
+      // TODO(crbug.com/522326512): Support kAtMemory.
+      NOTREACHED();
     case ManualFillDataType::kOther:
       NOTREACHED();
   }
@@ -147,8 +153,7 @@ CGFloat GetHeaderViewTopConstraintConstant(bool is_compact_height) {
   // Negative top padding should be applied only for iOS 26.0 - iOS 26.3.
   if (@available(iOS 26.0, *)) {
     if (!@available(iOS 26.4, *)) {
-      if (!is_compact_height &&
-          ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET) {
+      if (!is_compact_height && ![ManualFillUtil shouldUsePopover]) {
         return kIOS26HeaderViewTopPadding;
       }
     }
@@ -166,7 +171,7 @@ CGFloat GetHeaderViewTopConstraintConstant(bool is_compact_height) {
 // that can be used to align other UI elements with the cells.
 CGFloat GetUpdatedHorizontalInset(CGFloat inset) {
   if (@available(iOS 26, *)) {
-    if (ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET) {
+    if (![ManualFillUtil shouldUsePopover]) {
       return inset + kIOS26TableViewCellExtraHorizontalInset;
     }
   }
@@ -265,8 +270,7 @@ CGFloat GetTableViewCellHorizontalInset(UITableView* tableView) {
   // window is loaded in `viewDidAppear`, the view's height will be
   // dynamically constraint to its window's height instead.
   self.view.autoresizingMask = UIViewAutoresizingNone;
-  self.view.frame = CGRectMake(
-      0, 0, 0, UIScreen.mainScreen.bounds.size.height * kViewHeightMultiplier);
+  self.view.frame = CGRectMake(0, 0, 0, kInitialHeightPlaceholder);
 
   _headerView = [self createHeaderView];
   _headerTopView = [self createHeaderTopView];

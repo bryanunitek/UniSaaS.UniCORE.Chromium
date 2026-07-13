@@ -27,6 +27,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/observer_list.h"
 #include "base/run_loop.h"
@@ -48,7 +49,6 @@
 #include "components/services/storage/public/mojom/storage_service.mojom.h"
 #include "components/services/storage/shared_storage/shared_storage_manager.h"
 #include "components/services/storage/storage_service_impl.h"
-#include "components/variations/net/omnibox_autofocus_http_headers.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "content/browser/aggregation_service/aggregation_service.h"
 #include "content/browser/aggregation_service/aggregation_service_impl.h"
@@ -66,6 +66,7 @@
 #include "content/browser/code_cache/generated_code_cache.h"
 #include "content/browser/code_cache/generated_code_cache_context.h"
 #include "content/browser/cookie_store/cookie_store_manager.h"
+#include "content/browser/declarative_performance_observer/declarative_performance_observer_store.h"
 #include "content/browser/devtools/devtools_background_services_context_impl.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/devtools/devtools_url_loader_interceptor.h"
@@ -142,6 +143,7 @@
 #include "net/disk_cache/buildflags.h"
 #include "net/ssl/client_cert_store.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/cors/origin_access_list.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/ip_address_space_util.h"
@@ -902,6 +904,8 @@ class StoragePartitionImpl::DataDeletionHelper {
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
       network::mojom::DeviceBoundSessionManager* device_bound_session_manager,
       KeepAliveURLLoaderService* keep_alive_url_loader_service,
+      DeclarativePerformanceObserverStore*
+          declarative_performance_observer_store,
       bool perform_storage_cleanup,
       const base::Time begin,
       const base::Time end);
@@ -926,7 +930,8 @@ class StoragePartitionImpl::DataDeletionHelper {
     kInterestGroups = 13,
     kCdmStorage = 14,
     kDeviceBoundSessions = 15,
-    kMaxValue = kDeviceBoundSessions,
+    kDeclarativePerformanceObserver = 16,
+    kMaxValue = kDeclarativePerformanceObserver,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/history/enums.xml:StoragePartitionRemoverTasks)
 
@@ -1213,15 +1218,22 @@ void StoragePartitionImpl::OnBrowserContextWillBeDestroyed() {
   if (keep_alive_url_loader_service_) {
     keep_alive_url_loader_service_->Shutdown();
   }
+
+  if (declarative_performance_observer_store_) {
+    declarative_performance_observer_store_->Close();
+  }
 }
 
 void StoragePartitionImpl::RegisterKeepAliveHandle(
     mojo::PendingReceiver<blink::mojom::NavigationStateKeepAliveHandle>
         receiver,
     std::unique_ptr<NavigationStateKeepAlive> handle) {
-  navigation_state_keep_alive_map_.erase(handle->frame_token());
+  auto frame_token = static_cast<InitiatorNavigationStateImpl*>(
+                         handle->initiator_navigation_state().get())
+                         ->frame_token();
+  navigation_state_keep_alive_map_.erase(frame_token);
   navigation_state_keep_alive_map_.insert(
-      std::make_pair(handle->frame_token(), handle.get()));
+      std::make_pair(frame_token, handle.get()));
 
   keep_alive_handles_receiver_set_.Add(std::move(handle), std::move(receiver));
 }
@@ -1232,6 +1244,11 @@ void StoragePartitionImpl::RestrictNetworkForIdsInNetworkContext(
     base::OnceClosure callback) {
   std::vector<network::mojom::IdAndAllowlistedPatternsPtr> dest_vector;
   for (const auto& pair : ids_to_allowlists) {
+    CHECK(pair.first != network::GetNoOpNetworkRestrictionsId(),
+          base::NotFatalUntil::M165);
+    CHECK(pair.first != network::GetTODONetworkRestrictionsId(),
+          base::NotFatalUntil::M165);
+
     // Create a new Mojo struct pointer for each map entry.
     auto id_and_patterns = network::mojom::IdAndAllowlistedPatterns::New();
     id_and_patterns->network_restrictions_id = pair.first;
@@ -1557,6 +1574,13 @@ void StoragePartitionImpl::Initialize(
     private_aggregation_manager_ =
         std::make_unique<PrivateAggregationManagerImpl>(is_in_memory(), path,
                                                         this);
+  }
+
+  if (base::FeatureList::IsEnabled(
+          blink::features::kDeclarativePerformanceObserver)) {
+    declarative_performance_observer_store_ =
+        std::make_unique<DeclarativePerformanceObserverStore>(is_in_memory(),
+                                                              path);
   }
 }
 
@@ -2230,7 +2254,7 @@ void StoragePartitionImpl::OnLocalNetworkAccessPermissionRequired(
       rfh = context.navigation_or_document()->GetDocument();
     } else if (context.navigation_or_document()->GetNavigationRequest()) {
       // Currently the LNA permission only applies to subframe navigations.
-      // See content/browser/renderer_host/private_network_access_util.cc for
+      // See content/browser/renderer_host/local_network_access_util.cc for
       // current feature state to policy mapping logic.
       //
       // For other types of navigation, we either default-allow or default-block
@@ -2456,10 +2480,14 @@ void StoragePartitionImpl::OnCertificateRequested(
 
   base::WeakPtr<WebContents> web_contents_weak;
   int process_id = network::mojom::kInvalidProcessId;
-  if (context.type() == ContextType::kSharedOrServiceWorkerContext) {
-    // TODO(crbug.com/379869738) Remove GetUnsafeValue.
-    // TODO(crbug.com/479742988) This can be the browser process and shouldn't.
-    process_id = context.process_id().GetUnsafeValue();
+  if (context.type() == ContextType::kSharedOrServiceWorkerContext ||
+      context.type() == ContextType::kDeviceBoundSessionContext) {
+    if (context.type() == ContextType::kSharedOrServiceWorkerContext) {
+      // TODO(crbug.com/379869738) Remove GetUnsafeValue.
+      // TODO(crbug.com/479742988) This can be the browser process and
+      // shouldn't.
+      process_id = context.process_id().GetUnsafeValue();
+    }
   } else {
     WebContents* web_contents = context.GetWebContents();
     // The WebContents is already invalid. Bail.
@@ -2679,7 +2707,17 @@ StoragePartitionImpl::CreateURLLoaderNetworkObserverForServiceOrSharedWorker(
   mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver> remote;
   url_loader_network_observers_.Add(
       this, remote.InitWithNewPipeAndPassReceiver(),
-      URLLoaderNetworkContext(process_id, worker_origin));
+      URLLoaderNetworkContext::CreateForServiceOrSharedWorker(process_id,
+                                                              worker_origin));
+  return remote;
+}
+
+mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+StoragePartitionImpl::CreateURLLoaderNetworkObserverForDeviceBoundSessions() {
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver> remote;
+  url_loader_network_observers_.Add(
+      this, remote.InitWithNewPipeAndPassReceiver(),
+      URLLoaderNetworkContext::CreateForDeviceBoundSessions());
   return remote;
 }
 
@@ -2852,7 +2890,8 @@ void StoragePartitionImpl::ClearDataImpl(
       cdm_storage_manager_.get(),
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
       GetDeviceBoundSessionManager(), GetKeepAliveURLLoaderService(),
-      perform_storage_cleanup, begin, end);
+      declarative_performance_observer_store_.get(), perform_storage_cleanup,
+      begin, end);
 }
 
 void StoragePartitionImpl::DeletionHelperDone(base::OnceClosure callback) {
@@ -2957,6 +2996,7 @@ void StoragePartitionImpl::DataDeletionHelper::ClearData(
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
     network::mojom::DeviceBoundSessionManager* device_bound_session_manager,
     KeepAliveURLLoaderService* keep_alive_url_loader_service,
+    DeclarativePerformanceObserverStore* declarative_performance_observer_store,
     bool perform_storage_cleanup,
     const base::Time begin,
     const base::Time end) {
@@ -2993,6 +3033,29 @@ void StoragePartitionImpl::DataDeletionHelper::ClearData(
 
   auto combined_storage_key_matcher = CombineStorageKeyMatcherFunctions(
       storage_key_matcher, storage_key_policy_matcher);
+
+  if (remove_mask_ & REMOVE_DATA_MASK_DECLARATIVE_PERFORMANCE_OBSERVER) {
+    if (declarative_performance_observer_store) {
+      auto completion_callback = CreateTaskCompletionClosure(
+          TracingDataType::kDeclarativePerformanceObserver);
+      if (!storage_key_origin_empty) {
+        declarative_performance_observer_store->ClearDataForOrigin(
+            storage_key.origin(), std::move(completion_callback));
+      } else if (generic_filter.is_null()) {
+        declarative_performance_observer_store->ClearAllData(
+            std::move(completion_callback));
+      } else {
+        auto origin_matcher = base::BindRepeating(
+            [](const StorageKeyMatcherFunction& filter,
+               const url::Origin& origin) {
+              return filter.Run(blink::StorageKey::CreateFirstParty(origin));
+            },
+            generic_filter);
+        declarative_performance_observer_store->ClearDataWithFilter(
+            std::move(origin_matcher), std::move(completion_callback));
+      }
+    }
+  }
 
   if (remove_mask_ & REMOVE_DATA_MASK_COOKIES) {
     // The CookieDeletionFilter has a redundant time interval to `begin` and
@@ -3609,7 +3672,6 @@ void StoragePartitionImpl::InitNetworkContext() {
       GetCorsExemptRequestedWithHeaderName());
   context_params->cors_exempt_header_list.push_back("Last-Event-ID");
   variations::UpdateCorsExemptHeaderForVariations(context_params.get());
-  variations::UpdateCorsExemptHeaderForOmniboxAutofocus(context_params.get());
   cors_exempt_header_list_ = context_params->cors_exempt_header_list;
 
   if (base::FeatureList::IsEnabled(
@@ -3632,6 +3694,16 @@ void StoragePartitionImpl::InitNetworkContext() {
           GetWeakPtr(), is_in_memory() ? base::FilePath() : partition_path_);
     }
   }
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS) && !BUILDFLAG(IS_ANDROID)
+  // TODO(https://crbug.com/353770817): Android does not support non-interactive
+  // certificate selection. Do not enable this for Android.
+  if (base::FeatureList::IsEnabled(
+          net::features::kDeviceBoundSessionsClientCertSelection)) {
+    context_params->device_bound_sessions_network_observer =
+        CreateURLLoaderNetworkObserverForDeviceBoundSessions();
+  }
+#endif
 
   network_context_owner_->network_context.reset();
   CreateNetworkContextInNetworkService(
@@ -3675,6 +3747,7 @@ StoragePartitionImpl::CreateURLLoaderFactoryParams() {
   params->disable_web_security =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kDisableWebSecurity);
+  params->network_restrictions_id = network::GetNoOpNetworkRestrictionsId();
   return params;
 }
 
@@ -3883,6 +3956,9 @@ StoragePartitionImpl::URLLoaderNetworkContext::URLLoaderNetworkContext(
 StoragePartitionImpl::URLLoaderNetworkContext::URLLoaderNetworkContext(
     const URLLoaderNetworkContext& other) = default;
 
+StoragePartitionImpl::URLLoaderNetworkContext::URLLoaderNetworkContext()
+    : type_(Type::kDeviceBoundSessionContext) {}
+
 StoragePartitionImpl::URLLoaderNetworkContext&
 StoragePartitionImpl::URLLoaderNetworkContext::operator=(
     const URLLoaderNetworkContext& other) = default;
@@ -3900,6 +3976,19 @@ StoragePartitionImpl::URLLoaderNetworkContext
 StoragePartitionImpl::URLLoaderNetworkContext::CreateForNavigation(
     NavigationRequest& navigation_request) {
   return StoragePartitionImpl::URLLoaderNetworkContext(navigation_request);
+}
+
+StoragePartitionImpl::URLLoaderNetworkContext
+StoragePartitionImpl::URLLoaderNetworkContext::CreateForServiceOrSharedWorker(
+    const network::OriginatingProcessId& process_id,
+    const url::Origin& worker_origin) {
+  return StoragePartitionImpl::URLLoaderNetworkContext(process_id,
+                                                       worker_origin);
+}
+
+StoragePartitionImpl::URLLoaderNetworkContext
+StoragePartitionImpl::URLLoaderNetworkContext::CreateForDeviceBoundSessions() {
+  return StoragePartitionImpl::URLLoaderNetworkContext();
 }
 
 bool StoragePartitionImpl::URLLoaderNetworkContext::IsNavigationRequestContext()

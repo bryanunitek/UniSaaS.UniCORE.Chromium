@@ -52,6 +52,8 @@
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -60,12 +62,12 @@
 @interface PasswordsCoordinator () <
     AddPasswordCoordinatorDelegate,
     CredentialImportCoordinatorDelegate,
-    PasswordDetailsCoordinatorDelegate,
+    LocalReauthenticationCoordinatorDelegate,
     PasswordCheckupCoordinatorDelegate,
+    PasswordDetailsCoordinatorDelegate,
+    PasswordManagerViewControllerPresentationDelegate,
     PasswordSettingsCoordinatorDelegate,
     PasswordsSettingsCommands,
-    PasswordManagerViewControllerPresentationDelegate,
-    LocalReauthenticationCoordinatorDelegate,
     TrustedVaultReauthenticationCoordinatorDelegate,
     WidgetPromoInstructionsCoordinatorDelegate>
 
@@ -526,6 +528,7 @@
 - (void)willPushReauthenticationViewController {
   [self dismissActionSheetCoordinator];
   [self dismissTrustedVaultReauthenticationCoordinator];
+  [self dismissSigninCoordinator];
 }
 
 #pragma mark - WidgetPromoInstructionsCoordinatorDelegate
@@ -652,7 +655,20 @@
     return;
   }
 
-  CHECK(!_signinCoordinator, base::NotFatalUntil::M151);
+  AuthenticationService* authenticationService =
+      AuthenticationServiceFactory::GetForProfile(self.profile);
+  if (!authenticationService->SigninEnabled()) {
+    // TODO(crbug.com/450982128): Display some error message to the user.
+    self.credentialImportUUID = nil;
+    return;
+  }
+
+  // According to crbug.com/527063033 two signin coordinator may be opened
+  // simultaneously. This seems rare and it’s not clear why. Maybe because the
+  // consistency coordinator view is dismissed before the coordinator is
+  // stopped; giving a very short time to reopen this view. Let’s just stop
+  // the first one and re-open one.
+  [_signinCoordinator stop];
   signin_metrics::AccessPoint accessPoint =
       signin_metrics::AccessPoint::kSettings;
   _signinCoordinator = [SigninCoordinator
@@ -663,6 +679,7 @@
                                                      SigninContextStyle::
                                                          kDefault
                                                   accessPoint:accessPoint
+                                         confirmChangeProfile:nil
                                          prepareChangeProfile:nil
                                          continuationProvider:
                                              DoNothingContinuationProvider()];

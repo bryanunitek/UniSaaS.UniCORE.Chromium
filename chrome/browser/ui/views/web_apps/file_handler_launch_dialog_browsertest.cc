@@ -26,7 +26,7 @@
 #include "chrome/browser/ui/startup/web_app_startup_utils.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/web_apps/file_handler_launch_dialog_view.h"
-#include "chrome/browser/ui/views/web_apps/sub_apps_install_dialog_controller.h"
+#include "chrome/browser/ui/views/web_apps/sub_apps/sub_apps_install_dialog_controller.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
@@ -82,7 +82,7 @@ class FileHandlerLaunchDialogTest : public WebAppBrowserTestBase {
   }
 
   void TearDownOnMainThread() override {
-    test::UninstallAllWebApps(browser()->profile());
+    test::UninstallAllWebApps(browser()->GetProfile());
   }
 
   void LaunchAppWithFiles(const std::vector<base::FilePath>& paths) {
@@ -206,7 +206,7 @@ class FileHandlerLaunchDialogTest : public WebAppBrowserTestBase {
 
  protected:
   WebAppProvider* provider() {
-    return WebAppProvider::GetForTest(browser()->profile());
+    return WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
  private:
@@ -407,14 +407,10 @@ class FileHandlerLaunchDialogIwaTest : public IsolatedWebAppBrowserTestHarness {
     observer.SetWebAppInstalledWithOsHooksDelegate(
         test_future.GetRepeatingCallback<const webapps::AppId&>());
 
-    EXPECT_TRUE(content::ExecJs(iwa_contents,
-                                base::ReplaceStringPlaceholders(
-                                    R"(
-              navigator.subApps.add({
-                "$1": {"installURL": "$1"}
-              })
-            )",
-                                    {std::string(install_url)}, nullptr)));
+    EXPECT_TRUE(content::ExecJs(
+        iwa_contents,
+        base::ReplaceStringPlaceholders(R"(window.subApps.add(["$1"]);)",
+                                        {std::string(install_url)}, nullptr)));
 
     webapps::AppId sub_app_id = GenerateAppId(
         /*manifest_id_path=*/std::nullopt, expected_sub_app_url);

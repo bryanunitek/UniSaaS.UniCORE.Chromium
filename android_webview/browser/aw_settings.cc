@@ -622,6 +622,16 @@ void AwSettings::PopulateWebPreferencesLocked(JNIEnv* env,
   WebPreferences* web_prefs = reinterpret_cast<WebPreferences*>(web_prefs_ptr);
   PopulateFixedWebPreferences(web_prefs);
 
+  if (base::FeatureList::IsEnabled(
+          android_webview::features::
+              kWebViewGateTextSizeAdjustOnTextAutosizing)) {
+    web_prefs->text_size_adjust_enabled =
+        Java_AwSettings_getTextAutosizingEnabledLocked(env, obj);
+  } else {
+    // Keep the regressed behavior (always enabled) if flag is disabled.
+    web_prefs->text_size_adjust_enabled = true;
+  }
+
   const float font_scale_factor =
       Java_AwSettings_getTextSizePercentLocked(env, obj) / 100.0f;
   web_prefs->font_scale_factor = font_scale_factor;
@@ -798,16 +808,6 @@ void AwSettings::PopulateWebPreferencesLocked(JNIEnv* env,
   web_prefs->allow_mixed_content_upgrades =
       Java_AwSettings_getAllowMixedContentAutoupgradesLocked(env, obj);
 
-  web_prefs->ignore_duplicate_nav_enabled =
-      Java_AwSettings_getIgnoreDuplicateNavEnabledLocked(env, obj);
-  int64_t ignore_duplicate_nav_threshold_ms =
-      Java_AwSettings_getIgnoreDuplicateNavThresholdLocked(env, obj);
-  // If the threshold is -1, which means it is the default value in WebView,
-  // then do not set the threshold in WebPreferences.
-  if (ignore_duplicate_nav_threshold_ms != -1) {
-    web_prefs->duplicate_nav_threshold =
-        base::Milliseconds(ignore_duplicate_nav_threshold_ms);
-  }
 
   if (AwDarkMode* aw_dark_mode = AwDarkMode::FromWebContents(web_contents())) {
     aw_dark_mode->PopulateWebPreferences(

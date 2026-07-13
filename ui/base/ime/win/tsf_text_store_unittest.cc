@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "ui/base/ime/win/tsf_text_store.h"
 
 #include <initguid.h>  // for GUID_NULL and GUID_PROP_INPUTSCOPE
@@ -16,8 +11,10 @@
 #include <tsattrs.h>
 #include <wrl/client.h>
 
+#include <array>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
@@ -187,6 +184,10 @@ class TSFTextStoreTest : public testing::Test {
   }
   size_t* composition_start() { return &text_store_->composition_start_; }
 
+  void set_is_input_ime_for_testing(bool value) {
+    text_store_->is_input_ime_for_testing_ = value;
+  }
+
   base::win::ScopedCOMInitializer com_initializer_;
   MockTextInputClient text_input_client_;
   MockImeKeyEventDispatcher ime_key_event_dispatcher_;
@@ -314,8 +315,7 @@ class TSFTextStoreTestCallback {
                                          &text_buffer_copied, &run_info, 1,
                                          &run_info_buffer_copied, &next_acp));
     ASSERT_EQ(expected_string.size(), text_buffer_copied);
-    EXPECT_EQ(expected_string,
-              std::wstring(buffer, buffer + text_buffer_copied));
+    EXPECT_EQ(expected_string, std::wstring(buffer, text_buffer_copied));
     if (text_buffer_copied > 0) {
       EXPECT_EQ(1u, run_info_buffer_copied);
       EXPECT_EQ(expected_string.size(), run_info.uCount);
@@ -1585,13 +1585,13 @@ TEST_F(TSFTextStoreTest, RetrieveRequestedAttrs) {
 
   {
     SCOPED_TRACE("Make sure that InputScope is supported");
-    TS_ATTRVAL buffer[2] = {};
+    std::array<TS_ATTRVAL, 2> buffer = {};
     num_copied = 0xfffffff;
     const TS_ATTRID kAttributes[] = {GUID_PROP_INPUTSCOPE};
     ASSERT_EQ(S_OK, text_store_->RequestSupportedAttrs(
                         0, std::size(kAttributes), kAttributes));
-    ASSERT_EQ(S_OK, text_store_->RetrieveRequestedAttrs(std::size(buffer),
-                                                        buffer, &num_copied));
+    ASSERT_EQ(S_OK, text_store_->RetrieveRequestedAttrs(
+                        buffer.size(), buffer.data(), &num_copied));
     bool input_scope_found = false;
     for (size_t i = 0; i < num_copied; ++i) {
       base::win::ScopedVariant variant;
@@ -1610,7 +1610,7 @@ TEST_F(TSFTextStoreTest, RetrieveRequestedAttrs) {
   }
   {
     SCOPED_TRACE("Verify URL support");
-    TS_ATTRVAL buffer[2] = {};
+    std::array<TS_ATTRVAL, 2> buffer = {};
     num_copied = 0xfffffff;
     base::win::ScopedVariant variant;
     const TS_ATTRID urlAttributes[] = {GUID_PROP_URL};
@@ -1619,8 +1619,8 @@ TEST_F(TSFTextStoreTest, RetrieveRequestedAttrs) {
     // and is expected to match the test_url value set above.
     ASSERT_EQ(S_OK, text_store_->RequestSupportedAttrs(
                         0, std::size(urlAttributes), urlAttributes));
-    ASSERT_EQ(S_OK, text_store_->RetrieveRequestedAttrs(std::size(buffer),
-                                                        buffer, &num_copied));
+    ASSERT_EQ(S_OK, text_store_->RetrieveRequestedAttrs(
+                        buffer.size(), buffer.data(), &num_copied));
     EXPECT_EQ(num_copied, 1U) << "Expect only URL property to be supported";
     EXPECT_TRUE(IsEqualGUID(buffer[0].idAttr, GUID_PROP_URL));
     std::swap(*variant.Receive(), buffer[0].varValue);
@@ -1632,7 +1632,7 @@ TEST_F(TSFTextStoreTest, RetrieveRequestedAttrs) {
   }
   {
     SCOPED_TRACE("Verify URL and InputScope support");
-    TS_ATTRVAL buffer[2] = {};
+    std::array<TS_ATTRVAL, 2> buffer = {};
     num_copied = 0xfffffff;
     const TS_ATTRID inputScopeAndUrlAttributes[] = {GUID_PROP_INPUTSCOPE,
                                                     GUID_PROP_URL};
@@ -1642,8 +1642,8 @@ TEST_F(TSFTextStoreTest, RetrieveRequestedAttrs) {
     ASSERT_EQ(S_OK, text_store_->RequestSupportedAttrs(
                         0, std::size(inputScopeAndUrlAttributes),
                         inputScopeAndUrlAttributes));
-    ASSERT_EQ(S_OK, text_store_->RetrieveRequestedAttrs(std::size(buffer),
-                                                        buffer, &num_copied));
+    ASSERT_EQ(S_OK, text_store_->RetrieveRequestedAttrs(
+                        buffer.size(), buffer.data(), &num_copied));
     EXPECT_EQ(num_copied, 2U)
         << "Expect both URL & InputScope properties to be supported";
     for (size_t i = 0; i < num_copied; ++i) {
@@ -5409,6 +5409,119 @@ TEST_F(TSFTextStoreTest, AutocorrectOffAllowsIMENewCompositionMidText) {
   // Verify the buffer contains "한ㄴ국" (Korean IME insertion preserved, not
   // reverted).
   EXPECT_EQ(u"\uD55C\u3134\uAD6D", *string_buffer());
+}
+
+// Japanese IME inserts full-width space (U+3000) without composition.
+// Regression test for crbug.com/521644696.
+class AutocorrectOffFullWidthSpaceNoCompositionTestCallback
+    : public TSFTextStoreTestCallback {
+ public:
+  explicit AutocorrectOffFullWidthSpaceNoCompositionTestCallback(
+      TSFTextStore* text_store)
+      : TSFTextStoreTestCallback(text_store) {}
+
+  AutocorrectOffFullWidthSpaceNoCompositionTestCallback(
+      const AutocorrectOffFullWidthSpaceNoCompositionTestCallback&) = delete;
+  AutocorrectOffFullWidthSpaceNoCompositionTestCallback& operator=(
+      const AutocorrectOffFullWidthSpaceNoCompositionTestCallback&) = delete;
+
+  HRESULT LockGranted1(DWORD flags) {
+    SetTextTest(0, 0, L"hello", S_OK);
+    SetSelectionTest(5, 5, S_OK);
+    *edit_flag() = true;
+    *composition_start() = 0;
+    *has_composition_range() = false;
+    return S_OK;
+  }
+
+  void InsertText1(
+      const std::u16string& text,
+      ui::TextInputClient::InsertTextCursorBehavior cursor_behavior) {
+    EXPECT_EQ(u"hello", text);
+    SetTextRange(0, 5);
+    SetSelectionRange(5, 5);
+    SetTextBuffer(u"hello");
+  }
+
+  // IME inserts U+3000 at position 2 without composition.
+  HRESULT LockGranted2(DWORD flags) {
+    GetTextTest(0, -1, L"hello", 5);
+    SetSelectionTest(2, 2, S_OK);
+    SetTextTest(2, 2, L"\u3000", S_OK);
+    GetTextTest(0, -1, L"he\u3000llo", 6);
+    SetSelectionTest(3, 3, S_OK);
+    *edit_flag() = true;
+    *has_composition_range() = false;
+    return S_OK;
+  }
+
+  void InsertText2(
+      const std::u16string& text,
+      ui::TextInputClient::InsertTextCursorBehavior cursor_behavior) {
+    EXPECT_EQ(u"\u3000", text);
+    SetTextRange(0, 6);
+    SetSelectionRange(3, 3);
+    SetTextBuffer(u"he\u3000llo");
+  }
+};
+
+TEST_F(TSFTextStoreTest, AutocorrectOffAllowsFullWidthSpaceWithoutComposition) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kTSFHonorAutocorrectOff);
+
+  // Simulate Japanese IME being active.
+  set_is_input_ime_for_testing(true);
+
+  EXPECT_CALL(text_input_client_, GetTextInputType())
+      .WillRepeatedly(Return(TEXT_INPUT_TYPE_TEXT));
+
+  EXPECT_CALL(text_input_client_, GetTextInputFlags())
+      .WillRepeatedly(Return(TEXT_INPUT_FLAG_AUTOCORRECT_OFF));
+
+  AutocorrectOffFullWidthSpaceNoCompositionTestCallback callback(
+      text_store_.get());
+
+  EXPECT_CALL(text_input_client_, InsertText(_, _))
+      .WillOnce(Invoke(
+          &callback,
+          &AutocorrectOffFullWidthSpaceNoCompositionTestCallback::InsertText1))
+      .WillOnce(Invoke(
+          &callback,
+          &AutocorrectOffFullWidthSpaceNoCompositionTestCallback::InsertText2));
+
+  EXPECT_CALL(*sink_, OnLockGranted(_))
+      .WillOnce(Invoke(
+          &callback,
+          &AutocorrectOffFullWidthSpaceNoCompositionTestCallback::LockGranted1))
+      .WillOnce(Invoke(&callback,
+                       &AutocorrectOffFullWidthSpaceNoCompositionTestCallback::
+                           LockGranted2));
+
+  ON_CALL(text_input_client_, HasCompositionText())
+      .WillByDefault(
+          Invoke(&callback, &TSFTextStoreTestCallback::HasCompositionText));
+
+  ON_CALL(text_input_client_, GetTextRange(_))
+      .WillByDefault(
+          Invoke(&callback, &TSFTextStoreTestCallback::GetTextRange));
+
+  ON_CALL(text_input_client_, GetTextFromRange(_, _))
+      .WillByDefault(
+          Invoke(&callback, &TSFTextStoreTestCallback::GetTextFromRange));
+
+  ON_CALL(text_input_client_, GetEditableSelectionRange(_))
+      .WillByDefault(Invoke(
+          &callback, &TSFTextStoreTestCallback::GetEditableSelectionRange));
+
+  HRESULT result = kInvalidResult;
+  EXPECT_EQ(S_OK, text_store_->RequestLock(TS_LF_READWRITE, &result));
+  EXPECT_EQ(S_OK, result);
+
+  result = kInvalidResult;
+  EXPECT_EQ(S_OK, text_store_->RequestLock(TS_LF_READWRITE, &result));
+  EXPECT_EQ(S_OK, result);
+
+  EXPECT_EQ(u"he\u3000llo", *string_buffer());
 }
 
 }  // namespace

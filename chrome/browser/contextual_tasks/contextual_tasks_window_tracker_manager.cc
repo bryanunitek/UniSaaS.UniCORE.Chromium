@@ -41,7 +41,7 @@ ContextualTasksWindowTrackerManager::ContextualTasksWindowTrackerManager(
 }
 
 ContextualTasksWindowTrackerManager::~ContextualTasksWindowTrackerManager() {
-  for (auto* tab_list : observed_tab_lists_) {
+  for (TabListInterface* tab_list : observed_tab_lists_) {
     tab_list->RemoveTabListInterfaceObserver(this);
   }
 }
@@ -211,6 +211,34 @@ ContextualTasksWindowTrackerManager::FindTrackerByMessageProxy(
   }
   for (const auto& tracker : window_trackers_) {
     if (tracker->message_proxy_web_contents() == proxy_contents) {
+      return tracker.get();
+    }
+  }
+  return nullptr;
+}
+
+ContextualTasksWindowTracker*
+ContextualTasksWindowTrackerManager::FindTrackerByWindowId(
+    ContextualWindowId window_id) {
+  if (!GetIsContextualTasksWindowTrackingEnabled()) {
+    return nullptr;
+  }
+  for (const auto& tracker : window_trackers_) {
+    if (tracker->window_id() == window_id) {
+      return tracker.get();
+    }
+  }
+  return nullptr;
+}
+
+ContextualTasksWindowTracker*
+ContextualTasksWindowTrackerManager::FindTrackerByWebViewFrameTreeNodeId(
+    content::FrameTreeNodeId id) const {
+  if (!GetIsContextualTasksWindowTrackingEnabled()) {
+    return nullptr;
+  }
+  for (const auto& tracker : window_trackers_) {
+    if (tracker->GetWebViewFrameTreeNodeId() == id) {
       return tracker.get();
     }
   }

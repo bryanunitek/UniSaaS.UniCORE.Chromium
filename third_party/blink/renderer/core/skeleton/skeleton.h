@@ -24,23 +24,48 @@ class Skeleton : public GarbageCollected<Skeleton> {
     virtual void DocumentReady(Skeleton& skeleton) = 0;
   };
 
-  explicit Skeleton(Observer& observer) : observer_(&observer) {}
+  Skeleton(Observer& observer, Document& owner_document);
 
-  // Render the skeleton for a given url
-  void Render(KURL url, Document& owner_document);
+  // Do a HEAD request to get the skeleton url for 'url'
+  void FetchSkeletonURL(KURL url);
 
-  Document& GetDocument() {
+  // Render the skeleton in the owner document
+  void Render();
+
+  Document& GetSkeletonDocument() {
     CHECK(skeleton_document_);
     return *skeleton_document_;
+  }
+
+  Document& GetOwnerDocument() {
+    CHECK(owner_document_);
+    return *owner_document_;
   }
 
   void Trace(Visitor* visitor) const;
 
  private:
-  void GenerateSkeleton(KURL url);
+  class HTMLFetcher;
+  class LinkFetcher;
+
+  void StartHTMLFetch(const KURL& skeleton_url);
+  void HTMLFetchFinished(const String& html, bool success);
+  void ParseSkeletonHTML(const String& html);
 
   Member<Observer> observer_;
+  Member<Document> owner_document_;
   Member<Document> skeleton_document_;
+  Member<HTMLFetcher> html_fetcher_;
+  Member<LinkFetcher> link_fetcher_;
+
+  String fetched_html_;
+
+  // Set to true if Render() has been called, in which case DocumentReady()
+  // should be invoked when the skeleton document is ready.
+  bool render_requested_ = false;
+
+  // Set to true when the skeleton fetch has finished
+  bool html_fetch_completed_ = false;
 };
 
 }  // namespace blink

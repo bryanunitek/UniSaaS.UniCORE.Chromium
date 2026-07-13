@@ -10,7 +10,9 @@
 
 #include "base/base64.h"
 #include "base/build_time.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -93,19 +95,20 @@ VerifySignatureResult VerifySeedSignature(
   }
 
   std::string signature;
-  if (!base::Base64Decode(base64_seed_signature, &signature))
+  if (!base::Base64Decode(base64_seed_signature, &signature)) {
     return VerifySignatureResult::kDecodeFailed;
+  }
 
   std::optional<crypto::keypair::PublicKey> public_key =
       crypto::keypair::PublicKey::FromSubjectPublicKeyInfo(kPublicKey);
-  if (!public_key) {
-    return VerifySignatureResult::kInvalidSignature;
-  }
+  // Since kPublicKey is hardcoded, if it fails to load, that's either
+  // programmer error or a corrupt binary.
+  CHECK(public_key);
 
   if (!crypto::sign::Verify(crypto::sign::SignatureKind::ECDSA_SHA256,
                             *public_key, base::as_byte_span(seed_bytes),
                             base::as_byte_span(signature))) {
-    return VerifySignatureResult::kInvalidSeed;
+    return VerifySignatureResult::kInvalidSeedSignature;
   }
 
   return VerifySignatureResult::kValidSignature;
@@ -148,6 +151,23 @@ UpdateSeedDateResult GetSeedDateChangeState(
 // Returns success or error, populating result on success.
 StoreSeedResult Uncompress(const std::string& compressed, std::string* result) {
   DCHECK(result);
+  uint32_t uncompressed_size = compression::GetUncompressedSize(compressed);
+
+  // Dump without crashing to alert us that actual seeds are approaching the
+  // rejection threshold below.
+  constexpr static base::ByteSize kDumpThreshold = base::MiBU(40);
+  if (uncompressed_size > kDumpThreshold.InBytes()) {
+    base::debug::DumpWithoutCrashing();
+  }
+
+  // Enforce a maximum uncompressed size to prevent OOM / Gzip bomb crashes.
+  // We use 50 MiB as a conservative limit, similar to seed_reader_writer.cc.
+  constexpr static base::ByteSize kMaxUncompressedSeedSize = base::MiBU(50);
+  if (uncompressed_size > kMaxUncompressedSeedSize.InBytes()) {
+    VLOG(1) << "Rejecting seed: uncompressed size " << uncompressed_size
+            << " exceeds limit of " << kMaxUncompressedSeedSize.InBytes();
+    return StoreSeedResult::kUncompressedSizeLimitExceeded;
+  }
   if (!compression::GzipUncompress(compressed, result)) {
     return StoreSeedResult::kFailedUngzip;
   }

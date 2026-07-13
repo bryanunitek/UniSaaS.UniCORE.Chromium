@@ -158,7 +158,7 @@ bool LayoutView::HitTest(const HitTestLocation& location,
 bool LayoutView::HitTestNoLifecycleUpdate(const HitTestLocation& location,
                                           HitTestResult& result) {
   NOT_DESTROYED();
-  TRACE_EVENT_BEGIN0("blink,devtools.timeline", "HitTest");
+  TRACE_EVENT_BEGIN("blink,devtools.timeline", "HitTest");
   hit_test_count_++;
 
   uint64_t dom_tree_version = GetDocument().DomTreeVersion();
@@ -212,12 +212,11 @@ bool LayoutView::HitTestNoLifecycleUpdate(const HitTestLocation& location,
       hit_test_cache_->AddCachedResult(location, result, dom_tree_version);
   }
 
-  TRACE_EVENT_END1("blink,devtools.timeline", "HitTest", "endData",
-                   [&](perfetto::TracedValue context) {
-                     inspector_hit_test_event::EndData(
-                         std::move(context), result.GetHitTestRequest(),
-                         location, result);
-                   });
+  TRACE_EVENT_END(
+      "blink,devtools.timeline", "endData", [&](perfetto::TracedValue context) {
+        inspector_hit_test_event::EndData(
+            std::move(context), result.GetHitTestRequest(), location, result);
+      });
   return hit_layer;
 }
 
@@ -235,6 +234,7 @@ LayoutUnit LayoutView::ComputeMinimumWidth() {
   WritingMode mode = style.GetWritingMode();
   ConstraintSpaceBuilder builder(mode, style.GetWritingDirection(),
                                  /* is_new_fc */ true);
+  builder.SetContainsAnnotations(contains_annotations_);
   return BlockNode(this)
       .ComputeMinMaxSizes(mode, SizeType::kIntrinsic,
                           builder.ToConstraintSpace())
@@ -334,7 +334,7 @@ void LayoutView::MapLocalToAncestor(const LayoutBoxModelObject* ancestor,
     auto* parent_doc_layout_object = GetFrame()->OwnerLayoutObject();
     if (parent_doc_layout_object) {
       transform_state.Move(
-          parent_doc_layout_object->PhysicalContentBoxOffset());
+          parent_doc_layout_object->PhysicalContentBoxRect().offset);
       parent_doc_layout_object->MapLocalToAncestor(ancestor, transform_state,
                                                    mode);
     } else {
@@ -360,7 +360,7 @@ void LayoutView::MapAncestorToLocal(const LayoutBoxModelObject* ancestor,
                                                    mode);
 
       transform_state.Move(
-          parent_doc_layout_object->PhysicalContentBoxOffset());
+          parent_doc_layout_object->PhysicalContentBoxRect().offset);
     } else {
       DCHECK(!ancestor);
       // Note that MapLocalToRemoteMainFrame is correct here because
@@ -511,7 +511,7 @@ bool LayoutView::MapToVisualRectInAncestorSpaceInternal(
     rect.ExpandEdgesToPixelBoundaries();
 
     // Adjust for frame border.
-    rect.Move(obj->PhysicalContentBoxOffset());
+    rect.Move(obj->PhysicalContentBoxRect().offset);
     transform_state.SetQuad(gfx::QuadF(gfx::RectF(rect)));
 
     return obj->MapToVisualRectInAncestorSpaceInternal(
@@ -865,24 +865,47 @@ void LayoutView::LayoutRoot() {
       chrome_client.GetScreenInfo(frame).device_scale_factor);
 #endif
 
-  const PhysicalSize initial_containing_block_size =
-      InitialContainingBlockSize();
+  const ComputedStyle& style = StyleRef();
+  const WritingMode writing_mode = style.GetWritingMode();
+  const WritingDirectionMode writing_direction = style.GetWritingDirection();
+  const LogicalSize original_size =
+      ToLogicalSize(InitialContainingBlockSize(), writing_mode);
+
+  // If we are being auto-sized, we want to ensure that we are at least our
+  // min-content size in the inline-axis.
+  LayoutUnit min_size;
+  if (RuntimeEnabledFeatures::AutoSizeUsesScrollWidthForOverflowEnabled() &&
+      GetFrameView()->IsBeingAutoSized()) {
+    ConstraintSpaceBuilder builder(writing_mode, writing_direction,
+                                   /* is_new_fc */ true);
+    builder.SetAvailableSize({kIndefiniteSize, original_size.block_size});
+    builder.SetIsFixedBlockSize(true);
+    builder.SetContainsAnnotations(contains_annotations_);
+    min_size = BlockNode(this)
+                   .ComputeMinMaxSizes(writing_mode, SizeType::kIntrinsic,
+                                       builder.ToConstraintSpace())
+                   .sizes.min_size;
+    if (style.OverflowBlockDirection() == EOverflow::kAuto) {
+      min_size -= ComputeLogicalScrollbars().InlineSum();
+    }
+  }
+
+  const LogicalSize initial_size(std::max(original_size.inline_size, min_size),
+                                 original_size.block_size);
   const bool is_resizing_initial_containing_block =
-      StitchedSize() != initial_containing_block_size;
+      ToLogicalSize(StitchedSize(), writing_mode) != initial_size;
   DCHECK(!initial_containing_block_resize_handled_list_);
   if (is_resizing_initial_containing_block) {
     initial_containing_block_resize_handled_list_ =
         MakeGarbageCollected<GCedHeapHashSet<Member<const LayoutObject>>>();
   }
 
-  const auto& style = StyleRef();
-  ConstraintSpaceBuilder builder(style.GetWritingMode(),
-                                 style.GetWritingDirection(),
+  ConstraintSpaceBuilder builder(writing_mode, writing_direction,
                                  /* is_new_fc */ true);
-  builder.SetAvailableSize(
-      ToLogicalSize(initial_containing_block_size, style.GetWritingMode()));
+  builder.SetAvailableSize(initial_size);
   builder.SetIsFixedInlineSize(true);
   builder.SetIsFixedBlockSize(true);
+  builder.SetContainsAnnotations(contains_annotations_);
 
   BlockNode(this).Layout(builder.ToConstraintSpace());
   initial_containing_block_resize_handled_list_ = nullptr;
@@ -1123,6 +1146,15 @@ bool LayoutView::SetScrollbarSizesForViewportUnits(const gfx::Size& size) {
     changed = true;
   }
   return changed;
+}
+
+void LayoutView::SetContainsAnnotations() {
+  NOT_DESTROYED();
+  if (contains_annotations_) {
+    return;
+  }
+  contains_annotations_ = true;
+  SetNeedsLayout(layout_invalidation_reason::kStyleChange);
 }
 
 }  // namespace blink

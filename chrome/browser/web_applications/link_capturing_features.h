@@ -10,7 +10,6 @@
 
 namespace apps::features {
 
-BASE_DECLARE_FEATURE(kNavigationCapturingOnExistingFrames);
 
 // When enabled, updates the app settings string labels for browser-tab PWAs
 // that support target-existing client modes (focus-existing or
@@ -23,15 +22,8 @@ BASE_DECLARE_FEATURE(kUpdateAppStringsOnSettings);
 // always on CrOS.
 bool ShouldShowLinkCapturingUX();
 
-// Returns true if the `kPwaNavigationCapturing` flag is enabled with the
-// reimplementation parameters set.
-//
-// NOTE: the reimplementation can also be enabled for particular applications
-// even if this flag is off. Hence only the `true` return value can be fully
-// trusted, but if `false` is returned extra considerations are required. See
-// `IsNavigationCapturingReimplExperimentEnabled()` at
-// //c/b/ui/web_applications/web_app_launch_utils.cc.
-bool IsNavigationCapturingReimplEnabled();
+// Returns true if navigation capturing is on by default.
+bool IsNavigationCapturingOnByDefault();
 
 }  // namespace apps::features
 

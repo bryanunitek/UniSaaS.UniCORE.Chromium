@@ -94,6 +94,7 @@ class WaitForMainFrameResourceObserver : public content::WebContentsObserver {
   void ResourceLoadComplete(
       RenderFrameHost* render_frame_host,
       const content::GlobalRequestID& request_id,
+      const GURL& original_url,
       const blink::mojom::ResourceLoadInfo& resource_load_info) override {
     EXPECT_EQ(network::mojom::RequestDestination::kDocument,
               resource_load_info.request_destination);
@@ -419,7 +420,7 @@ IN_PROC_BROWSER_TEST_P(NetworkRequestMetricsBrowserTest, CancelDuringBody) {
 
   // Unfortunately, there's no way to ensure that the body has partially been
   // received, so can only wait and hope. If the partial body hasn't been
-  // recieved by the time Stop() is called, the test should still pass, however.
+  // received by the time Stop() is called, the test should still pass, however.
   base::RunLoop run_loop;
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), base::Seconds(1));
@@ -459,7 +460,7 @@ IN_PROC_BROWSER_TEST_P(NetworkRequestMetricsBrowserTest,
 
   // Unfortunately, there's no way to ensure that the body has partially been
   // received, so can only wait and hope. If the partial body hasn't been
-  // recieved by the time Stop() is called, the test should still pass, however.
+  // received by the time Stop() is called, the test should still pass, however.
   base::RunLoop run_loop;
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, run_loop.QuitClosure(), base::Seconds(1));

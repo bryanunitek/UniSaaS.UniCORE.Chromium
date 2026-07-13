@@ -983,9 +983,20 @@ void BluetoothSocketMac::AcceptConnectionRequest() {
       std::move(accept_queue_.front());
   accept_queue_.pop();
 
-  adapter_->DeviceConnected(std::make_unique<device::BluetoothClassicDeviceMac>(
-      adapter_.get(), channel->GetDevice()));
-  BluetoothDevice* device = adapter_->GetDevice(channel->GetDeviceAddress());
+  IOBluetoothDevice* __strong objc_device = channel->GetDevice();
+  BluetoothAdapterMac::RetrieveDeviceStateAsync(
+      objc_device,
+      base::BindOnce(&BluetoothSocketMac::OnDeviceStateRetrievedForAccept,
+                     base::WrapRefCounted(this), std::move(channel)));
+}
+
+void BluetoothSocketMac::OnDeviceStateRetrievedForAccept(
+    std::unique_ptr<BluetoothChannelMac> channel,
+    BluetoothAdapterMac::DeviceInfo device_info) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+
+  adapter_->OnConnectedDeviceStateRetrieved(std::move(device_info));
+  BluetoothDevice* device = adapter_->GetDevice(device_info.address);
   DCHECK(device);
 
   scoped_refptr<BluetoothSocketMac> client_socket =
@@ -1038,9 +1049,12 @@ void BluetoothSocketMac::ReleaseChannel() {
   DCHECK(thread_checker_.CalledOnValidThread());
   channel_.reset();
 
-  // Closing the channel above prevents the callback delegate from being called
-  // so it is now safe to release all callback state.
-  connect_callbacks_.reset();
+  // Move connect_callbacks_ to a local variable to prevent synchronous
+  // destruction of 'this' if it holds the last reference to the socket.
+  // This keeps 'this' alive until the end of this method.
+  std::unique_ptr<ConnectCallbacks> temp_connect =
+      std::move(connect_callbacks_);
+
   receive_callbacks_.reset();
   empty_queue(receive_queue_);
   empty_queue(send_queue_);

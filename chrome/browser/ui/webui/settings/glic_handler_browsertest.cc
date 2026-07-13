@@ -10,10 +10,13 @@
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/browser/background/glic/glic_launcher_configuration.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/api/settings_private/prefs_util.h"
 #include "chrome/browser/glic/glic_pref_names.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
@@ -36,6 +39,10 @@
 #include "ui/base/ozone_buildflags.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 using testing::_;
 using testing::Return;
@@ -131,8 +138,12 @@ class GlicHandlerExperimentalTriggeringBrowserTest
 
 // TODO(crbug.com/388101855): Remove buildflag when GlobalAcceleratorListener
 // supports Linux Wayland.
-#if !BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
 IN_PROC_BROWSER_TEST_F(GlicHandlerBrowserTest, UpdateShortcutSuspension) {
+#if BUILDFLAG(IS_OZONE)
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "GlobalAcceleratorListener doesn't support Linux Wayland";
+  }
+#endif
   auto* const global_accelerator_listener =
       ui::GlobalAcceleratorListener::GetInstance();
   EXPECT_FALSE(global_accelerator_listener->IsShortcutHandlingSuspended());
@@ -145,22 +156,15 @@ IN_PROC_BROWSER_TEST_F(GlicHandlerBrowserTest, UpdateShortcutSuspension) {
       base::ListValue().Append(false));
   EXPECT_FALSE(global_accelerator_listener->IsShortcutHandlingSuspended());
 }
-#endif  //  !BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
 
-// TODO(crbug.com/416160303): Enable the test.
-#if BUILDFLAG(IS_WIN)
-#define MAYBE_UpdateGlicShortcut DISABLED_UpdateGlicShortcut
-#else
-#define MAYBE_UpdateGlicShortcut UpdateGlicShortcut
-#endif
-IN_PROC_BROWSER_TEST_F(GlicHandlerBrowserTest, MAYBE_UpdateGlicShortcut) {
+IN_PROC_BROWSER_TEST_F(GlicHandlerBrowserTest, UpdateGlicShortcut) {
   const ui::Accelerator invalid_shortcut(ui::VKEY_A, ui::EF_NONE);
   glic_handler()->HandleSetGlicShortcut(
       base::ListValue()
           .Append("callback_id")
           .Append(ui::Command::AcceleratorToString(invalid_shortcut)));
   ui::Accelerator saved_hotkey =
-      glic::GlicLauncherConfiguration::GetGlobalHotkey();
+      glic::GlicLauncherConfiguration::GetToggleHotkey();
   EXPECT_EQ(ui::VKEY_UNKNOWN, saved_hotkey.key_code());
   EXPECT_EQ(ui::EF_NONE, saved_hotkey.modifiers());
 
@@ -169,7 +173,7 @@ IN_PROC_BROWSER_TEST_F(GlicHandlerBrowserTest, MAYBE_UpdateGlicShortcut) {
       base::ListValue()
           .Append("callback_id")
           .Append(ui::Command::AcceleratorToString(valid_shortcut)));
-  saved_hotkey = glic::GlicLauncherConfiguration::GetGlobalHotkey();
+  saved_hotkey = glic::GlicLauncherConfiguration::GetToggleHotkey();
   EXPECT_EQ(valid_shortcut.key_code(), saved_hotkey.key_code());
   EXPECT_EQ(valid_shortcut.modifiers(), saved_hotkey.modifiers());
 }

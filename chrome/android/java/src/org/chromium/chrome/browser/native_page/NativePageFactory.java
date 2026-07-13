@@ -44,7 +44,6 @@ import org.chromium.chrome.browser.magic_stack.ModuleRegistry;
 import org.chromium.chrome.browser.management.ManagementPage;
 import org.chromium.chrome.browser.metrics.StartupMetricsTracker;
 import org.chromium.chrome.browser.ntp.IncognitoNewTabPage;
-import org.chromium.chrome.browser.ntp.IncognitoNtpMetrics;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.ntp.NewTabPageCreationTracker;
 import org.chromium.chrome.browser.ntp.RecentTabsManager;
@@ -54,6 +53,8 @@ import org.chromium.chrome.browser.pdf.PdfInfo;
 import org.chromium.chrome.browser.pdf.PdfPage;
 import org.chromium.chrome.browser.printing.PrintHelper;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.settings.SettingsPage;
+import org.chromium.chrome.browser.settings.SettingsPageFragmentDelegateImpl;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
@@ -272,9 +273,8 @@ public class NativePageFactory {
                 return new IncognitoNewTabPage(
                         mActivity,
                         nativePageHost,
-                        tab,
-                        mEdgeToEdgeControllerSupplier,
-                        createIncognitoNtpMetrics());
+                        tab.getProfile(),
+                        mEdgeToEdgeControllerSupplier);
             }
 
             return new NewTabPage(
@@ -425,11 +425,24 @@ public class NativePageFactory {
                             mEdgeToEdgeControllerSupplier));
         }
 
-        private @Nullable IncognitoNtpMetrics createIncognitoNtpMetrics() {
-            if (ChromeFeatureList.sRecordIncognitoNtpTimeToFirstNavigationMetric.isEnabled()) {
-                return new IncognitoNtpMetrics();
-            }
-            return null;
+        protected NativePage buildSettingsPage(Tab tab) {
+            assert ChromeFeatureList.isEnabled(ChromeFeatureList.SETTINGS_IN_TAB);
+            return new SettingsPage(
+                    mActivity,
+                    tab.getProfile(),
+                    new TabShim(
+                            tab,
+                            mBrowserControlsManager,
+                            mTabModelSelector,
+                            mEdgeToEdgeControllerSupplier),
+                    new SettingsPageFragmentDelegateImpl(
+                            mActivity,
+                            tab.getProfile(),
+                            mWindowAndroid,
+                            mActivityResultTracker,
+                            mSnackbarManagerSupplier.get(),
+                            mBottomSheetController,
+                            mModalDialogManagerSupplier.get()));
         }
     }
 
@@ -465,8 +478,9 @@ public class NativePageFactory {
         }
 
         NativePage page;
-
-        switch (NativePage.nativePageType(gurl, candidatePage, isIncognito, pdfInfo != null)) {
+        boolean isPdf = pdfInfo != null;
+        boolean preferReuse = isPdf && assumeNonNull(pdfInfo).preferReuse;
+        switch (NativePage.nativePageType(gurl, candidatePage, isIncognito, preferReuse, isPdf)) {
             case NativePageType.NONE:
                 return null;
             case NativePageType.CANDIDATE:
@@ -501,6 +515,9 @@ public class NativePageFactory {
                 break;
             case NativePageType.BRICKS:
                 page = getBuilder().buildBricksPage(tab, url);
+                break;
+            case NativePageType.SETTINGS:
+                page = getBuilder().buildSettingsPage(tab);
                 break;
             default:
                 assert false;
@@ -567,7 +584,7 @@ public class NativePageFactory {
             return null;
         }
         NativePage page;
-        if (candidatePage != null && candidatePage.getUrl().equals(url)) {
+        if (candidatePage != null && url.equals(candidatePage.getUrl())) {
             page = candidatePage;
         } else {
             page =

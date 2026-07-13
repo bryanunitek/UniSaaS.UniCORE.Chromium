@@ -164,6 +164,8 @@ try_.builder(
     experiments = {
         # crbug/940930
         "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
     },
     main_list_view = "try",
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CQ,
@@ -215,6 +217,9 @@ try_.orchestrator_builder(
         "chromium.add_one_test_shard": 5,
         # crbug/940930
         "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
+        "luci.buildbucket.run_in_turboci": 100,
     },
     main_list_view = "try",
     use_clang_coverage = True,
@@ -582,9 +587,6 @@ gpu.try_.optional_tests_builder(
             ),
             "webgl2_conformance_d3d11_passthrough_tests 8086:9bc5": targets.remove(
                 reason = "TODO(crbug.com/41483572): Re-add this when capacity issues are resolved.",
-            ),
-            "webgl_conformance_d3d9_passthrough_tests 8086:9bc5": targets.remove(
-                reason = "Flaky crashes crbug.com/486945324",
             ),
             "webgl_conformance_vulkan_passthrough_tests 10de:2184": targets.remove(
                 reason = "TODO(crbug.com/380431384): flaky crashes in random tests.",

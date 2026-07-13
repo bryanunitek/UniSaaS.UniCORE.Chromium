@@ -1288,7 +1288,7 @@ String Internals::textAffinity() {
                             ->GetFocusController()
                             .FocusedFrame()
                             ->Selection()
-                            .GetSelectionInDOMTree()
+                            .GetSelectionInDomTree()
                             .Affinity() == TextAffinity::kUpstream) {
     return "Upstream";
   }
@@ -2338,8 +2338,9 @@ AtomicString Internals::htmlNamespace() {
 
 Vector<AtomicString> Internals::htmlTags() {
   base::HeapArray<const QualifiedName*> qualified_names = html_names::GetTags();
-  Vector<AtomicString> tags(qualified_names.size());
-  for (size_t i = 0; i < qualified_names.size(); ++i) {
+  wtf_size_t names_size = static_cast<wtf_size_t>(qualified_names.size());
+  Vector<AtomicString> tags(names_size);
+  for (wtf_size_t i = 0; i < names_size; ++i) {
     tags[i] = qualified_names[i]->LocalName();
   }
   return tags;
@@ -2351,8 +2352,9 @@ AtomicString Internals::svgNamespace() {
 
 Vector<AtomicString> Internals::svgTags() {
   base::HeapArray<const QualifiedName*> qualified_names = svg_names::GetTags();
-  Vector<AtomicString> tags(qualified_names.size());
-  for (size_t i = 0; i < qualified_names.size(); ++i) {
+  wtf_size_t names_size = static_cast<wtf_size_t>(qualified_names.size());
+  Vector<AtomicString> tags(names_size);
+  for (wtf_size_t i = 0; i < names_size; ++i) {
     tags[i] = qualified_names[i]->LocalName();
   }
   return tags;
@@ -3094,7 +3096,7 @@ void Internals::forceReload(bool bypass_cache) {
 }
 
 StaticSelection* Internals::getDragCaret() {
-  SelectionInDOMTree::Builder builder;
+  SelectionInDomTree::Builder builder;
   if (GetFrame()) {
     const DragCaret& caret = GetFrame()->GetPage()->GetDragCaret();
     const PositionWithAffinity& position = caret.CaretPosition();
@@ -3115,7 +3117,7 @@ StaticSelection* Internals::getSelectionInFlatTree(
     return nullptr;
   }
   return StaticSelection::FromSelectionInFlatTree(ConvertToSelectionInFlatTree(
-      local_frame->Selection().GetSelectionInDOMTree()));
+      local_frame->Selection().GetSelectionInDomTree()));
 }
 
 Node* Internals::visibleSelectionAnchorNode() {
@@ -3442,7 +3444,7 @@ String Internals::selectedHTMLForClipboard() {
   // Selection normalization and markup generation require clean layout.
   GetFrame()->GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
 
-  return GetFrame()->Selection().SelectedHTMLForClipboard();
+  return GetFrame()->Selection().SelectedHtmlForClipboard();
 }
 
 String Internals::selectedTextForClipboard() {

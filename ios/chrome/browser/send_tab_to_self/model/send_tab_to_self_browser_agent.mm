@@ -7,27 +7,31 @@
 #import <Foundation/Foundation.h>
 
 #import <algorithm>
-#import <memory>
 #import <string>
 
 #import "base/check.h"
 #import "base/containers/span.h"
-#import "base/strings/sys_string_conversions.h"
-#import "base/strings/utf_string_conversions.h"
+#import "base/feature_list.h"
 #import "components/infobars/core/infobar.h"
 #import "components/infobars/core/infobar_manager.h"
+#import "components/send_tab_to_self/features.h"
 #import "components/send_tab_to_self/metrics_util.h"
 #import "components/send_tab_to_self/send_tab_to_self_model.h"
 #import "components/send_tab_to_self/send_tab_to_self_sync_service.h"
-#import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/model/infobar_manager_impl.h"
 #import "ios/chrome/browser/infobars/model/infobar_utils.h"
 #import "ios/chrome/browser/send_tab_to_self/model/ios_send_tab_to_self_infobar_delegate.h"
+#import "ios/chrome/browser/send_tab_to_self/model/send_tab_to_self_load_navigation_user_data.h"
+#import "ios/chrome/browser/send_tab_to_self/model/send_tab_to_self_tab_card_label_data.h"
+#import "ios/chrome/browser/send_tab_to_self/model/send_tab_to_self_util.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/sync/model/send_tab_to_self_sync_service_factory.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_notifier_browser_agent.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/web/public/web_state.h"
 
 namespace {
@@ -69,14 +73,80 @@ SendTabToSelfBrowserAgent::SendTabToSelfBrowserAgent(Browser* browser)
       model_(
           SendTabToSelfSyncServiceFactory::GetForProfile(browser_->GetProfile())
               ->GetSendTabToSelfModel()) {
+  browser_observation_.Observe(browser_);
   model_observation_.Observe(model_.get());
+  UrlLoadingNotifierBrowserAgent* loading_notifier =
+      UrlLoadingNotifierBrowserAgent::FromBrowser(browser_);
+  if (loading_notifier) {
+    url_loading_observation_.Observe(loading_notifier);
+  }
+  StartObserving(browser_);
+  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
+    if (web::WebState* web_state =
+            browser_->GetWebStateList()->GetActiveWebState()) {
+      web_state_observation_.Observe(web_state);
+    }
+    if (model_->IsReady()) {
+      OnModelReady();
+    }
+  }
 }
 
-SendTabToSelfBrowserAgent::~SendTabToSelfBrowserAgent() = default;
+SendTabToSelfBrowserAgent::~SendTabToSelfBrowserAgent() {
+  StopObserving();
+}
+
+void SendTabToSelfBrowserAgent::BrowserDestroyed(Browser* browser) {
+  StopObserving();
+  url_loading_observation_.Reset();
+  model_observation_.Reset();
+  browser_observation_.Reset();
+  CleanUpObserversAndVariables();
+}
 
 void SendTabToSelfBrowserAgent::OnEntriesAddedRemotely(
     base::span<const send_tab_to_self::SendTabToSelfEntry* const> new_entries) {
+  DisplayNewEntries(new_entries);
+}
+
+void SendTabToSelfBrowserAgent::OnEntriesRemovedRemotely(
+    base::span<const std::string> guids) {
+  DismissEntries(guids);
+}
+
+void SendTabToSelfBrowserAgent::OnModelReady() {
+  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
+    CheckAndOpenPendingEntriesIfBrowserVisible();
+  }
+}
+
+#pragma mark - ReceivingUiHandler
+
+void SendTabToSelfBrowserAgent::DisplayNewEntries(
+    base::span<const send_tab_to_self::SendTabToSelfEntry* const> new_entries) {
   if (new_entries.empty()) {
+    return;
+  }
+
+  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
+    web::WebState* web_state = browser_->GetWebStateList()->GetActiveWebState();
+    // If the active WebState is not visible it means the user is in the
+    // Tab Grid screen or a Settings page, in which case the entries will be
+    // auto-opened when it becomes visible again.
+    if (web_state && web_state->IsVisible()) {
+      for (const send_tab_to_self::SendTabToSelfEntry* entry : new_entries) {
+        OpenEntryInBackgroundTab(entry);
+        send_tab_to_self::RecordAutoOpenOutcome(
+            send_tab_to_self::AutoOpenOutcome::
+                kTabsOpenedImmediatelyInBackground);
+      }
+      DisplayInfoBar(web_state, new_entries.back());
+    } else {
+      for (size_t ii = 0; ii < new_entries.size(); ++ii) {
+        send_tab_to_self::RecordAutoOpenOutcome(
+            send_tab_to_self::AutoOpenOutcome::kUnopenedImmediately);
+      }
+    }
     return;
   }
 
@@ -92,9 +162,6 @@ void SendTabToSelfBrowserAgent::OnEntriesAddedRemotely(
       web_state_observation_.Observe(pending_web_state_.get());
     }
 
-    if (!web_state_list_observation_.IsObserving()) {
-      web_state_list_observation_.Observe(browser_->GetWebStateList());
-    }
 
     // Pick the most recent entry since only one Infobar can be shown at a time.
     // TODO(crbug.com/40619532): Create a function that returns the most
@@ -110,9 +177,14 @@ void SendTabToSelfBrowserAgent::OnEntriesAddedRemotely(
   DisplayInfoBar(web_state, new_entries.back());
 }
 
-void SendTabToSelfBrowserAgent::OnEntriesRemovedRemotely(
+void SendTabToSelfBrowserAgent::DismissEntries(
     base::span<const std::string> guids) {
   if (guids.empty()) {
+    return;
+  }
+
+  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
+    // The tabs should have already been auto-opened. Leave them be.
     return;
   }
 
@@ -127,26 +199,54 @@ void SendTabToSelfBrowserAgent::OnEntriesRemovedRemotely(
   }
 }
 
-#pragma mark - WebStateListObserver
+#pragma mark - TabsDependencyInstaller
 
-void SendTabToSelfBrowserAgent::WebStateListDidChange(
-    WebStateList* web_state_list,
-    const WebStateListChange& change,
-    const WebStateListStatus& status) {
-  // The active WebState can be null if the user close the last tab in the tab
-  // picker.
-  if (!status.active_web_state_change() || !status.new_active_web_state) {
+void SendTabToSelfBrowserAgent::OnWebStateInserted(web::WebState* web_state) {}
+
+void SendTabToSelfBrowserAgent::OnWebStateRemoved(web::WebState* web_state) {}
+
+void SendTabToSelfBrowserAgent::OnWebStateDeleted(web::WebState* web_state) {
+  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
+    // If the tab is being closed explicitly by the user (and not due to browser
+    // shutdown, tab strip destruction, or tab dragging between windows), log
+    // the abandonment metric.
+    SendTabToSelfTabCardLabelData* label_data =
+        SendTabToSelfTabCardLabelData::FromWebState(web_state);
+    if (label_data) {
+      label_data->WebStateClosedByUser(web_state);
+    }
+  }
+}
+
+void SendTabToSelfBrowserAgent::OnActiveWebStateChanged(
+    web::WebState* old_active,
+    web::WebState* new_active) {
+  if (!new_active) {
     return;
   }
 
-  DCHECK(pending_entry_);
-  DisplayInfoBar(status.new_active_web_state, pending_entry_);
-  CleanUpObserversAndVariables();
+  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
+    web_state_observation_.Reset();
+    web_state_observation_.Observe(new_active);
+    CheckAndOpenPendingEntriesIfBrowserVisible();
+    return;
+  }
+
+  if (pending_entry_) {
+    DisplayInfoBar(new_active, pending_entry_);
+    CleanUpObserversAndVariables();
+  }
 }
 
 #pragma mark - WebStateObserver
 
 void SendTabToSelfBrowserAgent::WasShown(web::WebState* web_state) {
+  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
+    // Auto-open pending entries as the web state is now visible.
+    CheckAndOpenPendingEntriesIfBrowserVisible();
+    return;
+  }
+
   DCHECK(pending_entry_);
   DCHECK(pending_web_state_);
 
@@ -156,6 +256,11 @@ void SendTabToSelfBrowserAgent::WasShown(web::WebState* web_state) {
 }
 
 void SendTabToSelfBrowserAgent::WebStateDestroyed(web::WebState* web_state) {
+  if (base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen)) {
+    web_state_observation_.Reset();
+    return;
+  }
+
   DCHECK(pending_web_state_);
   DCHECK(pending_web_state_ == web_state);
 
@@ -178,15 +283,77 @@ void SendTabToSelfBrowserAgent::DisplayInfoBar(
   infobar_manager->AddInfoBar(CreateConfirmInfoBar(
       send_tab_to_self::IOSSendTabToSelfInfoBarDelegate::Create(
           entry, model_,
-          HandlerForProtocol(browser_->GetCommandDispatcher(),
-                             SceneCommands))));
+          HandlerForProtocol(browser_->GetCommandDispatcher(), SceneCommands),
+          browser_->GetWebStateList())));
 }
 
 void SendTabToSelfBrowserAgent::CleanUpObserversAndVariables() {
   pending_entry_ = nullptr;
 
-  web_state_list_observation_.Reset();
-
   web_state_observation_.Reset();
   pending_web_state_ = nullptr;
+}
+
+void SendTabToSelfBrowserAgent::TabWillLoadUrl(
+    const UrlLoadParams& params,
+    base::WeakPtr<web::WebState> web_state) {
+  if (!web_state) {
+    return;
+  }
+  // Always remove old data to ensure we don't use stale GUIDs.
+  SendTabToSelfLoadNavigationUserData::RemoveFromWebState(web_state.get());
+
+  if (params.is_from_send_tab_to_self()) {
+    SendTabToSelfLoadNavigationUserData::CreateForWebState(
+        web_state.get(), params.send_tab_to_self_entry_guid);
+
+    if (base::FeatureList::IsEnabled(
+            send_tab_to_self::kSendTabToSelfAutoOpen)) {
+      // Attach a tab card label to the web state for the tab switcher UI.
+      const send_tab_to_self::SendTabToSelfEntry* entry =
+          model_->GetEntryByGUID(params.send_tab_to_self_entry_guid);
+      if (entry
+          // Only attach to tabs opened in the background. This is to avoid the
+          // case where tabs are opened via the system-level notification.
+          && params.in_background()) {
+        SendTabToSelfTabCardLabelData::CreateForWebState(
+            web_state.get(), entry->GetGUID(), entry->GetDeviceName());
+      }
+    }
+  }
+}
+
+void SendTabToSelfBrowserAgent::CheckAndOpenPendingEntriesIfBrowserVisible() {
+  CHECK(base::FeatureList::IsEnabled(send_tab_to_self::kSendTabToSelfAutoOpen));
+
+  web::WebState* web_state = browser_->GetWebStateList()->GetActiveWebState();
+  if (!web_state || !web_state->IsVisible()) {
+    return;
+  }
+
+  std::vector<const send_tab_to_self::SendTabToSelfEntry*> pending_entries =
+      model_->GetUnopenedEntriesTargetedToLocalDevice();
+  if (pending_entries.empty()) {
+    return;
+  }
+
+  for (const send_tab_to_self::SendTabToSelfEntry* entry : pending_entries) {
+    OpenEntryInBackgroundTab(entry);
+    send_tab_to_self::RecordAutoOpenOutcome(
+        send_tab_to_self::AutoOpenOutcome::
+            kTabsOpenedInBackgroundUponActivation);
+  }
+  DisplayInfoBar(web_state, pending_entries.back());
+}
+
+void SendTabToSelfBrowserAgent::OpenEntryInBackgroundTab(
+    const send_tab_to_self::SendTabToSelfEntry* entry) {
+  CHECK(entry);
+  id<SceneCommands> scene_handler =
+      HandlerForProtocol(browser_->GetCommandDispatcher(), SceneCommands);
+  [scene_handler
+      openURLInNewTab:send_tab_to_self::CreateOpenNewBackgroundTabCommand(
+                          entry)];
+
+  model_->MarkEntryOpened(entry->GetGUID());
 }

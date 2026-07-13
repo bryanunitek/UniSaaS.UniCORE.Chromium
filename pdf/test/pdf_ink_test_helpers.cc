@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/notreached.h"
+#include "base/numerics/ranges.h"
 #include "base/strings/to_string.h"
 #include "base/values.h"
 #include "pdf/pdf_ink_conversions.h"
@@ -150,10 +151,21 @@ void PrintTo(const InkTextBoxAttributes& info, std::ostream* os) {
       << SkColorGetB(color) << ", " << SkColorGetA(color) << ")"
       << ",\n  css_font_size=" << info.css_font_size
       << ",\n  typeface=" << typeface << ",\n  alignment=" << alignment
-      << ",\n  orientation=" << info.orientation
+      << ",\n  orientation=" << info.orientation << ",\n  viewport_orientation="
+      << static_cast<int>(info.viewport_orientation)
       << ",\n  is_bold=" << base::ToString(info.is_bold)
       << ",\n  is_italic=" << base::ToString(info.is_italic)
       << ",\n  text=" << info.text << "\n}";
+}
+
+bool InkTextInfoEquals(const InkTextInfo& lhs, const InkTextInfo& rhs) {
+  const bool glyph_positions_eq = std::ranges::equal(
+      lhs.glyph_positions, rhs.glyph_positions, [](float lhs, float rhs) {
+        return base::IsApproximatelyEqual(lhs, rhs, 0.01f);
+      });
+  return glyph_positions_eq && lhs.font_id == rhs.font_id &&
+         lhs.glyphs == rhs.glyphs && lhs.location == rhs.location &&
+         lhs.is_horizontal == rhs.is_horizontal && lhs.text == rhs.text;
 }
 
 }  // namespace chrome_pdf

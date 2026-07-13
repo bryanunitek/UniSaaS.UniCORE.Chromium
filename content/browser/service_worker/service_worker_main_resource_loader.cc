@@ -46,6 +46,7 @@
 #include "net/base/load_timing_info.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
 #include "services/network/public/cpp/document_isolation_policy.h"
 #include "services/network/public/cpp/features.h"
@@ -56,11 +57,18 @@
 #include "third_party/blink/public/common/service_worker/service_worker_loader_helpers.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_fetch_handler_bypass_option.mojom-shared.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 
 namespace {
+
+perfetto::NamedTrack GetTracingTrack(
+    const ServiceWorkerMainResourceLoader* loader) {
+  return perfetto::NamedTrack::FromPointer(
+      "content::ServiceWorkerMainResourceLoader", loader);
+}
 
 using SyntheticResponseStatus =
     ServiceWorkerSyntheticResponseManager::SyntheticResponseStatus;
@@ -121,6 +129,12 @@ void MaybeSetFetchHandlerBypassOptionForsyntheticResponse(
   if (bypass_subresource) {
     client->set_fetch_handler_bypass_option(option);
   }
+}
+
+void RecordAutoPreloadDispatchResult(
+    ServiceWorkerAutoPreloadDispatchResult result) {
+  base::UmaHistogramEnumeration("ServiceWorker.AutoPreload.DispatchResult",
+                                result);
 }
 
 }  // namespace
@@ -209,7 +223,7 @@ void ServiceWorkerMainResourceLoader::DetachedFromRequest() {
   // Clear |fallback_callback_| since it's no longer safe to invoke it because
   // the bound object has been destroyed.
   fallback_callback_.Reset();
-  DeleteIfNeeded();
+  CheckLifecycle();
 }
 
 base::WeakPtr<ServiceWorkerMainResourceLoader>
@@ -414,13 +428,6 @@ void ServiceWorkerMainResourceLoader::StartRequest(
         NOTREACHED();
       case network::mojom::ServiceWorkerRouterSourceType::
           kRaceNetworkAndFetchEvent:
-        if (base::FeatureList::IsEnabled(
-                features::
-                    kServiceWorkerStaticRouterRaceNetworkRequestPerformanceImprovement)) {
-          active_worker->CountFeature(
-              blink::mojom::WebFeature::
-                  kServiceWorkerStaticRouter_RaceNetworkAndFetchHandlerImprovement);
-        }
         break;
       case network::mojom::ServiceWorkerRouterSourceType::kRaceNetworkAndCache:
         return;
@@ -442,9 +449,8 @@ void ServiceWorkerMainResourceLoader::MaybeDispatchPreload(
     case RaceNetworkRequestMode::kForced:
       if (StartRaceNetworkRequest(
               context_wrapper, version,
-              base::BindOnce(
-                  &ServiceWorkerMainResourceLoader::InvalidateAndDeleteIfNeeded,
-                  weak_factory_.GetWeakPtr()))) {
+              base::BindOnce(&ServiceWorkerMainResourceLoader::CheckLifecycle,
+                             weak_factory_.GetWeakPtr()))) {
         SetDispatchedPreloadType(DispatchedPreloadType::kRaceNetworkRequest);
       }
       break;
@@ -474,16 +480,22 @@ bool ServiceWorkerMainResourceLoader::MaybeStartAutoPreload(
     scoped_refptr<ServiceWorkerContextWrapper> context,
     scoped_refptr<ServiceWorkerVersion> version) {
   if (!base::FeatureList::IsEnabled(features::kServiceWorkerAutoPreload)) {
+    RecordAutoPreloadDispatchResult(
+        ServiceWorkerAutoPreloadDispatchResult::kFeatureDisabled);
     return false;
   }
 
   if (!GetContentClient()->browser()->IsServiceWorkerAutoPreloadAllowed(
           context->browser_context())) {
+    RecordAutoPreloadDispatchResult(
+        ServiceWorkerAutoPreloadDispatchResult::kNotAllowedByBrowser);
     return false;
   }
 
   // AutoPreload is triggered only in a main frame.
   if (!resource_request_.is_outermost_main_frame) {
+    RecordAutoPreloadDispatchResult(
+        ServiceWorkerAutoPreloadDispatchResult::kNotOutermostMainFrame);
     return false;
   }
 
@@ -492,6 +504,8 @@ bool ServiceWorkerMainResourceLoader::MaybeStartAutoPreload(
   if (base::FeatureList::IsEnabled(
           features::kOptimizeWebRequestProxyForServiceWorkerAutoPreload) &&
       context->storage_partition()->is_guest()) {
+    RecordAutoPreloadDispatchResult(
+        ServiceWorkerAutoPreloadDispatchResult::kGuestStoragePartition);
     return false;
   }
 
@@ -501,30 +515,12 @@ bool ServiceWorkerMainResourceLoader::MaybeStartAutoPreload(
   // `OnErrorOccurred()`, while that is not actually an error.
   if (GetContentClient()->browser()->HasWebRequestAPIProxy(
           context->browser_context())) {
+    RecordAutoPreloadDispatchResult(
+        ServiceWorkerAutoPreloadDispatchResult::kWebRequestAPIProxy);
     return false;
   }
 
-  // Hosts to disable AutoPreload feature. This mechanism is needed to address
-  // the case when the AutoPreload behavior is problematic for some websites and
-  // those should be opted out from the feature.
-  const static base::NoDestructor<base::flat_set<std::string>> blocked_hosts(
-      base::SplitString(
-          base::GetFieldTrialParamValueByFeature(
-              features::kServiceWorkerAutoPreload, "blocked_hosts"),
-          ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY));
-  if (blocked_hosts->contains(resource_request_.url.GetHost())) {
-    return false;
-  }
-
-  // If |enable_only_when_service_worker_not_running| is true, preload requests
-  // are dispatched only when the ServiceWorker is not running. When it's
-  // running, preload requests for both main resource and subresources are not
-  // dispatched.
-  if (base::GetFieldTrialParamByFeatureAsBool(
-          features::kServiceWorkerAutoPreload,
-          "enable_only_when_service_worker_not_running",
-          /*default_value=*/true) &&
-      version->running_status() == blink::EmbeddedWorkerStatus::kRunning) {
+  if (version->running_status() == blink::EmbeddedWorkerStatus::kRunning) {
     return false;
   }
 
@@ -538,6 +534,11 @@ bool ServiceWorkerMainResourceLoader::MaybeStartAutoPreload(
     // handler result is fallback. The fallback case is handled after
     // receiving the fetch handler result.
     SetCommitResponsibility(FetchResponseFrom::kServiceWorker);
+    RecordAutoPreloadDispatchResult(
+        ServiceWorkerAutoPreloadDispatchResult::kDispatched);
+  } else {
+    RecordAutoPreloadDispatchResult(
+        ServiceWorkerAutoPreloadDispatchResult::kStartFailed);
   }
 
   return result;
@@ -566,7 +567,6 @@ bool ServiceWorkerMainResourceLoader::StartRaceNetworkRequest(
   if (!service_worker_client_) {
     return false;
   }
-
   // Create URLLoader related assets to handle the request triggered by
   // RaceNetworkRequset.
   mojo::PendingRemote<network::mojom::URLLoaderClient> forwarding_client;
@@ -579,7 +579,8 @@ bool ServiceWorkerMainResourceLoader::StartRaceNetworkRequest(
       service_worker_client_->CreateNetworkURLLoaderFactory(
           ServiceWorkerClient::CreateNetworkURLLoaderFactoryType::
               kRaceNetworkRequest,
-          context->storage_partition(), resource_request_, std::nullopt),
+          context->storage_partition(), resource_request_,
+          network::GetNoOpNetworkRestrictionsId()),
       /*is_main_resource=*/true);
   CHECK(!race_network_request_url_loader_client_);
   race_network_request_url_loader_client_.emplace(
@@ -608,12 +609,14 @@ bool ServiceWorkerMainResourceLoader::StartRaceNetworkRequest(
   mojo::PendingRemote<network::mojom::URLLoaderClient> client_to_pass;
   race_network_request_url_loader_client_->Bind(&client_to_pass);
   CHECK(!race_network_request_url_loader_factory_);
-  // This is also for the race network request, so we pass std::nullopt.
+  // This is also for the race network request, so we pass
+  // network::GetNoOpNetworkRestrictionsId().
   race_network_request_url_loader_factory_ =
       service_worker_client_->CreateNetworkURLLoaderFactory(
           ServiceWorkerClient::CreateNetworkURLLoaderFactoryType::
               kRaceNetworkRequest,
-          context->storage_partition(), resource_request_, std::nullopt);
+          context->storage_partition(), resource_request_,
+          network::GetNoOpNetworkRestrictionsId());
 
   // Perform fetch
   CHECK_EQ(commit_responsibility(), FetchResponseFrom::kNoResponseYet);
@@ -766,9 +769,8 @@ void ServiceWorkerMainResourceLoader::DidDispatchFetchEvent(
   // response is already committed without waiting for the fetch event result.
   // Invalidate and destruct if the class already detached from the request.
   did_dispatch_event_ = true;
-  if (dispatched_preload_type() == DispatchedPreloadType::kRaceNetworkRequest &&
-      !ShouldDelayDeletion() && is_detached_ && status_ == Status::kCompleted) {
-    InvalidateAndDeleteIfNeeded();
+  if (is_detached_ && status_ == Status::kCompleted) {
+    CheckLifecycle();
     return;
   }
 
@@ -927,22 +929,32 @@ void ServiceWorkerMainResourceLoader::DidDispatchFetchEvent(
         cache_matcher_->cache_lookup_duration();
 
     // Block invalid responses from the static router.
+    network::CrossOriginEmbedderPolicy cross_origin_embedder_policy;
+    network::mojom::CrossOriginEmbedderPolicyReporter*
+        cross_origin_embedder_policy_reporter = nullptr;
+    network::DocumentIsolationPolicy document_isolation_policy;
+    network::mojom::DocumentIsolationPolicyReporter*
+        document_isolation_policy_reporter = nullptr;
     if (service_worker_client_ && service_worker_client_->container_host()) {
       ServiceWorkerContainerHostForClient* container_host =
           service_worker_client_->container_host();
-      if (!IsValidStaticRouterResponse(
-              resource_request_, response,
-              container_host->policy_container_policies()
-                  .cross_origin_embedder_policy,
-              container_host->cross_origin_embedder_policy_reporter().get(),
-              container_host->policy_container_policies()
-                  .document_isolation_policy,
-              container_host->document_isolation_policy_reporter().get()) &&
-          base::FeatureList::IsEnabled(
-              features::kServiceWorkerStaticRouterOpaqueCheck)) {
-        CommitCompleted(net::ERR_FAILED, "Invalid response from static router");
-        return;
-      }
+      cross_origin_embedder_policy = container_host->policy_container_policies()
+                                         .cross_origin_embedder_policy;
+      cross_origin_embedder_policy_reporter =
+          container_host->cross_origin_embedder_policy_reporter().get();
+      document_isolation_policy =
+          container_host->policy_container_policies().document_isolation_policy;
+      document_isolation_policy_reporter =
+          container_host->document_isolation_policy_reporter().get();
+    }
+    if (!IsValidStaticRouterResponse(
+            resource_request_, response, cross_origin_embedder_policy,
+            cross_origin_embedder_policy_reporter, document_isolation_policy,
+            document_isolation_policy_reporter) &&
+        base::FeatureList::IsEnabled(
+            features::kServiceWorkerStaticRouterOpaqueCheck)) {
+      CommitCompleted(net::ERR_FAILED, "Invalid response from static router");
+      return;
     }
   }
 
@@ -1048,9 +1060,16 @@ void ServiceWorkerMainResourceLoader::Fallback(
       receiver_.Unbind();
 
   if (fallback_callback_) {
-    if (network::mojom::URLLoaderFactory* factory =
-            std::move(fallback_callback_)
-                .Run(std::move(response_header_params))) {
+    // Running the fallback callback may synchronously destroy the owner of
+    // `this`, which in turn calls `DetachedFromRequest()`. Since `receiver_`
+    // is no longer bound at this point, that triggers `delete this`.
+    base::WeakPtr<ServiceWorkerMainResourceLoader> weak_this = AsWeakPtr();
+    network::mojom::URLLoaderFactory* factory =
+        std::move(fallback_callback_).Run(std::move(response_header_params));
+    if (!weak_this) {
+      return;
+    }
+    if (factory) {
       // Fallback to the default factory, and pass the original parameters/mojo
       // pipes of the initial request received in `StartRequest()`.
       factory->CreateLoaderAndStart(std::move(receiver), request_id_, options_,
@@ -1437,7 +1456,8 @@ void ServiceWorkerMainResourceLoader::OnConnectionClosed() {
   TRACE_EVENT("ServiceWorker",
               "ServiceWorkerMainResourceLoader::OnConnectionClosed",
               perfetto::Flow::FromPointer(this));
-  InvalidateAndDeleteIfNeeded();
+  connection_closed_ = true;
+  CheckLifecycle();
 }
 
 // TODO(crbug.com/468821930): Clarify the deletion condition for SWAutoPreload
@@ -1447,16 +1467,13 @@ bool ServiceWorkerMainResourceLoader::ShouldDelayDeletion() {
   // destruction until following conditions are satisfied:
   // 1) Fetch event is completed.
   // 2) The data pipe for the fetch handler is successfully consumed or aborted
-  //    in `race_network_request_url_loader_client_`. This is considered only
-  //    when `kServiceWorkerStaticRouterRaceRequestFix2` is enabled:
+  //    in `race_network_request_url_loader_client_`.
   if (dispatched_preload_type() == DispatchedPreloadType::kRaceNetworkRequest) {
     CHECK(race_network_request_url_loader_client_.has_value());
     if (!did_dispatch_event_) {
       return true;
     }
-    if (base::FeatureList::IsEnabled(
-            features::kServiceWorkerStaticRouterRaceRequestFix2) &&
-        !race_network_request_url_loader_client_
+    if (!race_network_request_url_loader_client_
              ->clone_response_for_fetch_handler_completed_or_connection_closed()) {
       return true;
     }
@@ -1464,15 +1481,10 @@ bool ServiceWorkerMainResourceLoader::ShouldDelayDeletion() {
   return false;
 }
 
-void ServiceWorkerMainResourceLoader::InvalidateAndDeleteIfNeeded() {
-  if (ShouldDelayDeletion()) {
-    // `kRaceNetworkAndCache` doesn't dispatch a fetch event.
-    CHECK(fetch_dispatcher_ ||
-          IsMatchedRouterSourceType(
-              network::mojom::ServiceWorkerRouterSourceType::
-                  kRaceNetworkAndCache));
-    return;
-  }
+void ServiceWorkerMainResourceLoader::Invalidate() {
+  // Invalidate can only be called when we don't need to delay deletion.
+  CHECK(!ShouldDelayDeletion());
+  CHECK(receiver_.is_bound());
 
   // The fetch dispatcher or stream waiter may still be running. Don't let them
   // do callbacks back to this loader, since it is now done with the request.
@@ -1484,26 +1496,54 @@ void ServiceWorkerMainResourceLoader::InvalidateAndDeleteIfNeeded() {
   receiver_.reset();
 
   // Respond to the request if it's not yet responded to.
-  if (status_ != Status::kCompleted)
+  if (status_ != Status::kCompleted) {
     CommitCompleted(net::ERR_ABORTED, "Disconnected pipe before completed");
+  }
 
   url_loader_client_.reset();
-  DeleteIfNeeded();
 }
 
-void ServiceWorkerMainResourceLoader::DeleteIfNeeded() {
-  bool can_delete = !receiver_.is_bound() && is_detached_;
-  if (!can_delete) {
+void ServiceWorkerMainResourceLoader::CheckLifecycle() {
+  // We should not perform any invalidation or deletion while we need to delay
+  // it. This happens when RaceNetworkRequest is active and we are still waiting
+  // for the fetch event to dispatch or the data to finish cloning.
+  if (ShouldDelayDeletion()) {
     return;
   }
-  if (base::FeatureList::IsEnabled(
-          features::kServiceWorkerStaticRouterRaceRequestFix2) &&
-      ShouldDelayDeletion()) {
-    // Speculative fix to delay the object deletion until the fetch event
-    // completion. crbug.com/340949948 for more details.
-    return;
+
+  // 1. Handle Mojo connection closure.
+  // If the Mojo connection to the client was closed (recorded in
+  // connection_closed_), and we haven't invalidated the loader yet (receiver_
+  // is still bound), perform the invalidation now.
+  if (connection_closed_ && receiver_.is_bound()) {
+    Invalidate();
   }
-  delete this;
+
+  // 2. Handle completed and detached loader for RaceNetworkRequest.
+  // For RaceNetworkRequest, we actively invalidate the loader once it's
+  // completed and detached, without waiting for the client to close the Mojo
+  // pipe. This is because the fetch event might have finished after the
+  // completion of the race network request, and we want to clean up
+  // immediately.
+  if (dispatched_preload_type() == DispatchedPreloadType::kRaceNetworkRequest &&
+      is_detached_ && status_ == Status::kCompleted && receiver_.is_bound()) {
+    Invalidate();
+  }
+
+  // 3. Perform self-deletion.
+  // The loader can only be safely deleted when:
+  // - It is detached from the request (is_detached_ is true), meaning the
+  // browser
+  //   no longer needs it.
+  // - It has been invalidated (!receiver_.is_bound()), meaning the Mojo
+  // connection
+  //   is gone and internal resources are released.
+  // - We don't need to delay deletion (checked at the beginning of this
+  // function).
+  if (is_detached_ && !receiver_.is_bound()) {
+    // Delete `this` as it is no longer needed and all cleanup is done.
+    delete this;
+  }
 }
 
 network::mojom::ServiceWorkerStatus
@@ -1653,11 +1693,10 @@ bool ServiceWorkerMainResourceLoader::IsEligibleForRecordingTimingMetrics() {
 }
 
 void ServiceWorkerMainResourceLoader::RecordFindRegistrationToCompletedTrace() {
-  TRACE_EVENT_BEGIN(
-      "ServiceWorker", kHistogramLoadTiming, perfetto::Track::FromPointer(this),
-      find_registration_start_time_, "url", resource_request_.url);
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
-                  completion_time_);
+  TRACE_EVENT_BEGIN("ServiceWorker", kHistogramLoadTiming,
+                    GetTracingTrack(this), find_registration_start_time_, "url",
+                    resource_request_.url);
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this), completion_time_);
 }
 
 void ServiceWorkerMainResourceLoader::
@@ -1665,11 +1704,9 @@ void ServiceWorkerMainResourceLoader::
   const base::TimeTicks request_start =
       response_head_->load_timing.request_start;
   TRACE_EVENT_BEGIN("ServiceWorker", "FindRegistrationToRequestStart",
-                    perfetto::Track::FromPointer(this),
-                    find_registration_start_time_, "url",
+                    GetTracingTrack(this), find_registration_start_time_, "url",
                     resource_request_.url);
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
-                  request_start);
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this), request_start);
 
   base::UmaHistogramMediumTimes(
       base::StrCat({kHistogramLoadTiming, ".FindRegistrationToRequestStart"}),
@@ -1720,9 +1757,8 @@ void ServiceWorkerMainResourceLoader::
                     GetInitialServiceWorkerStatusString()}),
       load_timing.service_worker_start_time - load_timing.request_start);
   TRACE_EVENT_BEGIN("ServiceWorker", "RequestStartToForwardServiceWorker",
-                    perfetto::Track::FromPointer(this),
-                    load_timing.request_start);
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
+                    GetTracingTrack(this), load_timing.request_start);
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this),
                   load_timing.service_worker_start_time);
 }
 
@@ -1756,16 +1792,16 @@ void ServiceWorkerMainResourceLoader::
            GetInitialServiceWorkerStatusString(), ".", navigation_type_string}),
       time);
   TRACE_EVENT_BEGIN(
-      "ServiceWorker",
-      perfetto::StaticString(
-          base::StrCat({"ForwardServiceWorkerToWorkerReady.",
-                        GetInitialServiceWorkerStatusString(), ".",
-                        navigation_type_string, ".",
-                        is_browser_startup_completed_str})
-              .c_str()),
-      perfetto::Track::FromPointer(this), load_timing.service_worker_start_time,
+      "ServiceWorker", nullptr, GetTracingTrack(this),
+      load_timing.service_worker_start_time,
+      [&](perfetto::EventContext& ctx) {
+        ctx.event()->set_name(base::StrCat(
+            {"ForwardServiceWorkerToWorkerReady.",
+             GetInitialServiceWorkerStatusString(), ".", navigation_type_string,
+             ".", is_browser_startup_completed_str}));
+      },
       "initial_service_worker_status", GetInitialServiceWorkerStatusString());
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this),
                   load_timing.service_worker_ready_time);
 }
 
@@ -1783,9 +1819,9 @@ void ServiceWorkerMainResourceLoader::
       fetch_event_timing_->dispatch_event_time -
           load_timing.service_worker_ready_time);
   TRACE_EVENT_BEGIN("ServiceWorker", "WorkerReadyToFetchHandlerStart",
-                    perfetto::Track::FromPointer(this),
+                    GetTracingTrack(this),
                     load_timing.service_worker_ready_time);
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this),
                   fetch_event_timing_->dispatch_event_time);
 }
 
@@ -1802,9 +1838,9 @@ void ServiceWorkerMainResourceLoader::
                           fetch_event_timing_->respond_with_settled_time -
                               fetch_event_timing_->dispatch_event_time);
   TRACE_EVENT_BEGIN("ServiceWorker", "FetchHandlerStartToFetchHandlerEnd",
-                    perfetto::Track::FromPointer(this),
+                    GetTracingTrack(this),
                     fetch_event_timing_->dispatch_event_time);
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this),
                   fetch_event_timing_->respond_with_settled_time);
 }
 
@@ -1822,9 +1858,9 @@ void ServiceWorkerMainResourceLoader::
       load_timing.receive_headers_end -
           fetch_event_timing_->respond_with_settled_time);
   TRACE_EVENT_BEGIN("ServiceWorker", "FetchHandlerEndToResponseReceived",
-                    perfetto::Track::FromPointer(this),
+                    GetTracingTrack(this),
                     fetch_event_timing_->respond_with_settled_time);
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this),
                   load_timing.receive_headers_end);
 }
 
@@ -1839,13 +1875,11 @@ void ServiceWorkerMainResourceLoader::
                     GetInitialServiceWorkerStatusString()}),
       completion_time_ - load_timing.receive_headers_end);
   TRACE_EVENT_BEGIN(
-      "ServiceWorker", "ResponseReceivedToCompleted",
-      perfetto::Track::FromPointer(this), load_timing.receive_headers_end,
-      "fetch_response_source",
+      "ServiceWorker", "ResponseReceivedToCompleted", GetTracingTrack(this),
+      load_timing.receive_headers_end, "fetch_response_source",
       blink::ServiceWorkerLoaderHelpers::FetchResponseSourceToSuffix(
           response_source_));
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
-                  completion_time_);
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this), completion_time_);
   // Same as above, breakdown by response source.
   base::UmaHistogramMediumTimes(
       base::StrCat(
@@ -1918,10 +1952,9 @@ void ServiceWorkerMainResourceLoader::
                     GetInitialServiceWorkerStatusString()}),
       completion_time_ - fetch_event_timing_->respond_with_settled_time);
   TRACE_EVENT_BEGIN("ServiceWorker", "FetchHandlerEndToFallbackNetwork",
-                    perfetto::Track::FromPointer(this),
+                    GetTracingTrack(this),
                     fetch_event_timing_->respond_with_settled_time);
-  TRACE_EVENT_END("ServiceWorker", perfetto::Track::FromPointer(this),
-                  completion_time_);
+  TRACE_EVENT_END("ServiceWorker", GetTracingTrack(this), completion_time_);
 }
 
 void ServiceWorkerMainResourceLoader::RecordFetchEventHandlerMetrics(

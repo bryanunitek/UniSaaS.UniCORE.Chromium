@@ -412,6 +412,8 @@ try_.builder(
     experiments = {
         # crbug/940930
         "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
     },
     main_list_view = "try",
 )
@@ -469,6 +471,11 @@ try_.orchestrator_builder(
         "chromium.add_one_test_shard": 10,
         # crbug/940930
         "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
+        "luci.buildbucket.run_in_turboci": 100,
+        # crbug.com/40280175
+        "chromium_checkout.expand_submodules": 100,
     },
     main_list_view = "try",
     use_clang_coverage = True,
@@ -494,6 +501,10 @@ try_.orchestrator_builder(
         experiment_percentage = 10,
         on_default_cq = True,
     ),
+    siso_configs = ["builder", "default-remote"],
+    # TODO(crbug.com/529185604): Remove this once the missing input issue is resolved.
+    # We need to download all outputs to prevent build failures caused by missing inputs.
+    siso_output_local_strategy = "full",
     use_clang_coverage = True,
 )
 
@@ -680,14 +691,7 @@ try_.orchestrator_builder(
         "ci/Linux ASan LSan Builder",
         "ci/Linux ASan LSan Tests (1)",
     ],
-    gn_args = gn_args.config(
-        configs = [
-            "ci/Linux ASan LSan Builder",
-            # TODO(crbug.com/507993636): Restore symbol_level=1 if/when CAS
-            # uploads and downloads are no longer slow.
-            "no_symbols",
-        ],
-    ),
+    gn_args = "ci/Linux ASan LSan Builder",
     compilator = "linux_chromium_asan_rel_ng-compilator",
     # TODO (crbug.com/1372179): Use orchestrator pool once overloaded test pools
     # are addressed
@@ -700,6 +704,8 @@ try_.orchestrator_builder(
         "chromium.add_one_test_shard": 10,
         # crbug/940930
         "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
     },
     main_list_view = "try",
 )
@@ -845,6 +851,8 @@ try_.builder(
     experiments = {
         # crbug/940930
         "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
     },
     main_list_view = "try",
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CQ,
@@ -948,6 +956,8 @@ try_.orchestrator_builder(
         "chromium.add_one_test_shard": 10,
         # crbug/940930
         "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
     },
     main_list_view = "try",
 )

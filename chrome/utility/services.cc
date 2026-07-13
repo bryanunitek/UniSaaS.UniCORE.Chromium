@@ -31,6 +31,10 @@
 #include "services/passage_embeddings/passage_embeddings_service.h"
 #include "ui/accessibility/accessibility_features.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/services/readaloud/read_aloud_playback_controller.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
 #if BUILDFLAG(IS_WIN)
 #include "chrome/services/system_signals/win/win_system_signals_service.h"
 #include "chrome/services/util_win/processor_metrics.h"
@@ -58,6 +62,7 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/common/importer/profile_import.mojom.h"
+#include "chrome/services/reading_mode_metrics/reading_mode_metrics_service.h"
 #include "chrome/utility/importer/profile_import_impl.h"
 #include "components/mirroring/service/mirroring_service.h"
 #include "services/proxy_resolver/proxy_resolver_factory_impl.h"  // nogncheck
@@ -267,6 +272,14 @@ auto RunSpeechRecognitionService(
 #endif  // !BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
 
 #if !BUILDFLAG(IS_ANDROID)
+
+auto RunReadingModeMetricsService(
+    mojo::PendingReceiver<reading_mode::mojom::DistillationEvaluator>
+        receiver) {
+  return std::make_unique<reading_mode::ReadingModeMetricsService>(
+      std::move(receiver));
+}
+
 auto RunScreenAIServiceFactory(
     mojo::PendingReceiver<screen_ai::mojom::ScreenAIServiceFactory> receiver) {
   return std::make_unique<screen_ai::ScreenAIService>(std::move(receiver));
@@ -429,6 +442,15 @@ auto RunBabelOrcaTachyonParsingService(
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(IS_ANDROID)
+auto RunReadAloudPlaybackControllerFactory(
+    mojo::PendingReceiver<read_aloud::mojom::ReadAloudPlaybackControllerFactory>
+        receiver) {
+  return std::make_unique<readaloud::ReadAloudPlaybackController>(
+      std::move(receiver));
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
 }  // namespace
 
 void RegisterElevatedMainThreadServices(mojo::ServiceFactory& services) {
@@ -448,9 +470,14 @@ void RegisterMainThreadServices(mojo::ServiceFactory& services) {
   services.Add(RunPassageEmbeddingsService);
   services.Add(RunOakSessionService);
 
+#if BUILDFLAG(IS_ANDROID)
+  services.Add(RunReadAloudPlaybackControllerFactory);
+#endif  // BUILDFLAG(IS_ANDROID)
+
 #if !BUILDFLAG(IS_ANDROID)
   services.Add(RunProfileImporter);
   services.Add(RunMirroringService);
+  services.Add(RunReadingModeMetricsService);
   services.Add(RunScreenAIServiceFactory);
 #endif  // !BUILDFLAG(IS_ANDROID)
 

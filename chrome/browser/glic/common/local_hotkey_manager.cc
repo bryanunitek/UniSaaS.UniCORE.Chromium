@@ -10,7 +10,6 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/background/glic/glic_launcher_configuration.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/profiles/profile.h"
@@ -23,16 +22,31 @@ namespace glic {
 
 namespace {
 
-#if BUILDFLAG(IS_MAC)
 constexpr int kFocusToggleAcceleratorModifiers =
+#if BUILDFLAG(IS_MAC)
     ui::EF_CONTROL_DOWN | ui::EF_COMMAND_DOWN;
 #elif BUILDFLAG(IS_CHROMEOS)
 // ui::EF_COMMAND_DOWN is the search key for ChromeOS.
-constexpr int kFocusToggleAcceleratorModifiers =
     ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN;
 #else
-constexpr int kFocusToggleAcceleratorModifiers =
     ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN;
+#endif
+
+constexpr int kCaptureRegionAcceleratorModifiers =
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+    ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN;
+#else
+    ui::EF_ALT_DOWN | ui::EF_CONTROL_DOWN;
+#endif
+
+constexpr int kPanelToggleAcceleratorModifiers =
+#if BUILDFLAG(IS_MAC)
+    ui::EF_CONTROL_DOWN;
+#elif BUILDFLAG(IS_CHROMEOS)
+    // ui::EF_COMMAND_DOWN is the search key for ChromeOS.
+    ui::EF_COMMAND_DOWN;
+#else
+        ui::EF_ALT_DOWN;
 #endif
 
 constexpr auto kCommandToPrefMap =
@@ -41,9 +55,7 @@ constexpr auto kCommandToPrefMap =
          prefs::kGlicFocusToggleHotkey},
         {LocalHotkeyManager::Command::kCaptureRegion,
          prefs::kGlicSelectionHotkey},
-#if BUILDFLAG(IS_ANDROID)
-        {LocalHotkeyManager::Command::kOpenGlic, prefs::kGlicLauncherHotkey},
-#endif
+        {LocalHotkeyManager::Command::kPanelToggle, prefs::kGlicLauncherHotkey},
     });
 
 constexpr std::array kCloseAccelerators = {
@@ -78,12 +90,6 @@ constexpr std::array kZoomResetAccelerators = {
     ui::Accelerator{ui::VKEY_0, kZoomModifier},
     ui::Accelerator{ui::VKEY_NUMPAD0, kZoomModifier}};
 
-#if BUILDFLAG(IS_ANDROID)
-constexpr ui::Accelerator kOpenGlicDefaultAccelerator = {ui::VKEY_G,
-                                                         ui::EF_ALT_DOWN};
-#else
-constexpr std::array<ui::Accelerator, 0> kOpenGlicAcceleratorsFallback = {};
-#endif
 
 constexpr auto kCommandToStaticAcceleratorsMap =
     base::MakeFixedFlatMap<LocalHotkeyManager::Command,
@@ -95,9 +101,6 @@ constexpr auto kCommandToStaticAcceleratorsMap =
 #if BUILDFLAG(IS_WIN)
         {LocalHotkeyManager::Command::kTitleBarContextMenu,
          kTitleBarContextMenuAccelerators},
-#endif
-#if !BUILDFLAG(IS_ANDROID)
-        {LocalHotkeyManager::Command::kOpenGlic, kOpenGlicAcceleratorsFallback},
 #endif
     });
 
@@ -163,11 +166,9 @@ ui::Accelerator LocalHotkeyManager::GetDefaultAccelerator(Command command) {
     case Command::kFocusToggle:
       return ui::Accelerator{ui::VKEY_G, kFocusToggleAcceleratorModifiers};
     case Command::kCaptureRegion:
-      return GlicLauncherConfiguration::GetDefaultSelectionHotkey();
-#if BUILDFLAG(IS_ANDROID)
-    case Command::kOpenGlic:
-      return kOpenGlicDefaultAccelerator;
-#endif
+      return ui::Accelerator{ui::VKEY_G, kCaptureRegionAcceleratorModifiers};
+    case Command::kPanelToggle:
+      return ui::Accelerator{ui::VKEY_G, kPanelToggleAcceleratorModifiers};
     default:
       NOTREACHED();
   }

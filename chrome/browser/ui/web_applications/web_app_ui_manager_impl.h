@@ -58,6 +58,7 @@ namespace web_app {
 
 class IsolatedWebAppInstallerCoordinator;
 class WithAppResources;
+struct SubAppUninstallMetadata;
 
 // Implementation of WebAppUiManager that depends upon //c/b/ui.
 // Allows //c/b/web_applications code to call into //c/b/ui without directly
@@ -175,6 +176,8 @@ class WebAppUiManagerImpl : public BrowserCollectionObserver,
       UninstallCompleteCallback callback,
       UninstallScheduledCallback scheduled_callback) override;
 
+  void UninstallAppSilentlyForMigration(const webapps::AppId& app_id) override;
+
   void ShowProfileErrorDialogForCorruptDB() override;
 
   void ShowIntentPicker(const GURL& url,
@@ -229,14 +232,15 @@ class WebAppUiManagerImpl : public BrowserCollectionObserver,
 
   void OnExtensionSystemReady();
 
-  void OnIconsReadForUninstall(
+  void OnAllIconsReadForUninstall(
       const webapps::AppId& app_id,
       webapps::WebappUninstallSource uninstall_source,
       gfx::NativeWindow parent_window,
       std::unique_ptr<ui::NativeWindowTracker> parent_window_tracker,
       UninstallCompleteCallback complete_callback,
       UninstallScheduledCallback uninstall_scheduled_callback,
-      IconMetadataFromDisk icon_metadata);
+      IconMetadataFromDisk icon_metadata,
+      std::vector<SubAppUninstallMetadata> sub_apps);
 
   void OnIsolatedWebAppInstallerClosed(base::FilePath bundle_path);
 
@@ -256,7 +260,8 @@ class WebAppUiManagerImpl : public BrowserCollectionObserver,
       UninstallCompleteCallback uninstall_complete_callback,
       webapps::UninstallResultCode uninstall_code);
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
   void ShowIPHPromoForAppsLaunchedViaLinkCapturing(Browser* browser,
                                                    const webapps::AppId& app_id,
                                                    bool is_activated);
@@ -265,7 +270,8 @@ class WebAppUiManagerImpl : public BrowserCollectionObserver,
 
   void OnTabChangedDuringIph(BrowserWindowInterface* browser);
 
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+        // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
   void OnBrowserCloseCancelled(

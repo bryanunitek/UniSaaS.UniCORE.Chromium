@@ -28,6 +28,7 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewGroup.LayoutParams;
 import android.view.ViewTreeObserver.OnGlobalLayoutListener;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.inputmethod.EditorInfo;
@@ -37,13 +38,13 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.DimenRes;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.ActionMenuView;
 import androidx.appcompat.widget.SearchView;
 import androidx.appcompat.widget.Toolbar;
 import androidx.appcompat.widget.TooltipCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentTransaction;
 import androidx.preference.PreferenceFragmentCompat;
@@ -64,10 +65,10 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.accessibility.settings.ChromeAccessibilitySettingsDelegate;
 import org.chromium.chrome.browser.crash.ChromePureJavaExceptionReporter;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.MainSettings;
 import org.chromium.chrome.browser.settings.MultiColumnSettings;
+import org.chromium.chrome.browser.settings.SettingsActivity;
 import org.chromium.chrome.browser.site_settings.ChromeSiteSettingsDelegate;
 import org.chromium.components.browser_ui.accessibility.AccessibilitySettings;
 import org.chromium.components.browser_ui.settings.search.SearchIndexProvider;
@@ -117,7 +118,8 @@ public class SettingsSearchCoordinator
     private static final String KEY_RESULT_RETURNED = "ResultReturned";
     private static final String KEY_EXIT_REASON_LOGGED = "ExitReasonLogged";
 
-    private final AppCompatActivity mActivity;
+    private final FragmentActivity mActivity;
+    private final Toolbar mActionBar;
     private final BooleanSupplier mUseMultiColumnSupplier;
     private @Nullable final MultiColumnSettings mMultiColumnSettings;
     private final Map<PreferenceFragmentCompat, ContainmentItemDecoration> mItemDecorations;
@@ -228,7 +230,8 @@ public class SettingsSearchCoordinator
      *     {@link MultiColumnSettings#mFirstVisibleTitleIndex}.
      */
     public SettingsSearchCoordinator(
-            AppCompatActivity activity,
+            FragmentActivity activity,
+            Toolbar actionBar,
             BooleanSupplier useMultiColumnSupplier,
             @Nullable MultiColumnSettings multiColumnSettings,
             Map<PreferenceFragmentCompat, ContainmentItemDecoration> itemDecorations,
@@ -238,6 +241,7 @@ public class SettingsSearchCoordinator
         AccessibilityState.addListener(this);
 
         mActivity = activity;
+        mActionBar = actionBar;
         mUseMultiColumnSupplier = useMultiColumnSupplier;
         mMultiColumnSettings = multiColumnSettings;
         setFragmentState(FS_SETTINGS);
@@ -254,8 +258,10 @@ public class SettingsSearchCoordinator
         // AppBarLayout(app_bar_layout)
         //         +-- FrameLayout
         //         |       +----- MaterialToolbar(action_bar)
+        //         |                  +------ homeButton (back)
         //         |                  +------ searchBox (dual-column)
         //         |                  +------ searchQuery
+        //         |                  +------ help/menuButton
         //         +--- searchBox (single-column)
         Toolbar actionBar = mActivity.findViewById(R.id.action_bar);
         ViewGroup appBar = mActivity.findViewById(R.id.app_bar_layout);
@@ -272,9 +278,6 @@ public class SettingsSearchCoordinator
         View query = mActivity.findViewById(R.id.search_query_container);
         Drawable bg = ContextCompat.getDrawable(mActivity, R.drawable.pill_background);
         int tint = SemanticColorUtils.getSettingsContainerBackgroundColor(mActivity);
-        if (!ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-            tint = SemanticColorUtils.getColorSurfaceContainerHighest(mActivity);
-        }
         bg.setTint(tint);
         searchBox.setBackground(bg);
         query.setBackground(bg);
@@ -429,6 +432,14 @@ public class SettingsSearchCoordinator
         assert mMultiColumnSettings != null;
         if (mMultiColumnSettings == null) return;
 
+        View detailPane = mActivity.findViewById(R.id.preferences_detail);
+        if (detailPane != null) {
+            detailPane.addOnLayoutChangeListener(
+                    (v, l, t, r, b, ol, ot, or, ob) -> {
+                        if (r - l != or - ol) updateSearchUiWidth();
+                    });
+        }
+
         updateSearchUiWidth();
 
         // Determine the search bar visibility.
@@ -577,7 +588,7 @@ public class SettingsSearchCoordinator
     private void showUiInSingleColumn(View searchBox, boolean show) {
         // Delay showing the UI until its width gets set. This mitigates the UI being seen
         // with a wrong width initially.
-        if (show && searchBox.getLayoutParams().width == ViewGroup.LayoutParams.MATCH_PARENT) {
+        if (show && searchBox.getLayoutParams().width == LayoutParams.MATCH_PARENT) {
             mHandler.post(() -> showUiInSingleColumn(searchBox, show));
             return;
         }
@@ -789,7 +800,7 @@ public class SettingsSearchCoordinator
     private void showBackArrowInSingleColumnMode(boolean show) {
         if (mUseMultiColumn) return;
 
-        assumeNonNull(mActivity.getSupportActionBar()).setDisplayHomeAsUpEnabled(show);
+        setDisplayHomeAsUpEnabled(show);
     }
 
     @VisibleForTesting(otherwise = PRIVATE)
@@ -1004,21 +1015,44 @@ public class SettingsSearchCoordinator
             View detailPane = mActivity.findViewById(R.id.preferences_detail);
             if (searchBox == null || query == null || detailPane == null) return;
 
-            int settingsMargin = getPixelSize(R.dimen.settings_item_margin);
             int detailPaneWidth = detailPane.getWidth();
-            if (detailPaneWidth == 0 || getHelpMenuView() == null) {
+            if (detailPaneWidth == 0) {
                 mHandler.post(this::updateSearchUiWidth);
                 return;
             }
-            int width = detailPaneWidth - settingsMargin * 2 - getMenuWidth();
-            updateView(searchBox, 0, settingsMargin, width);
-            updateView(query, 0, settingsMargin, width);
-
+            int maxDetailWidthPx = getPixelSize(R.dimen.settings_min_multi_column_screen_width);
+            int minGapPx = getPixelSize(R.dimen.settings_multi_column_pane_gap);
+            int excessPx = detailPaneWidth - maxDetailWidthPx - minGapPx * 2;
+            int gapPx = (excessPx > 0 ? excessPx / 2 : 0) + minGapPx;
+            View actionBar = mActivity.findViewById(R.id.action_bar);
+            int actionBarEndMargin = gapPx - getPixelSize(R.dimen.settings_menu_icon_margin);
+            updateView(actionBar, 0, actionBarEndMargin, LayoutParams.MATCH_PARENT);
+            int searchUiWidth = detailPaneWidth - gapPx * 2 - getMenuWidth();
+            updateView(searchBox, 0, 0, searchUiWidth);
+            updateView(query, 0, 0, searchUiWidth);
             showBackIcon = true;
         } else {
             updateSingleColumnSearchUiWidth();
         }
-        assumeNonNull(mActivity.getSupportActionBar()).setDisplayHomeAsUpEnabled(showBackIcon);
+        setDisplayHomeAsUpEnabled(showBackIcon);
+    }
+
+    private void setDisplayHomeAsUpEnabled(boolean show) {
+        // Case for SettingsActivity (e.g. not in a tab).
+        if (mActivity instanceof SettingsActivity settingsActivity) {
+            var supportActionBar = settingsActivity.getSupportActionBar();
+            assumeNonNull(supportActionBar);
+            supportActionBar.setDisplayHomeAsUpEnabled(show);
+            return;
+        }
+        // Case for settings in tab.
+        if (mActionBar != null) {
+            if (show) {
+                mActionBar.setNavigationIcon(R.drawable.ic_arrow_back_24dp);
+            } else {
+                mActionBar.setNavigationIcon(null);
+            }
+        }
     }
 
     private int getMenuWidth() {

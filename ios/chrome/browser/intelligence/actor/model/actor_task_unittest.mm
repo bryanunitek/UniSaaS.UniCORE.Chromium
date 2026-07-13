@@ -4,12 +4,16 @@
 
 #import "ios/chrome/browser/intelligence/actor/model/actor_task.h"
 
+#import <optional>
+
 #import "base/functional/callback_helpers.h"
 #import "base/strings/string_number_conversions.h"
+#import "base/test/test_future.h"
 #import "base/token.h"
 #import "base/types/strong_alias.h"
 #import "components/actor/core/aggregated_journal.h"
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
+#import "ios/chrome/browser/intelligence/actor/model/actor_tab_helper.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_task_updates_observer.h"
 #import "ios/chrome/browser/intelligence/actor/public/actor_types.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool_factory.h"
@@ -628,6 +632,75 @@ TEST_F(ActorTaskTest, StateTransitionsToReflectingBeforeTimeoutCallback) {
 
   EXPECT_TRUE(callback_executed);
   EXPECT_EQ(ActorTaskState::kReflecting, state_in_callback);
+}
+
+// Test that calling `Stop()` on the task stops actuation on controlled
+// `WebState`s.
+TEST_F(ActorTaskTest, StopSetsActuatingStateToFalse) {
+  auto web_state = std::make_unique<web::FakeWebState>();
+  ActorTabHelper::CreateForWebState(web_state.get());
+  ActorTabHelper* helper = ActorTabHelper::FromWebState(web_state.get());
+  ASSERT_NE(helper, nullptr);
+  EXPECT_FALSE(helper->IsActuating());
+
+  SetTaskState(ActorTaskState::kActing);
+  AddControlledWebState(web_state->GetWeakPtr());
+  EXPECT_TRUE(helper->IsActuating());
+
+  task_->Stop(ActorTaskStoppedReason::kTaskComplete);
+  EXPECT_FALSE(helper->IsActuating());
+}
+
+// Test that adding a controlled `WebState` with `ActorTabHelper` sets actuating
+// to true, and destroying the task stops actuation without removing the helper.
+TEST_F(ActorTaskTest, ActorTabHelperActuatingState) {
+  auto web_state = std::make_unique<web::FakeWebState>();
+  ActorTabHelper::CreateForWebState(web_state.get());
+  ActorTabHelper* helper = ActorTabHelper::FromWebState(web_state.get());
+  ASSERT_NE(helper, nullptr);
+  EXPECT_FALSE(helper->IsActuating());
+
+  SetTaskState(ActorTaskState::kActing);
+  AddControlledWebState(web_state->GetWeakPtr());
+  EXPECT_TRUE(helper->IsActuating());
+
+  task_.reset();
+  EXPECT_NE(ActorTabHelper::FromWebState(web_state.get()), nullptr);
+  EXPECT_FALSE(helper->IsActuating());
+}
+
+// Tests that PromptToSelectCredential saves the credential locally, and runs
+// the callback with a valid credential and should_store_permission = false.
+TEST_F(ActorTaskTest,
+       PromptToSelectCredentialWillSaveCredentialsAndInvokeCallback) {
+  url::Origin origin = url::Origin::Create(GURL("https://example.com"));
+  actor_login::Credential cred;
+  cred.id = actor_login::Credential::Id(42);
+  cred.request_origin = origin;
+
+  // There is only one available credential for the user to choose from, so it
+  // will be selected.
+  std::vector<actor_login::Credential> credentials = {cred};
+
+  ToolDelegate* tool_delegate = task_.get();
+  base::test::TestFuture<std::optional<actor_login::Credential>, bool> future;
+
+  tool_delegate->PromptToSelectCredential(credentials, future.GetCallback());
+
+  // Extract the values from the callback parameters.
+  const auto& callback_result = future.Get();
+  const std::optional<actor_login::Credential>& selected_credential =
+      std::get<0>(callback_result);
+  ASSERT_TRUE(selected_credential.has_value());
+  EXPECT_EQ(selected_credential->id, cred.id);
+  EXPECT_FALSE(std::get<1>(callback_result));
+
+  // Verify that `GetUserSelectedCredential` returns the selected credential.
+  std::optional<ToolDelegate::CredentialWithPermission> stored_result =
+      tool_delegate->GetUserSelectedCredential(origin);
+  ASSERT_TRUE(stored_result.has_value());
+  EXPECT_EQ(stored_result->credential.id, cred.id);
+  EXPECT_FALSE(stored_result->always_allow);
 }
 
 }  // namespace actor

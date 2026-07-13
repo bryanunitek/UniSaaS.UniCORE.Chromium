@@ -30,7 +30,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/component_export.h"
 #include "base/containers/enum_set.h"
 #include "base/containers/flat_set.h"
@@ -154,6 +154,12 @@ BASE_DECLARE_FEATURE(kGetAIPageContentMainFrameTimeoutEnabled);
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 extern const base::FeatureParam<base::TimeDelta>
     kGetAIPageContentMainFrameTimeoutParam;
+
+COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
+BASE_DECLARE_FEATURE(kGetAIPageContentGetImageBytesTimeoutEnabled);
+COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
+extern const base::FeatureParam<base::TimeDelta>
+    kGetAIPageContentGetImageBytesTimeoutParam;
 
 typedef base::EnumSet<proto::RequestContext,
                       proto::RequestContext_MIN,
@@ -352,25 +358,25 @@ base::TimeDelta GetOnDeviceModelRetentionTime();
 
 // Return the disk space required for on device model install.
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
-base::ByteCount GetDiskSpaceRequiredForOnDeviceModelInstall();
+base::ByteSize GetDiskSpaceRequiredForOnDeviceModelInstall();
 
 // Whether there is enough free disk space to allow on-device model
 // installation.
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 bool IsFreeDiskSpaceSufficientForOnDeviceModelInstall(
-    base::ByteCount free_disk_space_bytes);
+    base::ByteSize free_disk_space_bytes);
 
 // Whether there is too little disk space to retain the on-device model
 // installation.
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 bool IsFreeDiskSpaceTooLowForOnDeviceModelInstall(
-    base::ByteCount free_disk_space_bytes);
+    base::ByteSize free_disk_space_bytes);
 
 // Whether there is enough free disk space to allow on-device model
 // installation proactively in background.
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 bool IsFreeDiskSpaceSufficientForBackgroundOnDeviceModelInstall(
-    base::ByteCount free_disk_space_bytes);
+    base::ByteSize free_disk_space_bytes);
 
 // Returns true if unsafe content should be removed.
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
@@ -385,12 +391,6 @@ bool ShouldUseTextSafetyClassifierModel();
 // range [0, 1].
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 double GetOnDeviceModelLanguageDetectionMinimumReliability();
-
-// Whether the newer generalized safety model is used instead of the ULM-based
-// model as the text safety model. Irrelevant if
-// `ShouldUseTextSafetyClassifierModel()` returns false;
-COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
-bool ShouldUseGeneralizedSafetyModel();
 
 // These params configure the repetition checker. See HasRepeatingSuffix() in
 // repetition_checker.h for explanation. A value of 2 for num repeats and 16 for
@@ -430,6 +430,11 @@ std::optional<base::TimeDelta> GetSubframeGetAIPageContentTimeout();
 // applied.
 COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
 std::optional<base::TimeDelta> GetMainFrameGetAIPageContentTimeout();
+
+// Returns what the timeout for calls to GetImageBytes should be.
+// An empty return value indicates no timeout should be applied.
+COMPONENT_EXPORT(OPTIMIZATION_GUIDE_FEATURES)
+std::optional<base::TimeDelta> GetAIPageContentGetImageBytesTimeout();
 
 }  // namespace features
 }  // namespace optimization_guide

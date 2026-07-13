@@ -102,6 +102,7 @@ PageActionPixelIconsHiddenTest.*
 PageActionPixelShowIconTest.*
 PageActionPixelShowChipTest.*
 PageActionPixelTestShowChipReduced.*
+PageActionAnchoredMessagePixelTest.*
 PageInfoBubbleViewAboutThisSiteDialogBrowserTest.*
 PageInfoBubbleViewDialogBrowserTest.*
 PageInfoBubbleViewPrivacySandboxDialogBrowserTest.*
@@ -114,6 +115,7 @@ ParentPermissionDialogViewTest.*
 *PasswordCrossDomainConfirmationPopupViewBrowsertest.*
 *PasswordChangeToastBrowserTest.InvokeUi_*
 *PasswordChangeUiBrowserTest.*
+*PasswordDialogViewTest.*
 *PasswordGenerationPopupViewBrowsertest.*
 *PasswordGenerationPopupViewWithSoftNudgeBrowsertest.*
 *PasswordManagementRevampedBubbleInteractiveUiTest.*

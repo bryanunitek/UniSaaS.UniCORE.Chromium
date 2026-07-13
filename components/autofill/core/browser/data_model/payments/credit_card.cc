@@ -335,11 +335,14 @@ int CreditCard::IconResourceId(Suggestion::Icon icon) {
       return ShouldUseNewFopDisplay() ? IDR_AUTOFILL_METADATA_CC_GENERIC
                                       : IDR_AUTOFILL_METADATA_CC_GENERIC_OLD;
     case Suggestion::Icon::kAccount:
+    case Suggestion::Icon::kCardGenericSpark:
+    case Suggestion::Icon::kCardGenericVector:
     case Suggestion::Icon::kClear:
     case Suggestion::Icon::kCode:
     case Suggestion::Icon::kDelete:
     case Suggestion::Icon::kDevice:
     case Suggestion::Icon::kVehicle:
+    case Suggestion::Icon::kVehicleSpark:
     case Suggestion::Icon::kWork:
     case Suggestion::Icon::kEdit:
     case Suggestion::Icon::kEmail:
@@ -354,20 +357,30 @@ int CreditCard::IconResourceId(Suggestion::Icon icon) {
     case Suggestion::Icon::kGooglePay:
     case Suggestion::Icon::kHome:
     case Suggestion::Icon::kIdCard:
+    case Suggestion::Icon::kIdCard2:
+    case Suggestion::Icon::kIdCard2Spark:
+    case Suggestion::Icon::kIdCardSpark:
     case Suggestion::Icon::kIban:
     case Suggestion::Icon::kKey:
     case Suggestion::Icon::kLocation:
+    case Suggestion::Icon::kLocationSpark:
     case Suggestion::Icon::kLoyalty:
     case Suggestion::Icon::kMagic:
     case Suggestion::Icon::kNoIcon:
     case Suggestion::Icon::kOfferTag:
+    case Suggestion::Icon::kOrder:
+    case Suggestion::Icon::kOrderSpark:
     case Suggestion::Icon::kPassport:
+    case Suggestion::Icon::kPassportSpark:
     case Suggestion::Icon::kPenSpark:
     case Suggestion::Icon::kPersonCheck:
     case Suggestion::Icon::kQuestionMark:
     case Suggestion::Icon::kRecoveryPassword:
     case Suggestion::Icon::kScanCreditCard:
     case Suggestion::Icon::kSettings:
+    case Suggestion::Icon::kShipment:
+    case Suggestion::Icon::kShipmentSpark:
+    case Suggestion::Icon::kTextSpark:
     case Suggestion::Icon::kUndo:
     case Suggestion::Icon::kBnplGeneric:
     case Suggestion::Icon::kBnplAffirm:
@@ -378,6 +391,7 @@ int CreditCard::IconResourceId(Suggestion::Icon icon) {
     case Suggestion::Icon::kGoogleWalletMonochrome:
     case Suggestion::Icon::kAndroidMessages:
     case Suggestion::Icon::kFlight:
+    case Suggestion::Icon::kFlightSpark:
     case Suggestion::Icon::kSpark:
     case Suggestion::Icon::kSadTab:
       NOTREACHED();

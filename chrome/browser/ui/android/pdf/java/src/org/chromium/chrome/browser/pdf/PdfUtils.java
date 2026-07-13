@@ -6,8 +6,6 @@ package org.chromium.chrome.browser.pdf;
 
 import android.content.ContentResolver;
 import android.content.Context;
-import android.content.pm.PackageManager;
-import android.content.pm.ProviderInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.ext.SdkExtensions;
@@ -74,6 +72,25 @@ public class PdfUtils {
 
         int NUM_ENTRIES = 3;
     }
+
+    // LINT.IfChange(PdfToolbarAction)
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    @IntDef({
+        PdfToolbarAction.OTHER,
+        PdfToolbarAction.ZOOM_IN,
+        PdfToolbarAction.ZOOM_OUT,
+        PdfToolbarAction.NUM_ENTRIES
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PdfToolbarAction {
+        int OTHER = 0;
+        int ZOOM_IN = 1;
+        int ZOOM_OUT = 2;
+
+        int NUM_ENTRIES = 3;
+    }
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidPdfToolbarAction)
 
     private static final String TAG = "PdfUtils";
     private static final Set<String> TRANSIENT_PDF_SCHEMES =
@@ -142,7 +159,7 @@ public class PdfUtils {
     public static boolean shouldOpenPdfInline(boolean isIncognito) {
         if (sShouldOpenPdfInlineForTesting) return true;
         if (isIncognito) {
-            return false;
+            return ChromeFeatureList.sInlinePdfV2Incognito.isEnabled();
         }
         return isPlatformSupported();
     }
@@ -304,7 +321,7 @@ public class PdfUtils {
      * @param originalUrl The url to be decoded.
      * @return the decoded download url; or null if the original url is not a pdf page url.
      */
-    public static @Nullable String decodePdfPageUrl(String originalUrl) {
+    public static @Nullable String decodePdfPageUrl(@Nullable String originalUrl) {
         if (originalUrl == null || !originalUrl.startsWith(UrlConstants.PDF_URL)) {
             return null;
         }
@@ -382,13 +399,28 @@ public class PdfUtils {
         return isPlatformSupported();
     }
 
+    /**
+     * Checks whether the inline PDF V2 download feature is enabled.
+     *
+     * @return {@code true} if the inline PDF V2 download feature is enabled, {@code false}
+     *     otherwise.
+     */
+    public static boolean isInlinePdfV2DownloadEnabled() {
+        return isInlinePdfV2Enabled() && ChromeFeatureList.sInlinePdfV2Download.isEnabled();
+    }
+
     /** Returns {@code true} if {@link PdfViewFragment} is reused on activity restart. */
     public static boolean isReuseFragmentEnabled() {
-        return ChromeFeatureList.isEnabled(ChromeFeatureList.PDF_REUSE_FRAGMENT);
+        return ChromeFeatureList.sPdfReuseFragment.isEnabled();
     }
 
     public static void recordPdfLoad() {
         RecordHistogram.recordBooleanHistogram("Android.Pdf.DocumentLoad", true);
+    }
+
+    public static void recordToolbarAction(@PdfToolbarAction int action) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "Android.Pdf.ToolbarAction", action, PdfToolbarAction.NUM_ENTRIES);
     }
 
     public static void recordPdfLoadResultDetail(@PdfLoadResult int loadResult) {
@@ -461,19 +493,7 @@ public class PdfUtils {
             return false;
         }
 
-        PackageManager pm = context.getPackageManager();
-        ProviderInfo providerInfo = pm.resolveContentProvider(authority, 0);
-        // If the provider cannot be resolved, it is either not registered or belongs to a
-        // third-party app that Chrome cannot query due to Android package visibility restrictions.
-        // In either case, it is not Chrome's provider, so it is safe to allow.
-        if (providerInfo == null) {
-            return true;
-        }
-
-        String myPackageName = context.getPackageName();
-        // We only restrict URIs pointing to Chrome's own providers. Third-party providers
-        // are responsible for their own security.
-        if (!myPackageName.equals(providerInfo.packageName)) {
+        if (!ContentUriUtils.isUriFromThisApp(uri, context)) {
             return true;
         }
 

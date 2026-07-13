@@ -34,7 +34,9 @@ inline constexpr char kWebNNTfliteDumpModel[] = "webnn-tflite-dump-model";
 // "FATAL".
 inline constexpr char kWebNNOrtLoggingLevel[] = "webnn-ort-logging-level";
 // Set the folder specified by --webnn-ort-dump-model for ONNX Runtime to save
-// optimized ONNX model after graph level transformations.
+// optimized models after graph level transformations. By default, ORT saves the
+// optimized ONNX model. Some EPs (e.g., OpenVINO) dump their own IR models via
+// a session config entry specified by `EpInfo::model_dump_config_key` instead.
 // Usage: --no-sandbox --webnn-ort-dump-model=/tmp/ort_models
 inline constexpr char kWebNNOrtDumpModel[] = "webnn-ort-dump-model";
 // Force onnxruntime.dll to be loaded from a location specified by the switch
@@ -109,8 +111,11 @@ inline constexpr char kWebNNOrtDisableCpuFallback[] =
 #endif  // BUILDFLAG(IS_WIN)
 
 extern base::span<const char* const> GetWebNNSwitchesCopiedFromGpuProcessHost();
-// extern const base::span<const char* const>
-//     kWebNNSwitchesCopiedFromGpuProcessHost;
+
+// Returns the list of WebNN switches forwarded from the browser process to
+// the renderer process. Only backends that actually run inside the renderer
+// should appear here.
+extern base::span<const char* const> GetWebNNSwitchesForRendererProcess();
 
 }  // namespace switches
 

@@ -26,17 +26,14 @@ const base::Feature* kFeatureFlags[] = {
     &extensions_features::kApiEnterpriseKioskInput,
     &extensions_features::kApiGlicAccessFromGoogleWebpage,
     &extensions_features::kApiMimeHandler,
-    &extensions_features::kApiPermissionsHostAccessRequests,
-    &extensions_features::kApiUserScriptsExecute,
-    &extensions_features::kApiUserScriptsMultipleWorlds,
     &extensions_features::kApiGlicPrivate,
+    &extensions_features::kApiContextualTasksPrivate,
     &extensions_features::kApiOdfsConfigPrivate,
     &extensions_features::kApiProxyOverrideRulesPrivate,
     &extensions_features::kExperimentalOmniboxLabs,
     &extensions_features::kExtensionIconVariants,
     &extensions_features::
         kApiEnterpriseReportingPrivateOnDataMaskingRulesTriggered,
-    &extensions_features::kWebstoreInstallerUserGestureKillSwitch,
 #if BUILDFLAG(IS_CHROMEOS)
     &blink::features::kSmartCard,
 #endif

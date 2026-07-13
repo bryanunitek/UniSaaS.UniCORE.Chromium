@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_ACCESSIBILITY_ANNOTATOR_CORE_ANNOTATION_REDUCER_MEMORY_SEARCH_RESULT_H_
 #define COMPONENTS_ACCESSIBILITY_ANNOTATOR_CORE_ANNOTATION_REDUCER_MEMORY_SEARCH_RESULT_H_
 
+#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,28 +13,32 @@
 #include <vector>
 
 #include "base/functional/callback.h"
-#include "components/accessibility_annotator/core/annotation_reducer/entry_type.h"
+#include "components/accessibility_annotator/core/annotation_reducer/memory_data_type.h"
 
 namespace accessibility_annotator {
 
 // Key-value metadata providing additional context for an entry.
 struct EntryMetadata {
-  EntryMetadata(EntryType type, std::u16string type_name, std::u16string value);
+  EntryMetadata(MemoryDataType type,
+                std::u16string type_name,
+                std::u16string value);
   EntryMetadata(const EntryMetadata&);
   EntryMetadata& operator=(const EntryMetadata&);
   EntryMetadata(EntryMetadata&&);
   EntryMetadata& operator=(EntryMetadata&&);
   ~EntryMetadata();
-  bool operator==(const EntryMetadata& other) const = default;
+  friend bool operator==(const EntryMetadata&, const EntryMetadata&) = default;
 
   // Type of metadata (a key). One of the known types or kUnknown.
-  EntryType type;
+  MemoryDataType type;
   // Localized name of the type (eg: "Departure Airport").
   // For unknown types, it should be filled with free-form text.
   std::u16string type_name;
   // Value of the metadata (eg: New York).
   std::u16string value;
 };
+
+std::ostream& operator<<(std::ostream& os, const EntryMetadata& metadata);
 
 // Type of the data source.
 // LINT.IfChange(MemoryEntrySourceType)
@@ -59,15 +64,18 @@ struct MemoryEntrySource {
   MemoryEntrySource(MemoryEntrySource&&);
   MemoryEntrySource& operator=(MemoryEntrySource&&);
   ~MemoryEntrySource();
-  bool operator==(const MemoryEntrySource& other) const = default;
+  friend bool operator==(const MemoryEntrySource&,
+                         const MemoryEntrySource&) = default;
 
   MemoryEntrySourceType type;
   std::optional<std::string> deeplink_url;
 };
 
+std::ostream& operator<<(std::ostream& os, const MemoryEntrySource& source);
+
 // An individual entry in the returned suggested search results list.
 struct MemorySearchResult {
-  MemorySearchResult(EntryType type,
+  MemorySearchResult(MemoryDataType type,
                      std::u16string type_name,
                      std::u16string value,
                      double confidence_score = 0.0);
@@ -76,9 +84,11 @@ struct MemorySearchResult {
   MemorySearchResult(MemorySearchResult&&);
   MemorySearchResult& operator=(MemorySearchResult&&);
   ~MemorySearchResult();
+  friend bool operator==(const MemorySearchResult&,
+                         const MemorySearchResult&) = default;
 
   // Type of value to be filled. One of the known types or kUnknown.
-  EntryType type;
+  MemoryDataType type;
 
   // Localized name of the entry type to be displayed on UI (eg: "Flight
   // Number"). For unknown types, it should be filled with free-form text.
@@ -102,9 +112,16 @@ struct MemorySearchResult {
   bool is_obfuscated = false;
 
   // The identifier of the entry (e.g. IBAN Guid or InstrumentId). If
-  // `EntryType` does not support identifiers, it will be unset (monostate).
+  // `MemoryDataType` does not support identifiers, it will be unset
+  // (monostate).
   std::variant<std::monostate, std::string, int64_t> identifier;
+
+  // The index of the entry in the remote response. If the entry is not a remote
+  // result, it will be unset (nullopt).
+  std::optional<int32_t> remote_response_index;
 };
+
+std::ostream& operator<<(std::ostream& os, const MemorySearchResult& result);
 
 enum class MemorySearchStatus {
   // Final response with all data-sources.
@@ -115,8 +132,8 @@ enum class MemorySearchStatus {
   kUnsupportedQuery,
   // Call to a model inference failed.
   kInferenceFailure,
-  // Failure obtaining from 1P data sources.
-  kDataFetchFailure,
+  // Failure due to lack of internet connection.
+  kNoConnectionFailure,
   // Other internal Failures.
   kInternalFailure
 };
@@ -137,6 +154,9 @@ struct MemorySearchResults {
 
   // List of suggested entries.
   std::vector<MemorySearchResult> entries;
+
+  // The server request ID, used to identify the request in the logs.
+  std::string server_request_id;
 };
 
 }  // namespace accessibility_annotator

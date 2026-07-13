@@ -533,6 +533,15 @@ targets.binaries.generated_script(
     module_scheme = "tast",
 )
 
+targets.binaries.generated_script(
+    name = "chrome_flaky_tast_tests",
+    label = "//chromeos:chrome_flaky_tast_tests",
+    args = [
+        "--logs-dir=${ISOLATED_OUTDIR}",
+    ],
+    module_scheme = "tast",
+)
+
 targets.binaries.console_test_launcher(
     name = "chrome_elf_unittests",
     label = "//chrome/chrome_elf:chrome_elf_unittests",
@@ -1046,7 +1055,7 @@ targets.binaries.console_test_launcher(
 
 targets.binaries.console_test_launcher(
     name = "device_realtarget_browsertests",
-    label = "//chrome/test:device_realtarget_browsertests",
+    label = "//chrome/test/device_realtarget:device_realtarget_browsertests",
     skip_usage_check = True,
     module_scheme = "gtest",
 )
@@ -1788,6 +1797,13 @@ targets.binaries.generated_script(
 )
 
 targets.binaries.generated_script(
+    name = "ondevice_api_scrape_tests",
+    label = "//components/optimization_guide/internal/testing:ondevice_api_scrape_tests",
+    skip_usage_check = True,
+    module_scheme = "flat",
+)
+
+targets.binaries.generated_script(
     name = "litert_e2e_tests",
     label = "//components/optimization_guide/internal/testing:litert_e2e_tests",
     module_scheme = "flat",
@@ -2210,8 +2226,8 @@ targets.binaries.generated_script(
 )
 
 targets.binaries.generated_script(
-    name = "trichrome_webview_wpt_64",
-    label = "//android_webview/test:trichrome_webview_wpt_64",
+    name = "system_webview_wpt_64",
+    label = "//android_webview/test:system_webview_wpt_64",
     # All references have been moved to starlark
     skip_usage_check = True,
     results_handler = "layout tests",
@@ -2544,6 +2560,13 @@ targets.binaries.windowed_test_launcher(
     name = "views_unittests",
     label = "//ui/views:views_unittests",
     module_scheme = "gtest",
+)
+
+targets.binaries.windowed_test_launcher(
+    name = "gtk_unittests",
+    label = "//ui/gtk:gtk_unittests",
+    module_scheme = "gtest",
+    skip_usage_check = True,
 )
 
 targets.binaries.windowed_test_launcher(

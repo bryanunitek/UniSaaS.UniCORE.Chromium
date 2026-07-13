@@ -29,7 +29,6 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/navigator/browser_navigator.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -171,10 +170,9 @@ class WebUIToolbarPixelInteractiveUiTest : public InteractiveBrowserTest {
         {features::kInitialWebUI, features::kWebUIReloadButton,
          features::kWebUISplitTabsButton, features::kWebUIBackForwardButton,
          features::kWebUIHomeButton, features::kWebUIPinnedToolbarActions,
-         ::tabs::kHorizontalTabStripComboButton, features::kWebUILocationBar,
+         features::kWebUILocationBar, features::kWebUIAppMenuButton,
          features::kSkipIPCChannelPausingForNonGuests,
-         features::kWebUIInProcessResourceLoadingV2,
-         features::kInitialWebUISyncNavStartToCommit},
+         features::kWebUIInProcessResourceLoadingV2},
         {});
   }
 
@@ -186,7 +184,7 @@ class WebUIToolbarPixelInteractiveUiTest : public InteractiveBrowserTest {
   void SetUpOnMainThread() override {
     InteractiveBrowserTest::SetUpOnMainThread();
     // Force the color mode to light to avoid flakiness.
-    ThemeServiceFactory::GetForProfile(browser()->profile())
+    ThemeServiceFactory::GetForProfile(browser()->GetProfile())
         ->SetBrowserColorScheme(ThemeService::BrowserColorScheme::kLight);
   }
 
@@ -204,7 +202,7 @@ class WebUIToolbarPixelInteractiveUiTest : public InteractiveBrowserTest {
     // The WebView should be using the light color mode for regular windows,
     // and dark color mode for incognito windows.
     ASSERT_EQ(web_view->GetWidget()->GetColorMode(),
-              browser->profile()->IsIncognitoProfile()
+              browser->GetProfile()->IsIncognitoProfile()
                   ? ui::ColorProviderKey::ColorMode::kDark
                   : ui::ColorProviderKey::ColorMode::kLight);
 
@@ -258,16 +256,14 @@ class WebUIToolbarViewsInteractiveUiTest
            features::kWebUIBackForwardButton,
 #endif  // BUILDFLAG(IS_MAC)
            features::kSkipIPCChannelPausingForNonGuests,
-           features::kWebUIInProcessResourceLoadingV2,
-           features::kInitialWebUISyncNavStartToCommit},
+           features::kWebUIInProcessResourceLoadingV2},
           {});
     } else {
       feature_list_.InitWithFeatures(
           {}, {features::kInitialWebUI, features::kWebUIReloadButton,
                features::kWebUIBackForwardButton,
                features::kSkipIPCChannelPausingForNonGuests,
-               features::kWebUIInProcessResourceLoadingV2,
-               features::kInitialWebUISyncNavStartToCommit});
+               features::kWebUIInProcessResourceLoadingV2});
     }
   }
 
@@ -1276,8 +1272,7 @@ class WebUIToolbarFocusMinimalInteractiveUiTest
          features::kWebUIReloadButton, features::kWebUIHomeButton,
          features::kWebUISplitTabsButton,
          features::kSkipIPCChannelPausingForNonGuests,
-         features::kWebUIInProcessResourceLoadingV2,
-         features::kInitialWebUISyncNavStartToCommit},
+         features::kWebUIInProcessResourceLoadingV2},
         {features::kWebUILocationBar, features::kWebUIPinnedToolbarActions});
   }
   ~WebUIToolbarFocusMinimalInteractiveUiTest() override = default;
@@ -1436,10 +1431,8 @@ class WebUIToolbarFocusFullInteractiveUiTest
          features::kWebUIReloadButton, features::kWebUIHomeButton,
          features::kWebUISplitTabsButton, features::kWebUILocationBar,
          features::kWebUIPinnedToolbarActions,
-         ::tabs::kHorizontalTabStripComboButton,
          features::kSkipIPCChannelPausingForNonGuests,
-         features::kWebUIInProcessResourceLoadingV2,
-         features::kInitialWebUISyncNavStartToCommit},
+         features::kWebUIInProcessResourceLoadingV2},
         {});
   }
   ~WebUIToolbarFocusFullInteractiveUiTest() override = default;
@@ -1480,7 +1473,7 @@ IN_PROC_BROWSER_TEST_F(WebUIToolbarFocusFullInteractiveUiTest,
       // Pin an action so that WebUIPinnedToolbarActions has at least one action
       // and is visible!
       Do(base::BindLambdaForTesting([this]() {
-        PinnedToolbarActionsModel::Get(browser()->profile())
+        PinnedToolbarActionsModel::Get(browser()->GetProfile())
             ->UpdatePinnedState(kActionCopyUrl, true);
       })),
 

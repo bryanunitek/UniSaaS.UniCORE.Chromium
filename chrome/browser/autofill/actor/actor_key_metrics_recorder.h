@@ -9,6 +9,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ref.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
@@ -51,6 +52,7 @@ class ActorKeyMetricsRecorder : public AutofillManager::Observer {
       FieldGlobalId trigger_field_id,
       mojom::ActionPersistence action_persistence,
       const base::flat_set<FieldGlobalId>& filled_field_ids,
+      const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&,
       const FillingPayload& filling_payload) override;
 
  private:

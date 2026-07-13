@@ -62,6 +62,13 @@ namespace {
 BASE_FEATURE(kPrerenderCancelOnCrossDocumentRestart,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+constexpr base::MemoryConsumerTraits kPrerenderHostRegistryTraits(
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kLarge,
+    base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
+    base::MemoryConsumerTraits::InformationRetention::kLossy,
+    base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
+    base::MemoryConsumerTraits::IsStateful::kNo);
+
 bool IsBackground(Visibility visibility) {
   // PrerenderHostRegistry treats HIDDEN and OCCLUDED as background.
   switch (visibility) {
@@ -498,10 +505,11 @@ bool IsSlowNetwork(WebContents* web_contents) {
 }  // namespace
 
 PrerenderHostRegistry::PrerenderHostRegistry(WebContents& web_contents)
-    : memory_pressure_listener_registration_(
-          FROM_HERE,
-          base::MemoryPressureListenerTag::kPrerenderHostRegistry,
-          this) {
+    : memory_consumer_registration_(
+          "PrerenderHostRegistry",
+          kPrerenderHostRegistryTraits,
+          this,
+          base::MemoryConsumerRegistration::CheckUnregister::kDisabled) {
   Observe(&web_contents);
 }
 
@@ -1079,7 +1087,7 @@ bool PrerenderHostRegistry::CancelHostInternal(
   prerender_host->OnWillBeCancelled(reason);
   reason.ReportMetrics(prerender_host->GetHistogramSuffix());
 
-  NotifyCancel(prerender_host->prerender_host_id(), reason);
+  NotifyRetriggerable(prerender_host->prerender_host_id(), reason);
 
   // If the host we are attempting to cancel is the new-tab host and initiator
   // WebContents's PrerenderHostRegistry for this host is still alive, invoke
@@ -1123,7 +1131,7 @@ bool PrerenderHostRegistry::CancelNewTabHostInternal(
 
   std::unique_ptr<PrerenderNewTabHandle> handle = std::move(iter->second);
   prerender_new_tab_handle_by_id_.erase(iter);
-  NotifyCancel(handle->prerender_host_id(), reason);
+  NotifyRetriggerable(handle->prerender_host_id(), reason);
 
   PrerenderNewTabHandle::CancelPrerenderingAndDestroy(std::move(handle),
                                                       reason);
@@ -1340,6 +1348,12 @@ PrerenderHostRegistry::TakePreCreatedWebContentsForNewTabIfExists(
         iter.second->TakeWebContentsIfAvailable(create_new_window_params,
                                                 web_contents_create_params);
     if (web_contents) {
+      // Notify observers that this prerender was consumed by activation so that
+      // it can be re-triggered if needed.
+      // See crbug.com/513412121 for more details.
+      NotifyRetriggerable(
+          iter.second->prerender_host_id(),
+          PrerenderCancellationReason(PrerenderFinalStatus::kActivated));
       prerender_new_tab_handle_by_id_.erase(iter);
       return web_contents;
     }
@@ -1548,10 +1562,12 @@ void PrerenderHostRegistry::OnBackResourceCacheResult(
   std::unique_ptr<network::SimpleURLLoader> http_cache_query_loader =
       std::move(http_cache_query_loader_);
 
-  if (!http_cache_query_loader->LoadedFromCache()) {
-    // If not in the cache, then this cache-only request must have failed.
-    CHECK_NE(http_cache_query_loader->NetError(), net::OK);
-
+  // A LOAD_ONLY_FROM_CACHE request is considered successful only if it is
+  // served from the cache. Note that net::OK may be returned even when
+  // LoadedFromCache() is false (e.g., when a test interceptor satisfies the
+  // request).
+  if (http_cache_query_loader->NetError() != net::OK ||
+      !http_cache_query_loader->LoadedFromCache()) {
     RecordPrerenderBackNavigationEligibility(
         predictor, PrerenderBackNavigationEligibility::kNoHttpCacheEntry,
         attempt.get());
@@ -1884,11 +1900,11 @@ void PrerenderHostRegistry::NotifyTrigger(const GURL& url) {
   }
 }
 
-void PrerenderHostRegistry::NotifyCancel(
+void PrerenderHostRegistry::NotifyRetriggerable(
     PrerenderHostId prerender_host_id,
     const PrerenderCancellationReason& reason) {
   for (Observer& obs : observers_) {
-    obs.OnCancel(prerender_host_id, reason);
+    obs.OnRetriggerable(prerender_host_id, reason);
   }
 }
 
@@ -1975,15 +1991,16 @@ bool PrerenderHostRegistry::IsAllowedToStartPrerenderingForTrigger(
   }
 }
 
-void PrerenderHostRegistry::OnMemoryPressure(
-    base::MemoryPressureLevel memory_pressure_level) {
+void PrerenderHostRegistry::OnUpdateMemoryLimit() {}
+
+void PrerenderHostRegistry::OnReleaseMemory() {
   // Ignore the memory pressure event if the memory control is disabled.
   if (!base::FeatureList::IsEnabled(
           blink::features::kPrerender2MemoryControls)) {
     return;
   }
 
-  if (GetMemoryLimit() <= base::kCriticalMemoryPressureThreshold) {
+  if (memory_limit() <= base::kCriticalMemoryPressureThreshold) {
     CancelAllHosts(PrerenderFinalStatus::kMemoryPressureAfterTriggered);
   }
 }
@@ -2002,7 +2019,7 @@ int PrerenderHostRegistry::GetCurrentMemoryLimit() {
     return base::kNoMemoryPressureThreshold;
   }
 
-  return GetMemoryLimit();
+  return memory_limit();
 }
 
 void PrerenderHostRegistry::SetTaskRunnerForTesting(
@@ -2119,6 +2136,21 @@ PrerenderHostRegistry::FindAndTakePrerenderHostToReuse(
     return reuse_host;
   }
   return nullptr;
+}
+
+int PrerenderHostRegistry::GetProcessReuseCount() const {
+  return process_reuse_count_;
+}
+
+base::ScopedClosureRunner PrerenderHostRegistry::IncrementProcessReuseCount() {
+  process_reuse_count_++;
+  return base::ScopedClosureRunner(
+      base::BindOnce(&PrerenderHostRegistry::DecrementProcessReuseCount,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void PrerenderHostRegistry::DecrementProcessReuseCount() {
+  process_reuse_count_--;
 }
 
 }  // namespace content

@@ -53,10 +53,25 @@ class ContextualTasksPanelController {
   // Close the panel.
   virtual void Close() = 0;
 
+  // Open the panel in zero state, or reset to zero state if already open.
+  virtual void OpenInZeroState() = 0;
+
   // State checks.
   // Check if the panel is currently opening for ContextualTask as another
   // feature might also show panel.
   virtual bool IsPanelOpenForContextualTask() const = 0;
+
+  // LINT.IfChange(ContextualTasksSidePanelEntrySource)
+  enum class EntrySource {
+    kOther = 0,
+    kLensOverlay = 1,
+    kAiModeLinkClick = 2,
+    kMaxValue = kAiModeLinkClick,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/contextual_tasks/enums.xml:ContextualTasksSidePanelEntrySource)
+
+  // Returns the entry source of the currently active panel.
+  virtual EntrySource GetActiveEntrySource() const = 0;
 
   // Context management.
   // Returns the tab handle of the auto suggested tab if the auto suggested tab
@@ -68,6 +83,12 @@ class ContextualTasksPanelController {
                              base::Uuid task_id) = 0;
   // Called when there is an AI interaction in the panel.
   virtual void OnAiInteraction() = 0;
+
+  // Sets a task to be used once the side panel opens. Used to open a specific
+  // task without associating a web contents (which would inherently get added
+  // as context).
+  virtual void SetPendingTaskForTab(tabs::TabInterface* tab,
+                                    const base::Uuid& task_id) = 0;
 
   // WebContents & session management.
   // Returns the currently active WebContents, or NULL if there is none.

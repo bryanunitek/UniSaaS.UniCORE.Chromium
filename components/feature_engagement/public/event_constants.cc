@@ -46,8 +46,6 @@ const char kFocusHelpBubbleAcceleratorPromoRead[] =
 const char kExtensionsRequestAccessButtonClicked[] =
     "extensions_request_access_button_clicked";
 
-const char kCookieControlsBubbleShown[] = "cookie_controls_bubble_shown";
-
 const char kGlicOnboardingCompleted[] = "glic_onboarding_completed";
 
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
@@ -216,6 +214,10 @@ const char kIOSGeminiLiveNewBadgeTriggered[] =
 const char kIOSGeminiLiveIPHTriggered[] = "ios_gemini_live_iph_triggered";
 const char kIOSGeminiImageRemixIPHTrigger[] =
     "ios_gemini_image_remix_iph_trigger";
+const char kIOSGeminiWhatCanGeminiDoTapped[] =
+    "ios_gemini_what_can_gemini_do_tapped";
+const char kIOSGeminiWhatCanGeminiDoTriggered[] =
+    "ios_gemini_what_can_gemini_do_triggered";
 const char kIOSPinMVTSiteUsed[] = "ios_pin_mvt_site_used";
 const char kIOSChromeOpenedFromIcon[] = "ios_chrome_opened_from_icon";
 #endif  // BUILDFLAG(IS_IOS)

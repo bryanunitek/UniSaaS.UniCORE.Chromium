@@ -15,8 +15,15 @@
 #include "components/multistep_filter/core/annotation_index/proto/annotation_index.pb.h"
 #include "components/multistep_filter/core/data_models/filter_annotation.h"
 #include "components/multistep_filter/core/data_models/filter_suggestion_candidate.h"
+#include "components/multistep_filter/core/multistep_filter_util.h"
+#include "components/optimization_guide/proto/filter_execution_metadata.pb.h"
+#include "components/optimization_guide/proto/hints.pb.h"
+#include "url/gurl.h"
 
 namespace multistep_filter {
+
+using ::optimization_guide::proto::FilterExecutionRequestContextMetadata;
+using ::optimization_guide::proto::RequestContextMetadata;
 
 GetSupportedTasksRequest ToGetSupportedTasksRequest(std::string_view domain) {
   GetSupportedTasksRequest request;
@@ -58,6 +65,18 @@ GetTaskExecutionStrategiesRequest ToGetTaskExecutionStrategiesRequest(
   return request;
 }
 
+RequestContextMetadata ToRequestContextMetadata(
+    base::span<const FilterAnnotation> filter_annotations) {
+  RequestContextMetadata metadata;
+  FilterExecutionRequestContextMetadata filter_execution_metadata;
+  for (const FilterAnnotation& annotation : filter_annotations) {
+    *filter_execution_metadata.add_execution_candidate() =
+        ToExecutionCandidate(annotation);
+  }
+  *metadata.mutable_filter_execution_metadata() = filter_execution_metadata;
+  return metadata;
+}
+
 std::vector<FilterSuggestionCandidate> ToFilterSuggestionCandidates(
     const GetTaskExecutionStrategiesResponse& response) {
   std::vector<FilterSuggestionCandidate> candidates;
@@ -85,8 +104,18 @@ std::vector<FilterSuggestionCandidate> ToFilterSuggestionCandidates(
       continue;
     }
 
+    std::u16string short_text;
+    std::u16string detailed_text;
+    if (strategy.has_suggestion_message()) {
+      short_text =
+          base::UTF8ToUTF16(strategy.suggestion_message().short_text());
+      detailed_text =
+          base::UTF8ToUTF16(strategy.suggestion_message().detailed_text());
+    }
+
     candidates.emplace_back(std::move(annotation_id), std::move(navigation_url),
-                            std::move(attributes));
+                            std::move(attributes), std::move(short_text),
+                            std::move(detailed_text));
   }
 
   return candidates;
@@ -99,8 +128,10 @@ ExtractTaskAttributesRequest ToExtractTaskAttributesRequest(const GURL& url) {
 }
 
 std::optional<FilterAnnotation> ToFilterAnnotation(
+    const GURL& url,
     const ExtractTaskAttributesResponse& response) {
-  if (response.domain().empty() || response.task_type().empty() ||
+  const std::string host(url.host());
+  if (host.empty() || response.task_type().empty() ||
       response.task_attributes().empty()) {
     return std::nullopt;
   }
@@ -111,8 +142,7 @@ std::optional<FilterAnnotation> ToFilterAnnotation(
   }
 
   return FilterAnnotation(base::Uuid::GenerateRandomV4(), response.task_type(),
-                          response.domain(), base::Time::Now(),
-                          std::move(attributes));
+                          host, base::Time::Now(), std::move(attributes));
 }
 
 }  // namespace multistep_filter

@@ -19,10 +19,12 @@
 #include "chrome/browser/ui/views/toolbar/webui_app_menu_control.h"
 #include "chrome/browser/ui/views/toolbar/webui_avatar_toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/webui_back_forward_control.h"
+#include "chrome/browser/ui/views/toolbar/webui_battery_saver_control.h"
 #include "chrome/browser/ui/views/toolbar/webui_home_control.h"
 #include "chrome/browser/ui/views/toolbar/webui_pinned_toolbar_actions.h"
 #include "chrome/browser/ui/views/toolbar/webui_reload_control.h"
 #include "chrome/browser/ui/views/toolbar/webui_split_tabs_control.h"
+#include "chrome/browser/ui/views/toolbar/webui_toolbar_extensions_container_wrapper.h"
 #include "chrome/browser/ui/webui/webui_toolbar/adapters/navigation_controls_state_fetcher.h"
 #include "chrome/browser/ui/webui/webui_toolbar/browser_controls_service.h"
 #include "chrome/browser/ui/webui/webui_toolbar/icon_table.h"
@@ -43,13 +45,6 @@ class BrowserWindowInterface;
 class WebUILocationBar;
 class WebUIToolbarUI;
 class WebUIToolbarInternalWebView;
-class ExtensionsContainer;
-class WebUIToolbarExtensionsContainer;
-
-namespace ui {
-template <typename T>
-class ScopedUnownedUserData;
-}
 
 // This has to be forward declared and stored in unique_ptrs<> due to the
 // separate toolbar/impl targets in BUILD.gn.
@@ -92,6 +87,7 @@ class WebUIToolbarControlDelegate {
       toolbar_ui_api::mojom::HomeControlStatePtr state) = 0;
   virtual void OnAppMenuControlStateChanged(
       toolbar_ui_api::mojom::AppMenuControlStatePtr state) = 0;
+  virtual void OnBatterySaverControlStateChanged(bool is_showing) = 0;
   virtual void OnOmniboxViewStateChanged(
       toolbar_ui_api::mojom::OmniboxViewStatePtr state) = 0;
   virtual void OnLocationBarFlagsChanged(
@@ -103,13 +99,20 @@ class WebUIToolbarControlDelegate {
   virtual void OnPinnedToolbarActionsStateChanged(
       std::vector<toolbar_ui_api::mojom::PinnedToolbarActionStatePtr>
           state) = 0;
+  virtual void OnExtensionsStateChanged(
+      std::vector<extensions_bar::mojom::ExtensionActionInfoPtr> state) = 0;
   virtual void OnContentSettingChanged(
       std::vector<toolbar_ui_api::mojom::ContentSettingImageStatePtr>
           state) = 0;
+  virtual void OnPageActionChanged(
+      std::vector<toolbar_ui_api::mojom::PageActionStatePtr> state) = 0;
   virtual void OnAvatarControlStateChanged(
       toolbar_ui_api::mojom::AvatarControlStatePtr state) = 0;
   virtual void OnFocusRequested(
       toolbar_ui_api::mojom::FocusRequestTarget target) = 0;
+
+  virtual std::optional<GURL> ConsumeDroppedUrl(
+      const gfx::PointF& drop_position) = 0;
 
   // Read the latest state.
   virtual const toolbar_ui_api::mojom::NavigationControlsState& GetState()
@@ -178,6 +181,15 @@ class WebUIToolbarWebView
       ::toolbar_ui_api::mojom::ContentSettingImageType type,
       toolbar_ui_api::mojom::ToolbarUIService::ShowContentSettingsBubbleCallback
           callback) override;
+  void OnPageActionClick(
+      ::toolbar_ui_api::mojom::PageActionId action_id,
+      ::toolbar_ui_api::mojom::PageActionTrigger trigger,
+      ::toolbar_ui_api::mojom::ToolbarUIService::OnPageActionClickCallback
+          callback) override;
+  void OnPageActionChipShowingChanged(
+      ::toolbar_ui_api::mojom::PageActionId action_id,
+      ::toolbar_ui_api::mojom::ToolbarUIService::
+          OnPageActionChipShowingChangedCallback callback) override;
   void OnPageInitialized() override;
   void InvokePinnedToolbarAction(
       toolbar_ui_api::mojom::PinnedToolbarAction action_id) override;
@@ -201,9 +213,17 @@ class WebUIToolbarWebView
   base::expected<std::monostate, mojo_base::mojom::ErrorPtr> OnOmniboxAction(
       toolbar_ui_api::mojom::OmniboxActionPtr action) override;
   void ShowAvatarMenu() override;
+  void SetAvatarButtonHovered(bool hovered) override;
+  void SetAvatarButtonFocused(bool focused) override;
+  void SetAvatarButtonIPHPromoShowing(bool showing) override;
+  void OnAppMenuFocusChanged(bool focused) override;
+  void ExecuteExtensionAction(const std::string& extension_id) override;
+  void ShowExtensionContextMenu(const std::string& extension_id,
+                                ui::mojom::MenuSourceType source) override;
 
   // BrowserControlsService::BrowserControlsServiceDelegate:
   void PermitLaunchUrl() override;
+  base::TimeTicks GetNavigationStartTicks() const override;
 
   // views::View:
   void AddedToWidget() override;
@@ -236,11 +256,46 @@ class WebUIToolbarWebView
 
   // Returns the FlexSpecification for determining the size of `this`. The
   // returned value must not outlive `this`, since it includes a bound callback.
-  views::FlexSpecification GetFlexSpecification();
+  //
+  // `navigation_button_flex_order` and `location_bar_flex_order`, are the
+  // FlexLayout orders that would be used by the home and forward buttons and
+  // the non-WebUI views for the location bar, respectively, if WebUI controls
+  // are not enabled. Note that `location_bar_flex_order` is actually between
+  // the home and forward button orders, so it's the right order if only one of
+  // the two is being handled by WebUI. `location_bar_flex_order` may be either
+  // higher or lower than `navigation_button_flex_order`.
+  //
+  // The WebUI toolbar is a single View within the toolbar's FlexLayout object
+  // so can have only a single order/priority in any single layout call by the
+  // FlexLayout. However, it can contain elements that should have
+  // non-consecutive priorities when it comes to using available horizontal
+  // space in the toolbar to reach their preferred sizes. To handle this, the
+  // FlexSpecification uses a vector of RuleAndPredicates to determine which
+  // single order to use for the WebUIToolbarWebView as a whole.
+  //
+  // When there's not a lot of space, the WebUIToolbarWebView as a whole uses
+  // the lower order of the two passed in (the higher priority one), to try and
+  // claim as much space for the higher priority controls as it can. When
+  // there's enough space to fit the higher priority controls, the
+  // WebUIToolbarWebView uses the lower priority, but returns a FlexLayoutRule
+  // that forces the higher priority controls to always be visible, even when
+  // calculating the minimum size.
+  //
+  // Note that this function call records whether `location_bar_flex_order` is
+  // higher or lower than `navigation_button_flex_order`, and ComputeLayout()'s
+  // behavior will vary accordingly.
+  views::FlexSpecification GetFlexSpecification(
+      int navigation_button_flex_order,
+      int location_bar_flex_order);
 
   // If we have the focus, adjust the JS focus to be appropriate for focus
   // toolbar operation.
   void AdjustForToolbarFocus();
+
+  // Special path for omnibox context menu, since it needs the `edit_flags`.
+  void HandleOmniboxContextMenu(const gfx::Point& point,
+                                ui::mojom::MenuSourceType source_type,
+                                int edit_flags);
 
   void SetDidFirstNonEmptyPaintCallbackForTesting(base::OnceClosure callback);
   void SetTickClockForTesting(const base::TickClock* clock);
@@ -249,6 +304,12 @@ class WebUIToolbarWebView
   bool IsPendingForTesting() const {
     return initialization_state_ == InitializationState::kPending;
   }
+
+  // Returns the current width of the WebUI location bar. Does this by computing
+  // the layout, given the current WebUI toolbar size, rather than by inspecting
+  // any location bar state. May only be called when the WebUI location bar is
+  // enabled.
+  int GetLocationBarWidthForTesting() const;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(WebUIToolbarWebViewPixelBrowserTest,
@@ -261,6 +322,8 @@ class WebUIToolbarWebView
                            CheckSplitTabsButtonColor);
   FRIEND_TEST_ALL_PREFIXES(WebUIToolbarWebViewPixelBrowserTest,
                            CheckHomeButtonColor);
+  FRIEND_TEST_ALL_PREFIXES(WebUIToolbarWebViewPixelBrowserTest,
+                           CheckBatterySaverButtonShowHide);
   FRIEND_TEST_ALL_PREFIXES(WebUIToolbarWebViewSplitTabsBrowserTest,
                            CheckSplitTabsButtonSourceType);
   FRIEND_TEST_ALL_PREFIXES(WebUIToolbarWebViewSplitTabsBrowserTest,
@@ -280,6 +343,7 @@ class WebUIToolbarWebView
                            BackForwardButtonsModifierClick);
   FRIEND_TEST_ALL_PREFIXES(WebUIToolbarSurfaceSyncBrowserTest,
                            SetsDeadlineOnInit);
+  friend class WebUIToolbarWebViewBrowserTest;
 
   // WebUIToolbarControlDelegate:
   BrowserWindowInterface* GetBrowser() override;
@@ -297,6 +361,7 @@ class WebUIToolbarWebView
       toolbar_ui_api::mojom::HomeControlStatePtr state) override;
   void OnAppMenuControlStateChanged(
       toolbar_ui_api::mojom::AppMenuControlStatePtr state) override;
+  void OnBatterySaverControlStateChanged(bool is_showing) override;
   void OnOmniboxViewStateChanged(
       toolbar_ui_api::mojom::OmniboxViewStatePtr state) override;
   void OnLocationBarFlagsChanged(
@@ -308,15 +373,22 @@ class WebUIToolbarWebView
   void OnPinnedToolbarActionsStateChanged(
       std::vector<toolbar_ui_api::mojom::PinnedToolbarActionStatePtr> state)
       override;
+  void OnExtensionsStateChanged(
+      std::vector<extensions_bar::mojom::ExtensionActionInfoPtr> state)
+      override;
   void OnContentSettingChanged(
       std::vector<toolbar_ui_api::mojom::ContentSettingImageStatePtr> state)
       override;
+  void OnPageActionChanged(
+      std::vector<toolbar_ui_api::mojom::PageActionStatePtr> state) override;
   const toolbar_ui_api::mojom::NavigationControlsState& GetState()
       const override;
   void OnAvatarControlStateChanged(
       toolbar_ui_api::mojom::AvatarControlStatePtr state) override;
   void OnFocusRequested(
       toolbar_ui_api::mojom::FocusRequestTarget target) override;
+  std::optional<GURL> ConsumeDroppedUrl(
+      const gfx::PointF& drop_position) override;
 
   toolbar_ui_api::mojom::NavigationControlsStatePtr
   GetNavigationControlsState();
@@ -345,21 +417,25 @@ class WebUIToolbarWebView
   // Resolves the initial deadline from features and applies it if enabled.
   void ApplyInitialSurfaceSyncDeadline();
 
-  WebUIToolbarUI* GetWebUIToolbarUI();
+  // Returns the active WebUI toolbar controller (const-safe).
+  // Robust against teardown as it uses the observed WebContents.
+  WebUIToolbarUI* GetWebUIToolbarUI() const;
 
   void OnTouchUiChanged();
-  void OnActiveTabChanged(BrowserWindowInterface* browser_interface);
   void PostPushNavigationState();
   void MaybeInitializePageDependentControls();
   void PushNavigationState();
   toolbar_ui_api::mojom::BackForwardControlStatePtr GetBackForwardState() const;
 
-  // Which buttons have overflowed. Allowed ComputeLayout() to be const, and
-  // usable both for computing putative sizes during layout, and updating which
-  // buttons have overflowed when the View is actually resized.
+  // Which buttons have overflowed, and the size of the location bar, if
+  // applicable. Allows ComputeLayout() to be const, and usable both for
+  // computing putative sizes during layout, and updating which buttons have
+  // overflowed when the View is actually resized.
   struct ButtonOverflowInfo {
     bool is_forward_button_overflowed = false;
     bool is_home_button_overflowed = false;
+
+    int location_bar_width = 0;
   };
 
   // Computes the layout of elements displayed in the toolbar such that they fit
@@ -370,9 +446,14 @@ class WebUIToolbarWebView
   //
   // If `button_overflow_info` is non-null, writes which buttons should be
   // overflowed to it.
-  gfx::Size ComputeLayout(
-      views::SizeBound available_width,
-      ButtonOverflowInfo* button_overflow_info = nullptr) const;
+  //
+  // `force_navigation_buttons` forces the home and forward buttons to be
+  // displayed, if pinned, and `force_location_bar` forces the location bar to
+  // be at least its preferred width, if enabled.
+  gfx::Size ComputeLayout(views::SizeBound available_width,
+                          ButtonOverflowInfo* button_overflow_info = nullptr,
+                          bool force_navigation_buttons = false,
+                          bool force_location_bar = false) const;
 
   // Uses ComputeLayout() to figure out which buttons should be moved to the
   // overflow menu, given current dimensions, and informs those buttons that
@@ -388,7 +469,21 @@ class WebUIToolbarWebView
   // size of the toolbar. Due to that, it neither reads nor writes the overflow
   // state of any buttons, though it does rely on calculating how many buttons
   // would be hidden if the provided bounds were all the available space.
-  gfx::Size FlexLayoutRule(const views::View*, const views::SizeBounds& bounds);
+  //
+  // `force_navigation_buttons` forces the home and forward buttons to be
+  // displayed if pinned (or, more accurately, width to be allocated to display
+  // them, regardless of `bounds`), and `force_location_bar` forces the location
+  // bar to be at least its preferred width, if enabled.
+  gfx::Size FlexLayoutRule(bool force_navigation_buttons,
+                           bool force_location_bar,
+                           const views::View*,
+                           const views::SizeBounds& bounds);
+
+  // The RuleEnabledPredicate used for the higher-priority rule (lower order) in
+  // the multi-order FlexSpecification. Returns true to enable the rule, false
+  // if the lower-priority rule should be used instead, given `bounds`.
+  bool RuleEnabledPredicate(int current_flex_order,
+                            const views::SizeBounds& bounds);
 
   // The most recent NavigationControlsState, consisting of the state of all
   // controls managed by the toolbar. This may or may not have been sent to
@@ -422,14 +517,12 @@ class WebUIToolbarWebView
   WebUISplitTabsControl split_tabs_control_;
   WebUIHomeControl home_control_;
   WebUIAppMenuControl app_menu_control_;
+  WebUIBatterySaverControl battery_saver_control_;
   WebUIAvatarToolbarButton avatar_control_;
   // This is null if WebUILocationBar is off, or the window is in one of the
   // modes (e.g. popup) that don't use it yet.
   std::unique_ptr<WebUILocationBar> location_bar_;
-  std::unique_ptr<WebUIToolbarExtensionsContainer> extensions_container_;
-  std::unique_ptr<ui::ScopedUnownedUserData<ExtensionsContainer>>
-      scoped_extensions_container_user_data_;
-  base::CallbackListSubscription active_tab_subscription_;
+  WebUIToolbarExtensionsContainerWrapper extensions_container_;
   WebUIBackForwardControl back_control_;
   WebUIBackForwardControl forward_control_;
   WebUIPinnedToolbarActions pinned_toolbar_actions_;
@@ -456,6 +549,14 @@ class WebUIToolbarWebView
   bool is_preloaded_ = false;
 
   std::unique_ptr<content::ScopedAccessibilityMode> scoped_accessibility_mode_;
+
+  // True if the location bar has a higher priority (lower order) than the home
+  // or forward buttons. Calculated based on the passed in priority for the
+  // location bar, though in practice, should mirror the value of
+  // features::kOmniboxResizingPrioritization.
+  //
+  // See GetFlexSpecification() for more information.
+  bool location_bar_takes_priority_ = false;
 
   // This WeakPtrFactory is used to keep tabs on pending state pushes, and then
   // used to cancel them if the state is later updated again before we post a

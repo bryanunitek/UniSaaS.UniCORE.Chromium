@@ -22,7 +22,6 @@
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/scoped_browser_locale.h"
 #include "chrome/test/base/testing_profile.h"
@@ -344,7 +343,7 @@ class NewTabPageUtilTileTypesEnterpriseShortcutsBrowserTest
 IN_PROC_BROWSER_TEST_P(NewTabPageUtilTileTypesEnterpriseShortcutsBrowserTest,
                        GetEnabledTileTypes) {
   // By default, personal shortcuts are visible (Custom Links).
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
+  EXPECT_EQ(GetEnabledTileTypes(browser()->GetProfile()),
             std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kCustomLinks}));
 
   // Set enterprise shortcuts policy.
@@ -355,7 +354,7 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilTileTypesEnterpriseShortcutsBrowserTest,
   // If enterprise shortcuts are also visible, both should be enabled.
   browser()->profile()->GetPrefs()->SetBoolean(
       ntp_prefs::kNtpEnterpriseShortcutsVisible, true);
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
+  EXPECT_EQ(GetEnabledTileTypes(browser()->GetProfile()),
             std::set<ntp_tiles::TileType>(
                 {ntp_tiles::TileType::kCustomLinks,
                  ntp_tiles::TileType::kEnterpriseShortcuts}));
@@ -364,14 +363,14 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilTileTypesEnterpriseShortcutsBrowserTest,
   // only enterprise should remain.
   browser()->profile()->GetPrefs()->SetBoolean(
       ntp_prefs::kNtpPersonalShortcutsVisible, false);
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
+  EXPECT_EQ(GetEnabledTileTypes(browser()->GetProfile()),
             std::set<ntp_tiles::TileType>(
                 {ntp_tiles::TileType::kEnterpriseShortcuts}));
 
   // Remove enterprise shortcuts policy, personal shortcuts should be visible.
   browser()->profile()->GetPrefs()->SetList(
       ntp_tiles::prefs::kEnterpriseShortcutsPolicyList, base::ListValue());
-  EXPECT_EQ(GetEnabledTileTypes(browser()->profile()),
+  EXPECT_EQ(GetEnabledTileTypes(browser()->GetProfile()),
             std::set<ntp_tiles::TileType>({ntp_tiles::TileType::kCustomLinks}));
 }
 
@@ -391,7 +390,7 @@ IN_PROC_BROWSER_TEST_P(
   const std::string module_id = ntp_modules::kGoogleCalendarModuleId;
 
   // Act.
-  DisableModuleAutoRemoval(browser()->profile(), module_id);
+  DisableModuleAutoRemoval(browser()->GetProfile(), module_id);
 
   // Assert.
   const bool actual_value =
@@ -414,7 +413,7 @@ IN_PROC_BROWSER_TEST_P(NewTabPageUtilFeatureOptimizationModuleRemovalTest,
   };
 
   // Act.
-  DisableModuleListAutoRemoval(browser()->profile(), module_ids);
+  DisableModuleListAutoRemoval(browser()->GetProfile(), module_ids);
 
   // Assert.
   const auto& dict_pref = browser()->profile()->GetPrefs()->GetDict(

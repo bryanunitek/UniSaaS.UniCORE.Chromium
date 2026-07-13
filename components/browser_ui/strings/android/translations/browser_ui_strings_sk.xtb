@@ -194,6 +194,7 @@
 <translation id="2874939134665556319">Predchádzajúca skladba</translation>
 <translation id="2891975107962658722">Blokovanie ukladania údajov webom vo vašom zariadení</translation>
 <translation id="2903493209154104877">Adresy</translation>
+<translation id="2903764741244499151">Weby môžu automaticky spúšťať obraz v obraze. Umožňuje vám to pokračovať v pozeraní videa a zároveň uvoľniť obrazovku pre iné úlohy.</translation>
 <translation id="2918484639460781603">Prejsť na nastavenia</translation>
 <translation id="2932883381142163287">Nahlásiť zneužitie</translation>
 <translation id="2939338015096024043">Keď je táto možnosť zapnutá, weby môžu žiadať o povolenie sledovať polohu vašej kamery a získať informácie o vašom okolí. Keď je táto možnosť vypnutá, weby nemôžu sledovať polohu vašej kamery ani získať informácie o vašom okolí.</translation>
@@ -220,7 +221,7 @@
 <translation id="3143754809889689516">Prehrať od začiatku</translation>
 <translation id="3164169438034704658">Presnú polohu môžete zapnúť v <ph name="BEGIN_LINK" />nastaveniach Androidu<ph name="END_LINK" />.</translation>
 <translation id="3165022941318558018">Povoľte webu používať súbory cookie tretej strany</translation>
-<translation id="3167868116600277716">Kanál Objaviť</translation>
+<translation id="3167868116600277716">Feed Objaviť</translation>
 <translation id="3198916472715691905"><ph name="STORAGE_AMOUNT" /> uložených dát</translation>
 <translation id="3199078925536734975">Momentálne povolená • Približná</translation>
 <translation id="3208584281581115441">Skontrolovať</translation>
@@ -302,7 +303,7 @@
 <translation id="3965467402665811906">Weby môžu žiadať o používanie informácií, ktoré o vás uložili</translation>
 <translation id="3967822245660637423">Sťahovanie dokončené</translation>
 <translation id="3981465354637804599">Weby zvyčajne zobrazujú reklamy, aby mohli poskytovať obsah či služby bez peňažného poplatku. Niektoré weby sú však známe tým, že zobrazujú obťažujúce alebo zavádzajúce reklamy.</translation>
-<translation id="3987993985790029246">Kopírovať odkaz</translation>
+<translation id="3987993985790029246">Skopírovať odkaz</translation>
 <translation id="3991845972263764475"><ph name="BYTES_DOWNLOADED_WITH_UNITS" /> / ?</translation>
 <translation id="3992308058851451478"><ph name="SITE" /> môže pri prehliadaní používať vaše informácie</translation>
 <translation id="3992684624889376114">Táto stránka</translation>
@@ -542,7 +543,7 @@
 <translation id="6552800053856095716">{PERMISSIONS_SUMMARY_BLOCKED,plural, =1{Sú blokované povolenia: <ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> a <ph name="NUM_MORE" /> ďalšie}few{Sú blokované povolenia <ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> a <ph name="NUM_MORE" /> ďalšie}many{<ph name="PERMISSION_1" />, <ph name="PERMISSION_2" />, and <ph name="NUM_MORE" /> more blocked}other{Sú blokované povolenia <ph name="PERMISSION_1" />, <ph name="PERMISSION_2" /> a <ph name="NUM_MORE" /> ďalších}}</translation>
 <translation id="6554732001434021288">Naposledy navštívené pred <ph name="NUM_DAYS" /> dňami</translation>
 <translation id="6556866813142980365">Znova</translation>
-<translation id="6557290421156335491">Moje skratky</translation>
+<translation id="6557290421156335491">Moje odkazy</translation>
 <translation id="656065428026159829">Zobraziť viac</translation>
 <translation id="6561560012278703671">Používať tichší režim (blokovať rušivé výzvy na odber upozornení)</translation>
 <translation id="6593061639179217415">Web pre počítače</translation>
@@ -690,7 +691,6 @@ Rozšírená ochrana ovláda tieto nastavenia Chromu:</translation>
 <translation id="8163152278172770963">Nepovoliť webom automaticky spúšťať obraz v obraze</translation>
 <translation id="8168435359814927499">Obsah</translation>
 <translation id="818487310457576362">Režim celej obrazovky ukončíte presunutím z okraja obrazovky.</translation>
-<translation id="8186479265534291036">Web nefunguje? Súbory cookie tretích strán sú blokované.</translation>
 <translation id="8197286292360124385">Povolené: <ph name="PERMISSION_1" /></translation>
 <translation id="8200772114523450471">Pokračovať</translation>
 <translation id="8211406090763984747">Spojenie je zabezpečené</translation>
@@ -761,7 +761,6 @@ Rozšírená ochrana ovláda tieto nastavenia Chromu:</translation>
 <translation id="8805385115381080995">Prehliadanie je rýchlejšie, pretože daný web vás pravdepodobne nepožiada o overenie, že ste skutočná osoba</translation>
 <translation id="881644524232657178">Keď je táto možnosť zapnutá, weby môžu používať senzory pohybu a svetla vášho zariadenia. Keď je táto možnosť vypnutá, weby senzory používať nemôžu.</translation>
 <translation id="8847988622838149491">USB</translation>
-<translation id="8874790741333031443">Vyskúšajte dočasne povoliť súbory cookie tretích strán, čo znamená nižšiu ochranu pri prehliadaní, ale funkcie webu budú s väčšou pravdepodobnosťou fungovať podľa očakávaní.</translation>
 <translation id="8889294078294184559">Pri ďalšom prehliadaní môžu weby pomocou Chromu overiť informácie z predchádzajúceho navštíveného webu, že ste zrejme skutočná osoba</translation>
 <translation id="8899807382908246773">Obťažujúce reklamy</translation>
 <translation id="8903921497873541725">Priblížiť</translation>
@@ -787,7 +786,6 @@ Rozšírená ochrana ovláda tieto nastavenia Chromu:</translation>
 <translation id="913657688200966289">Zapnite v <ph name="BEGIN_LINK" />nastaveniach Androidu<ph name="END_LINK" /> povolenia pre aplikáciu <ph name="APP_NAME" />.</translation>
 <translation id="9138037198177304356">Upozornenia sú povolené</translation>
 <translation id="9138217887606523162">Aktuálna úroveň lupy je <ph name="ZOOM_LEVEL" /> %%</translation>
-<translation id="915112772806845021">Weby pomocou tejto funkcie aktomaticky aktivujú obraz v obraze. Umožňuje vám to pokračovať v pozeraní videa a zároveň uvoľniť obrazovku pre iné úlohy.</translation>
 <translation id="9156722768168878035">Povoľte Chromu zobrazovať vaše nedávne karty v zozname aplikácií a výsledkoch vyhľadávania v zariadení. Túto možnosť môžete kedykoľvek vypnúť v nastaveniach Chromu.</translation>
 <translation id="9162462602695099906">Táto stránka je nebezpečná</translation>
 <translation id="9182556968660520230">Nepovoliť webom prehrávať chránený obsah</translation>

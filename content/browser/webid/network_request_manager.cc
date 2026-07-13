@@ -23,10 +23,17 @@
 
 namespace content::webid {
 
+using DownloadCallback = NetworkRequestManager::DownloadCallback;
+using ParseJsonCallback = NetworkRequestManager::ParseJsonCallback;
+
 namespace {
 constexpr char kApplicationJson[] = "application/json";
 // Body content types.
 constexpr char kUrlEncodedContentType[] = "application/x-www-form-urlencoded";
+
+// Host prefix prepended to the eTLD+1 to form the FedCM well-known host:
+// "web-identity.well-known.<eTLD+1>".
+constexpr char kWebIdentitySubdomainHostPrefix[] = "web-identity.well-known.";
 
 // 1 MiB is an arbitrary upper bound that should account for any reasonable
 // response size that is a part of this protocol.
@@ -122,7 +129,8 @@ std::optional<GURL> ComputeWebIdentitySubdomainWellKnownUrl(
   }
 
   GURL::Replacements replacements;
-  std::string subdomain_host = base::StrCat({"web-identity.", site_url.host()});
+  std::string subdomain_host =
+      base::StrCat({kWebIdentitySubdomainHostPrefix, site_url.host()});
   replacements.SetHostStr(subdomain_host);
   replacements.SetPathStr(path);
   return site_url.ReplaceComponents(replacements);
@@ -133,7 +141,7 @@ NetworkRequestManager::NetworkRequestManager(
     scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
     network::mojom::ClientSecurityStatePtr client_security_state,
     network::mojom::RequestDestination destination,
-    content::FrameTreeNodeId frame_tree_node_id)
+    FrameTreeNodeId frame_tree_node_id)
     : relying_party_origin_(relying_party_origin),
       loader_factory_(loader_factory),
       client_security_state_(std::move(client_security_state)),
@@ -326,7 +334,7 @@ NetworkRequestManager::CreateCredentialedResourceRequest(
   resource_request->trusted_params = network::ResourceRequest::TrustedParams();
   net::IsolationInfo::RequestType request_type =
       net::IsolationInfo::RequestType::kOther;
-  if (webid::IsSameSiteLaxEnabled()) {
+  if (IsSameSiteLaxEnabled()) {
     // We use kMainFrame so that we can send SameSite=Lax cookies.
     request_type = net::IsolationInfo::RequestType::kMainFrame;
   }

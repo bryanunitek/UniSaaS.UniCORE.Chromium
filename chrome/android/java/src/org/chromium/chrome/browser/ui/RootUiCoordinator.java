@@ -148,6 +148,7 @@ import org.chromium.chrome.browser.quick_delete.QuickDeleteDelegateImpl;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
 import org.chromium.chrome.browser.readaloud.ReadAloudControllerSupplier;
 import org.chromium.chrome.browser.recent_tabs.RestoreTabsFeatureHelper;
+import org.chromium.chrome.browser.searchwidget.SearchActivityUtils;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.share.ShareDelegate.ShareOrigin;
 import org.chromium.chrome.browser.share.qrcode.QrCodeDialog;
@@ -162,17 +163,14 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabObscuringHandler;
 import org.chromium.chrome.browser.tab.TabObscuringHandlerSupplier;
-import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab_ui.RecyclerViewPosition;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorBase;
-import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.tabstrip.StripVisibilityState;
 import org.chromium.chrome.browser.tabwindow.TabWindowInfo;
 import org.chromium.chrome.browser.theme.AdjustedTopUiThemeColorProvider;
@@ -236,7 +234,6 @@ import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
-import org.chromium.components.dom_distiller.core.DomDistillerFeatures;
 import org.chromium.components.embedder_support.contextmenu.ContextMenuPopulatorFactory;
 import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.Tracker;
@@ -368,7 +365,7 @@ public class RootUiCoordinator
      */
     private @Nullable ToolbarThemeColorProvider mAdjustedToolbarThemeColorProvider;
 
-    private IncognitoStateProvider mIncognitoStateProvider;
+    protected IncognitoStateProvider mIncognitoStateProvider;
 
     private final @Nullable Callback<Boolean> mOnOmniboxFocusChangedListener;
     protected @Nullable ToolbarManager mToolbarManager;
@@ -781,9 +778,20 @@ public class RootUiCoordinator
                                         mActivity.findViewById(R.id.page_zoom_container);
                                 return viewStub.inflate();
                             }
+
+                            @Override
+                            public boolean isSheetActingAsBrowserControls() {
+                                BottomSheetController controller =
+                                        mBottomSheetControllerSupplier.get();
+                                return controller != null
+                                        && BottomSheetUtils.isContentActingAsBrowserControls(
+                                                controller, isBottomSheetAsBrowserControlsEnabled())
+                                        && controller.isFullWidth();
+                            }
                         },
                         mPageZoomManager,
-                        /* useSlider= */ true);
+                        /* useSlider= */ true,
+                        getBottomSheetControllerSupplier());
 
         if (ChromeFeatureList.sEnableExclusiveAccessManager.isEnabled()) {
             mExclusiveAccessManager =
@@ -1367,15 +1375,13 @@ public class RootUiCoordinator
         if (contextualSearchManager != null) {
             contextualSearchManager.addObserver(mReadAloudContextualSearchObserver);
         }
-        if (DomDistillerFeatures.sReaderModeDistillInApp.isEnabled()) {
-            mReaderModeBottomSheetManager =
-                    new ReaderModeBottomSheetManager(
-                            mActivity,
-                            assertNonNull(getBottomSheetController()),
-                            mActivityTabProvider,
-                            mBrowserControlsManager,
-                            mToolbarThemeColorProvider);
-        }
+        mReaderModeBottomSheetManager =
+                new ReaderModeBottomSheetManager(
+                        mActivity,
+                        assertNonNull(getBottomSheetController()),
+                        mActivityTabProvider,
+                        mBrowserControlsManager,
+                        mToolbarThemeColorProvider);
 
         if (DeviceInfo.isAutomotive()) {
             mAutomotiveBackButtonToolbarCoordinator =
@@ -2010,6 +2016,9 @@ public class RootUiCoordinator
                     /* onShareRunnable= */ () -> {
                         assertNonNull(mToolbarManager).endFuseboxInput();
                     },
+                    /* onSigninTapped= */ () -> {
+                        assertNonNull(mToolbarManager).endFuseboxInput();
+                    },
                     mWindowAndroid,
                     mActivityResultTracker,
                     assertNonNull(mDeviceLockActivityLauncherSupplier.get()),
@@ -2134,7 +2143,8 @@ public class RootUiCoordinator
                             mBottomBarHostManager,
                             mActionRegistry,
                             (preventClose, invocationSource) ->
-                                    toggleGlic(preventClose, invocationSource));
+                                    toggleGlic(preventClose, invocationSource),
+                            shouldSuppressTabStripAtStart());
             if (!mSupportsAppMenuSupplier.getAsBoolean()) {
                 mToolbarManager.getToolbar().disableMenuButton();
             }
@@ -2199,7 +2209,7 @@ public class RootUiCoordinator
                             }
                         }
 
-                        if (layoutType == LayoutType.TAB_SWITCHER) {
+                        if (layoutType == LayoutType.HUB) {
                             // Hide find toolbar and app menu.
                             if (mFindToolbarManager != null) mFindToolbarManager.hideToolbar();
                             hideAppMenu();
@@ -2218,7 +2228,7 @@ public class RootUiCoordinator
 
                     @Override
                     public void onFinishedShowing(int layoutType) {
-                        if (layoutType == LayoutType.TAB_SWITCHER) {
+                        if (layoutType == LayoutType.HUB) {
                             // Ideally we wouldn't allow the app menu to show while animating the
                             // overview mode. This is hard to track, however, because in some
                             // instances #onOverviewModeStartedShowing is called after
@@ -2232,14 +2242,14 @@ public class RootUiCoordinator
 
                     @Override
                     public void onStartedHiding(int layoutType) {
-                        if (layoutType == LayoutType.TAB_SWITCHER) {
+                        if (layoutType == LayoutType.HUB) {
                             hideAppMenu();
                         }
                     }
 
                     @Override
                     public void onFinishedHiding(int layoutType) {
-                        if (layoutType != LayoutType.TAB_SWITCHER) {
+                        if (layoutType != LayoutType.HUB) {
                             hideAppMenu();
                         }
                     }
@@ -2424,7 +2434,10 @@ public class RootUiCoordinator
                                     : edgeToEdgeController.getBottomInset();
                         },
                         getDesktopWindowStateManager(),
-                        mWindowAndroid.getInsetObserver());
+                        mWindowAndroid.getInsetObserver(),
+                        /* enableLargeFormFactorUi= */ ChromeFeatureList
+                                .sBottomSheetOnDesktopWindowing
+                                .isEnabled());
         mBottomSheetControllerSupplier.set(bottomSheetController);
         BottomSheetControllerFactory.setExceptionReporter(
                 ChromePureJavaExceptionReporter::reportJavaException);
@@ -2439,7 +2452,8 @@ public class RootUiCoordinator
                         mOmniboxFocusStateSupplier,
                         panelManagerSupplier,
                         mLayoutStateProviderOneShotSupplier,
-                        mBottomControlsStacker);
+                        mBottomControlsStacker,
+                        isBottomSheetAsBrowserControlsEnabled());
 
         // TODO(crbug.com/40208738): Consider moving handler registration to feature code.
         assert mBackPressManager != null
@@ -2453,9 +2467,23 @@ public class RootUiCoordinator
     }
 
     /**
-     * @return whether the Android Edge To Edge Feature is supported for the current activity.
+     * Returns whether the bottom sheet acting as browser controls is enabled for the current
+     * activity.
      */
+    protected boolean isBottomSheetAsBrowserControlsEnabled() {
+        return false;
+    }
+
+    /** Returns whether the Android Edge To Edge Feature is supported for the current activity. */
     protected boolean supportsEdgeToEdge() {
+        return false;
+    }
+
+    /**
+     * Returns whether to suppress the tab strip when Chrome starts. Overridden by the subclass that
+     * needs the behavior.
+     */
+    protected boolean shouldSuppressTabStripAtStart() {
         return false;
     }
 
@@ -2637,9 +2665,6 @@ public class RootUiCoordinator
                                             mContextualSearchManagerSupplier.get();
                                     if (manager != null) manager.onBottomSheetVisible(true);
                                 }
-
-                                // On visible bottom sheet, hide page zoom dialog
-                                mPageZoomBarCoordinator.hide();
                                 break;
                             case SheetState.HIDDEN:
                                 mOpened = false;
@@ -2737,7 +2762,7 @@ public class RootUiCoordinator
         }
         if (mLayoutManager != null) {
             outPersistentState.putBoolean(
-                    IS_TAB_SWITCHER_SHOWN, mLayoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER));
+                    IS_TAB_SWITCHER_SHOWN, mLayoutManager.isLayoutVisible(LayoutType.HUB));
         }
     }
 
@@ -2794,25 +2819,12 @@ public class RootUiCoordinator
     }
 
     private void bringTabToFront(TabWindowInfo tabWindowInfo, GURL url) {
-        TabModel tabModel = tabWindowInfo.tabModel;
-        int tabId = tabWindowInfo.tab.getId();
-
-        // Switch to the tab directly if it is in same TabModel.
-        if (assumeNonNull(mTabModelSelectorSupplier.get()).getCurrentModel() == tabModel) {
-            int tabIndex = TabModelUtils.getTabIndexById(tabModel, tabId);
-            // In the event the user deleted the tab as part during the interaction with the
-            // Omnibox, reject the switch to tab action.
-            if (tabIndex == TabModel.INVALID_TAB_INDEX) return;
-            tabModel.setIndex(tabIndex, TabSelectionType.FROM_OMNIBOX);
-            return;
-        }
-
-        Intent intent =
-                IntentHandler.createTrustedBringTabToFrontIntent(
-                        tabId, IntentHandler.BringToFrontSource.ACTIVATE_TAB);
-        intent.setData(Uri.parse(url.getSpec()));
-        IntentHandler.setTabLaunchType(intent, TabLaunchType.FROM_OMNIBOX);
-        MultiWindowUtils.launchIntentInMaybeClosedWindow(mActivity, intent, tabWindowInfo.windowId);
+        SearchActivityUtils.bringTabToFront(
+                mActivity,
+                mTabModelSelectorSupplier.get(),
+                tabWindowInfo,
+                url,
+                /* onTabSwitched= */ null);
     }
 
     // Testing methods
@@ -2849,6 +2861,11 @@ public class RootUiCoordinator
     /** Returns a supplier of the share delegate. */
     public MonotonicObservableSupplier<ShareDelegate> getShareDelegateSupplier() {
         return mShareDelegateSupplier;
+    }
+
+    /** Returns the supplier of the omnibox focus state. */
+    public NonNullObservableSupplier<Boolean> getOmniboxFocusStateSupplier() {
+        return mOmniboxFocusStateSupplier;
     }
 
     public @Nullable ExclusiveAccessManager getExclusiveAccessManager() {

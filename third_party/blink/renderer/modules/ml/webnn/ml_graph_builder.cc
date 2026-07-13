@@ -194,9 +194,7 @@ enum class MLGraphOperatorUma {
   kMaxValue = kIsInfinite,
 };
 
-using MLGraphOperatorUmaSet = base::EnumSet<MLGraphOperatorUma,
-                                            MLGraphOperatorUma::kMinValue,
-                                            MLGraphOperatorUma::kMaxValue>;
+using MLGraphOperatorUmaSet = base::EnumSet<MLGraphOperatorUma>;
 
 MLGraphOperatorUma GetUmaValueForOperation(
     const blink_mojom::Operation& operation) {
@@ -1733,7 +1731,8 @@ MLOperand* MLGraphBuilder::constant(ScriptState* script_state,
   auto* constant =
       MakeGarbageCollected<MLConstantOperand>(this, std::move(descriptor));
 
-  UMA_HISTOGRAM_MEMORY_KB("WebNN.ConstantDataSizeInKB", bytes.size() / 1024);
+  UMA_HISTOGRAM_MEMORY_KB("WebNN.ConstantDataSizeInKB",
+                          base::saturated_cast<int>(bytes.size() / 1024));
   TRACE_EVENT_BEGIN("webnn", "copy constant bytes into BigBuffer",
                     scoped_trace.track(), "size", bytes.size());
   mojo_base::BigBuffer constant_data = mojo_base::BigBuffer(bytes);
@@ -1854,7 +1853,8 @@ MLOperand* MLGraphBuilder::constant(
   auto* constant =
       MakeGarbageCollected<MLConstantOperand>(this, std::move(descriptor));
 
-  UMA_HISTOGRAM_MEMORY_KB("WebNN.ConstantDataSizeInKB", byte_length / 1024);
+  UMA_HISTOGRAM_MEMORY_KB("WebNN.ConstantDataSizeInKB",
+                          base::saturated_cast<int>(byte_length / 1024));
   TRACE_EVENT_BEGIN("webnn", "create constant scalar value BigBuffer",
                     scoped_trace.track(), "size", byte_length);
   scoped_trace.AddStep("post mojo message: CreatePendingConstant");
@@ -3509,8 +3509,7 @@ void MLGraphBuilder::DidCreateWebNNGraph(
     }
   }
   auto* graph = MakeGarbageCollected<MLGraph>(
-      resolver->GetExecutionContext(), ml_context_,
-      std::move(success->graph_remote), success->graph_token,
+      resolver->GetExecutionContext(), ml_context_, success->graph_token,
       std::move(input_and_output_constraints.first),
       std::move(input_and_output_constraints.second), std::move(devices),
       base::PassKey<MLGraphBuilder>());

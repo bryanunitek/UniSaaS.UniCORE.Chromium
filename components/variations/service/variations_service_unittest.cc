@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -24,6 +25,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
+#include "base/types/pass_key.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "base/version_info/version_info.h"
@@ -53,6 +55,18 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "services/network/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+// A fake version of RuntimeMutableFeaturesHandlerBase, to generate PassKeys for
+// testing purposes.  The real RuntimeMutableFeaturesHandlerBase class is not
+// defined in `components/`. We're creating a surrogate of it here so that we
+// can generate PassKeys for testing, without violating dependency layering.
+namespace metrics {
+class RuntimeMutableFeaturesHandlerBase {
+ public:
+  using PassKey = base::PassKey<RuntimeMutableFeaturesHandlerBase>;
+  static PassKey CreatePassKeyForTesting() { return PassKey(); }
+};
+}  // namespace metrics
 
 namespace variations {
 namespace {
@@ -230,8 +244,7 @@ class TestVariationsService : public VariationsService {
 
 class TestVariationsServiceObserver : public VariationsService::Observer {
  public:
-  TestVariationsServiceObserver()
-      : best_effort_changes_notified_(0), crticial_changes_notified_(0) {}
+  TestVariationsServiceObserver() = default;
 
   TestVariationsServiceObserver(const TestVariationsServiceObserver&) = delete;
   TestVariationsServiceObserver& operator=(
@@ -258,10 +271,10 @@ class TestVariationsServiceObserver : public VariationsService::Observer {
 
  private:
   // Number of notification received with BEST_EFFORT severity.
-  int best_effort_changes_notified_;
+  int best_effort_changes_notified_ = 0;
 
   // Number of notification received with CRITICAL severity.
-  int crticial_changes_notified_;
+  int crticial_changes_notified_ = 0;
 };
 
 // Constants used to create the test seed.
@@ -306,7 +319,7 @@ void AddOKResponseWithIM(
   if (!im.empty())
     head->headers->SetHeader("IM", im);
   network::URLLoaderCompletionStatus status;
-  status.decoded_body_length = body.size();
+  status.decoded_body_length = base::ByteSize(body.size());
   test_url_loader_factory->AddResponse(interception_url, std::move(head), body,
                                        status);
 }
@@ -314,6 +327,10 @@ void AddOKResponseWithIM(
 }  // namespace
 
 class VariationsServiceTest : public ::testing::Test {
+ public:
+  VariationsServiceTest(const VariationsServiceTest&) = delete;
+  VariationsServiceTest& operator=(const VariationsServiceTest&) = delete;
+
  protected:
   VariationsServiceTest()
       : network_tracker_(network::TestNetworkConnectionTracker::GetInstance()),
@@ -322,9 +339,6 @@ class VariationsServiceTest : public ::testing::Test {
     metrics::MetricsStateManager::RegisterPrefs(prefs_.registry());
     VariationsService::RegisterPrefs(prefs_.registry());
   }
-
-  VariationsServiceTest(const VariationsServiceTest&) = delete;
-  VariationsServiceTest& operator=(const VariationsServiceTest&) = delete;
 
   metrics::MetricsStateManager* GetMetricsStateManager() {
     // Lazy-initialize the metrics_state_manager so that it correctly reads the
@@ -650,7 +664,7 @@ TEST_F(VariationsServiceTest, CountryHeader) {
   head->headers->SetHeader("X-Country", "test");
   head->headers->SetHeader("X-Geo-Level-1", "test-geo-level");
   network::URLLoaderCompletionStatus status;
-  status.decoded_body_length = serialized_seed.size();
+  status.decoded_body_length = base::ByteSize(serialized_seed.size());
   service.test_url_loader_factory()->AddResponse(
       service.interception_url(), std::move(head), serialized_seed, status);
 
@@ -679,7 +693,7 @@ TEST_F(VariationsServiceTest, CountryHeaderNotTrustedOverHTTP) {
   head->headers->SetHeader("X-Country", "test");
   head->headers->SetHeader("X-Geo-Level-1", "test-geo-level");
   network::URLLoaderCompletionStatus status;
-  status.decoded_body_length = serialized_seed.size();
+  status.decoded_body_length = base::ByteSize(serialized_seed.size());
   service.test_url_loader_factory()->AddResponse(
       service.interception_url(), std::move(head), serialized_seed, status);
 
@@ -885,7 +899,7 @@ TEST_F(VariationsServiceTest, SafeMode_SuccessfulFetchClearsFailureStreaks) {
       net::HttpUtil::AssembleRawHeaders(headers));
   head->headers->SetHeader("X-Seed-Signature", kBase64SeedSignature);
   network::URLLoaderCompletionStatus status;
-  status.decoded_body_length = response.size();
+  status.decoded_body_length = base::ByteSize(response.size());
   service.test_url_loader_factory()->AddResponse(
       service.interception_url(), std::move(head), response, status);
 
@@ -1018,7 +1032,7 @@ TEST_F(VariationsServiceTest, NullResponseReceivedWithHTTPOk) {
   http_response_headers->SetHeader("X-Seed-Signature", kBase64SeedSignature);
   // Set ERR_FAILED status code despite the 200 response code.
   network::URLLoaderCompletionStatus status(net::ERR_FAILED);
-  status.decoded_body_length = response.size();
+  status.decoded_body_length = base::ByteSize(response.size());
   service.test_url_loader_factory()->AddResponse(
       service.interception_url(), std::move(head), response, status,
       network::TestURLLoaderFactory::Redirects(),
@@ -1066,5 +1080,41 @@ TEST_F(VariationsServiceTest, VariationsServiceStartsRequestOnNetworkChange) {
 
 // TODO(isherman): Add an integration test for saving and loading a safe seed,
 // once the loading functionality is implemented on the seed store.
+
+TEST_F(VariationsServiceTest, VariationsServiceSeedFetchingPauseResume) {
+  VariationsService::EnableFetchForTesting();
+
+  // Start with online connection so fetch can happen.
+  network_tracker_->SetConnectionType(
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
+
+  TestVariationsService service(
+      std::make_unique<web_resource::TestRequestAllowedNotifier>(
+          &prefs_, network_tracker_),
+      &prefs_, GetMetricsStateManager(), true);
+  // Keep intercepts_fetch = true (default).
+  service.CancelCurrentRequestForTesting();
+
+  // Pause fetching.
+  service.SetSeedFetchingPaused(
+      metrics::RuntimeMutableFeaturesHandlerBase::CreatePassKeyForTesting(),
+      true);
+  EXPECT_TRUE(service.IsSeedFetchingPaused());
+
+  // Start repeated fetch (simulating startup).
+  service.StartRepeatedVariationsSeedFetchForTesting();
+
+  // Verify no request was made because it is paused.
+  EXPECT_FALSE(service.fetch_attempted());
+
+  // Resume fetching.
+  service.SetSeedFetchingPaused(
+      metrics::RuntimeMutableFeaturesHandlerBase::CreatePassKeyForTesting(),
+      false);
+  EXPECT_FALSE(service.IsSeedFetchingPaused());
+
+  // Verify that resume immediately triggered a fetch.
+  EXPECT_TRUE(service.fetch_attempted());
+}
 
 }  // namespace variations

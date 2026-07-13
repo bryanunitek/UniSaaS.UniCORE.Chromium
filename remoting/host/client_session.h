@@ -36,10 +36,10 @@
 #include "remoting/host/desktop_display_info.h"
 #include "remoting/host/host_experiment_session_plugin.h"
 #include "remoting/host/host_extension_session_manager.h"
+#include "remoting/host/input_pipeline.h"
 #include "remoting/host/mojom/chromoting_host_services.mojom.h"
 #include "remoting/host/mojom/remote_url_opener.mojom.h"
 #include "remoting/host/mojom/webauthn_proxy.mojom.h"
-#include "remoting/host/remote_input_filter.h"
 #include "remoting/proto/action.pb.h"
 #include "remoting/protocol/audio_sample_info.h"
 #include "remoting/protocol/clipboard_echo_filter.h"
@@ -48,16 +48,10 @@
 #include "remoting/protocol/connection_to_client.h"
 #include "remoting/protocol/coordinate_converter.h"
 #include "remoting/protocol/data_channel_manager.h"
-#include "remoting/protocol/display_size.h"
 #include "remoting/protocol/errors.h"
-#include "remoting/protocol/fractional_input_filter.h"
 #include "remoting/protocol/host_stub.h"
 #include "remoting/protocol/input_event_timestamps.h"
-#include "remoting/protocol/input_event_tracker.h"
-#include "remoting/protocol/input_filter.h"
 #include "remoting/protocol/mouse_cursor_monitor.h"
-#include "remoting/protocol/mouse_input_filter.h"
-#include "remoting/protocol/observing_input_filter.h"
 #include "remoting/protocol/pairing_registry.h"
 #include "remoting/protocol/transport.h"
 #include "remoting/protocol/video_stream.h"
@@ -69,6 +63,8 @@
 namespace remoting {
 
 class ActiveDisplayMonitor;
+class SecurityKeyAuthHandler;
+class SecurityKeyExtension;
 class DesktopEnvironment;
 class DesktopEnvironmentFactory;
 class InputInjector;
@@ -77,6 +73,7 @@ class MouseShapePump;
 class RemoteOpenUrlMessageHandler;
 class RemoteWebAuthnMessageHandler;
 class ScreenControls;
+class TerminalSessionManager;
 
 namespace protocol {
 class AudioStream;
@@ -87,7 +84,6 @@ class VideoLayout;
 // per-client state.
 class ClientSession : public protocol::HostStub,
                       public protocol::ConnectionToClient::EventHandler,
-                      public protocol::VideoStream::Observer,
                       public ClientSessionControl,
                       public ClientSessionDetails,
                       public ClientSessionEvents,
@@ -166,6 +162,8 @@ class ClientSession : public protocol::HostStub,
   void ControlPeerConnection(
       const protocol::PeerConnectionParameters& parameters) override;
   void SetVideoLayout(const protocol::VideoLayout& video_layout) override;
+  void ControlTerminal(
+      const protocol::TerminalControl& terminal_control) override;
 
   // protocol::ConnectionToClient::EventHandler interface.
   void OnConnectionAuthenticating() override;
@@ -247,11 +245,12 @@ class ClientSession : public protocol::HostStub,
       scoped_refptr<protocol::InputEventTimestampsSource>
           event_timestamp_source);
 
-  // Public for tests.
-  void UpdateMouseClampingFilterOffset();
-
   const SessionPolicies& effective_policies_for_tests() const {
     return effective_policies_;
+  }
+
+  HostExtensionSessionManager* extension_manager_for_tests() const {
+    return extension_manager_.get();
   }
 
  private:
@@ -264,13 +263,6 @@ class ClientSession : public protocol::HostStub,
 
   // Creates a proxy for sending clipboard events to the client.
   std::unique_ptr<protocol::ClipboardStub> CreateClipboardProxy();
-
-  void SetMouseClampingFilter(const DisplaySize& size);
-
-  // protocol::VideoStream::Observer implementation.
-  void OnVideoSizeChanged(protocol::VideoStream* stream,
-                          const webrtc::DesktopSize& size,
-                          const webrtc::DesktopVector& dpi) override;
 
   // AudioInjector::Delegate interface.
   void OnAudioInjectorConsumersChanged(bool has_consumers) override;
@@ -300,11 +292,13 @@ class ClientSession : public protocol::HostStub,
       const std::string& channel_name,
       std::unique_ptr<protocol::MessagePipe> pipe);
 
-  void CreatePerMonitorVideoStreams();
+  void CreateSecurityKeyDataChannelHandler(
+      const std::string& channel_name,
+      std::unique_ptr<protocol::MessagePipe> pipe);
 
-  // True if |index| corresponds with an existing display (or the combined
-  // display).
-  bool IsValidDisplayIndex(webrtc::ScreenId index) const;
+  void DestroySecurityKeyExtensionSession();
+
+  void CreatePerMonitorVideoStreams();
 
   // Boosts the framerate using |capture_interval| for |boost_duration| based on
   // the type of input |event| received.
@@ -317,17 +311,15 @@ class ClientSession : public protocol::HostStub,
   // whenever the screen id associated with the active window changes.
   void OnActiveDisplayChanged(webrtc::ScreenId display);
 
-  // Sets the fallback geometry on `coordinate_converter` according to the
-  // current display-layout and selected display index. This is only used for
-  // single-stream mode, when the client provides fractional-coordinates without
-  // any screen_id.
-  void UpdateCoordinateConverterFallback();
-
   // Calls SetComposeEnabled() on all video streams. This controls whether the
   // host's cursor should be composed onto the desktop frame.
   // TODO: crbug.com/455622961 - Remove this method once the
   // clientRenderedHostCursor capability is fully rolled out.
   void SetComposeEnabledOnVideoStreams(bool enabled);
+
+  void SendTerminalOutput(int32_t terminal_id, const std::string& data);
+
+  void OnTerminalExited(int32_t terminal_id);
 
   raw_ptr<EventHandler> event_handler_;
 
@@ -346,34 +338,10 @@ class ClientSession : public protocol::HostStub,
   // Used to convert fractional coordinates to absolute coordinates.
   protocol::CoordinateConverter coordinate_converter_;
 
-  // Tracker used to release pressed keys and buttons when disconnecting.
-  protocol::InputEventTracker input_tracker_;
-
-  // Filter used to detect transitions into and out of client-side pointer lock,
-  // and to monitor local input to determine whether or not to include the mouse
-  // cursor in the desktop image.
-  CursorVisibilityNotifier cursor_visibility_notifier_;
-
-  // Filter used to disable remote inputs during local input activity.
-  RemoteInputFilter remote_input_filter_;
-
-  // Filter used to convert any fractional coordinates to input-injection
-  // coordinates.
-  protocol::FractionalInputFilter fractional_input_filter_;
-
-  // Filter used to clamp mouse events to the current display dimensions.
-  protocol::MouseInputFilter mouse_clamping_filter_;
-
-  // Filter used to notify listeners when remote input events are received.
-  protocol::ObservingInputFilter observing_input_filter_;
-
   // Filter to used to stop clipboard items sent from the client being echoed
   // back to it.  It is the final element in the clipboard (client -> host)
   // pipeline.
   protocol::ClipboardEchoFilter clipboard_echo_filter_;
-
-  // Filters used to manage enabling & disabling of input.
-  protocol::InputFilter disable_input_filter_;
 
   // Injects microphone input received from the client.
   std::unique_ptr<AudioInjector> audio_injector_;
@@ -414,6 +382,11 @@ class ClientSession : public protocol::HostStub,
   // Used to inject mouse and keyboard input and handle clipboard events.
   std::unique_ptr<InputInjector> input_injector_;
 
+  // Input pipeline encapsulating the event filters.
+  // Declared after `input_injector_` because it holds a reference to it (via
+  // target), ensuring the pipeline is destroyed before the injector.
+  InputPipeline input_pipeline_;
+
   // Used to apply client-requested changes in screen resolution.
   std::unique_ptr<ScreenControls> screen_controls_;
 
@@ -423,28 +396,6 @@ class ClientSession : public protocol::HostStub,
   // Default DPI values to use if a display reports 0 for DPI.
   int default_x_dpi_ = kDefaultDpi;
   int default_y_dpi_ = kDefaultDpi;
-
-  // The index of the desktop display to show to the user.
-  // Default is webrtc::kInvalidScreenScreenId because we need to perform
-  // an initial capture to determine if the current setup support capturing
-  // the entire desktop or if it is restricted to a single display.
-  // This value is either an index into |desktop_display_info_| or one of
-  // the special values webrtc::kInvalidScreenId, webrtc::kFullDesktopScreenId.
-  webrtc::ScreenId selected_display_index_ = webrtc::kInvalidScreenId;
-
-  // The initial video size captured by WebRTC.
-  // This will be the full desktop unless webrtc cannot capture the entire
-  // desktop (e.g., because the DPIs don't match). In that case, it will
-  // be equal to the dimensions of the default display.
-  DisplaySize default_webrtc_desktop_size_;
-
-  // The current size of the area being captured by webrtc. This will be
-  // equal to the size of the entire desktop, or to a single display.
-  DisplaySize webrtc_capture_size_;
-
-  // Set to true if the current display configuration supports capturing the
-  // entire desktop.
-  bool can_capture_full_desktop_ = true;
 
   // The pairing registry for PIN-less authentication.
   scoped_refptr<protocol::PairingRegistry> pairing_registry_;
@@ -478,6 +429,9 @@ class ClientSession : public protocol::HostStub,
 
   std::string client_jid_;
 
+  std::unique_ptr<SecurityKeyAuthHandler> security_key_auth_handler_;
+  std::unique_ptr<SecurityKeyExtension> security_key_extension_;
+
   // Used to manage extension functionality.
   std::unique_ptr<HostExtensionSessionManager> extension_manager_;
 
@@ -504,6 +458,8 @@ class ClientSession : public protocol::HostStub,
 
   bool host_cursor_rendered_by_client_ = false;
   bool cursor_visible_ = false;
+
+  std::unique_ptr<TerminalSessionManager> terminal_session_manager_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

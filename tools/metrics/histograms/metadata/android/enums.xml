@@ -109,6 +109,46 @@ chromium-metrics-reviews@google.com.
 
 <!-- LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkAllTabsHandler.java:BookmarkAllTabsResult) -->
 
+<!-- LINT.IfChange(AndroidBottomBarGlicButtonState) -->
+
+<enum name="AndroidBottomBarGlicButtonState">
+  <int value="0" label="Default"/>
+  <int value="1" label="ChatActive"/>
+  <int value="2" label="TaskInProgress"/>
+  <int value="3" label="TaskNeedsReview"/>
+  <int value="4" label="Done"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMetrics.java:GlicButtonState) -->
+
+<!-- LINT.IfChange(AndroidBottomBarGlicConvoResult) -->
+
+<enum name="AndroidBottomBarGlicConvoResult">
+  <int value="0" label="OpenedSheet"/>
+  <int value="1" label="ClosedSheet"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMetrics.java:GlicConvoResult) -->
+
+<!-- LINT.IfChange(AndroidBottomBarIphEvent) -->
+
+<enum name="AndroidBottomBarIphEvent">
+  <int value="0" label="Shown"/>
+  <int value="1" label="Dismissed"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMetrics.java:IphEvent) -->
+
+<!-- LINT.IfChange(AndroidBottomBarPromoEvent) -->
+
+<enum name="AndroidBottomBarPromoEvent">
+  <int value="0" label="Shown"/>
+  <int value="1" label="Accepted"/>
+  <int value="2" label="Dismissed"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/bottombar/java/src/org/chromium/chrome/browser/ui/bottombar/BottomBarMetrics.java:PromoEvent) -->
+
 <enum name="AndroidChildProcessConnectionEvents">
   <int value="0" label="SCHEDULE_TIMEOUT_SANDBOXED"/>
   <int value="1" label="SCHEDULE_TIMEOUT_UNSANDBOXED"/>
@@ -177,6 +217,25 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Link"/>
 </enum>
 
+<!-- LINT.IfChange(AndroidExternalBeginFrameSourceAChoreographerImplVsyncIntervalSource) -->
+
+<enum
+    name="AndroidExternalBeginFrameSourceAChoreographerImplVsyncIntervalSource">
+  <int value="0" label="OS-provided: timeline-derived not supported"/>
+  <int value="1" label="OS-provided: only one timeline"/>
+  <int value="2" label="OS-provided: always"/>
+  <int value="3" label="OS-provided: timeline-derived too short"/>
+  <int value="4" label="OS-provided: longer than or equal to timeline-derived"/>
+  <int value="5" label="Snapped timeline-derived: longer than OS-provided"/>
+  <int value="6" label="Unsnapped timeline-derived: longer than OS-provided"/>
+  <int value="7" label="Snapped timeline-derived: always"/>
+  <int value="8" label="Unsnapped timeline-derived: always"/>
+</enum>
+
+<!-- LINT.ThenChange(
+  //components/viz/service/frame_sinks/external_begin_frame_source_android.h:VsyncIntervalSource
+) -->
+
 <enum name="AndroidKernelVersion">
   <int value="131078" label="2.6"/>
   <int value="196608" label="3.0"/>
@@ -233,6 +292,16 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Abort"/>
 </enum>
 
+<!-- LINT.IfChange(AndroidPdfToolbarAction) -->
+
+<enum name="AndroidPdfToolbarAction">
+  <int value="0" label="Other"/>
+  <int value="1" label="Zoom In"/>
+  <int value="2" label="Zoom Out"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/pdf/java/src/org/chromium/chrome/browser/pdf/PdfUtils.java:PdfToolbarAction) -->
+
 <!-- LINT.IfChange(AndroidRestoreResult) -->
 
 <enum name="AndroidRestoreResult">
@@ -272,6 +341,7 @@ chromium-metrics-reviews@google.com.
       label="Previous attempt to persist search engine metadata failed"/>
   <int value="7" label="Request success"/>
   <int value="8" label="Choice was already applied"/>
+  <int value="9" label="Choice renewal was skipped"/>
 </enum>
 
 <enum name="AndroidSeccompSandboxStatus">
@@ -511,11 +581,6 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="UNKNOWN_ERROR"/>
 </enum>
 
-<enum name="AndroidWebViewTextSelectionMenuOrdering">
-  <int value="0" label="Default"/>
-  <int value="1" label="Samsung"/>
-</enum>
-
 <enum name="AndroidXWebkitApiCall">
 <!-- LINT.IfChange(AndroidXWebkitApiCall) -->
 
@@ -734,10 +799,14 @@ chromium-metrics-reviews@google.com.
   <int value="181" label="WebSettingsCompat.setPrefetchTtlSeconds"/>
   <int value="182" label="BackForwardCacheSettings.getKeepForwardEntries"/>
   <int value="183" label="BackForwardCacheSettings.setKeepForwardEntries"/>
-  <int value="184" label="WebSettingsCompat.setIgnoreDuplicateNavEnabled"/>
-  <int value="185" label="WebSettingsCompat.getIgnoreDuplicateNavEnabled"/>
-  <int value="186" label="WebSettingsCompat.setIgnoreDuplicateNavThreshold"/>
-  <int value="187" label="WebSettingsCompat.getIgnoreDuplicateNavThreshold"/>
+  <int value="184"
+      label="(Obsolete) WebSettingsCompat.setIgnoreDuplicateNavEnabled"/>
+  <int value="185"
+      label="(Obsolete) WebSettingsCompat.getIgnoreDuplicateNavEnabled"/>
+  <int value="186"
+      label="(Obsolete) WebSettingsCompat.setIgnoreDuplicateNavThreshold"/>
+  <int value="187"
+      label="(Obsolete) WebSettingsCompat.getIgnoreDuplicateNavThreshold"/>
   <int value="188" label="WebSettingsCompat.getMaxPrerenders"/>
   <int value="189" label="WebSettingsCompat.getMaxPrefetches"/>
   <int value="190" label="WebSettingsCompat.getPrefetchTtlSeconds"/>
@@ -747,6 +816,13 @@ chromium-metrics-reviews@google.com.
   <int value="194" label="WebViewCompat.navigate"/>
   <int value="195" label="WebSettingsCompat.setDownloadFaviconsEnabled"/>
   <int value="196" label="WebSettingsCompat.getDownloadFaviconsEnabled"/>
+  <int value="197" label="Profile.getHttpCache"/>
+  <int value="198" label="HttpCache.getDefaultQuotaBytes"/>
+  <int value="199" label="HttpCache.isUsingDefaultQuota"/>
+  <int value="200" label="HttpCache.useDefaultQuota"/>
+  <int value="201" label="HttpCache.getQuotaBytes"/>
+  <int value="202" label="HttpCache.setQuotaBytes"/>
+  <int value="203" label="Profile.enqueuePreconnect"/>
 <!-- LINT.ThenChange(/android_webview/support_library/java/src/org/chromium/support_lib_glue/SupportLibWebViewChromiumFactory.java:ApiCall) -->
 
 </enum>
@@ -1201,6 +1277,16 @@ chromium-metrics-reviews@google.com.
   <int value="11" label="NeitherNav Regressed"/>
 </enum>
 
+<!-- LINT.IfChange(HttpCacheQuotaChangeHistory) -->
+
+<enum name="HttpCacheQuotaChangeHistory">
+  <int value="0" label="FirstTime"/>
+  <int value="1" label="RepeatedCallWithoutChange"/>
+  <int value="2" label="RepeatedCallWithChange"/>
+</enum>
+
+<!-- LINT.ThenChange(/android_webview/browser/aw_http_cache_manager.cc:HttpCacheQuotaChangeHistory) -->
+
 <!-- LINT.IfChange(HubPaneId) -->
 
 <enum name="HubPaneId">
@@ -1276,6 +1362,12 @@ chromium-metrics-reviews@google.com.
   <int value="9" label="SpeculativeTransferStateReplaced"/>
 </enum>
 
+<enum name="IntentReferrer">
+  <int value="0" label="Ignored"/>
+  <int value="1" label="AllowedThroughSession"/>
+  <int value="2" label="AllowedInsecure"/>
+</enum>
+
 <!-- LINT.IfChange(LauncherShortcutUpdateFailure) -->
 
 <enum name="LauncherShortcutUpdateFailure">
@@ -1297,12 +1389,6 @@ chromium-metrics-reviews@google.com.
 </enum>
 
 <!-- LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/multiwindow/MultiWindowUtils.java:LaunchInInstanceEarlyFailureReason) -->
-
-<enum name="LightTheme">
-  <int value="0" label="undefined"/>
-  <int value="1" label="no"/>
-  <int value="2" label="yes"/>
-</enum>
 
 <enum name="LockRetryResult">
   <int value="0" label="Succeeded the first time"/>
@@ -1420,6 +1506,8 @@ chromium-metrics-reviews@google.com.
   <int value="71" label="SendTabToSelf"/>
   <int value="72" label="GlicWindowResized"/>
   <int value="73" label="ExtensionDevTools"/>
+  <int value="74" label="PersonalContextFetchingFailure"/>
+  <int value="75" label="PrivateInferenceNotice"/>
 </enum>
 
 <!-- LINT.ThenChange(//components/messages/android/message_enums.h:MessageIdentifier) -->
@@ -1518,12 +1606,6 @@ chromium-metrics-reviews@google.com.
   <int value="12" label="Crash recovery"/>
 </enum>
 
-<enum name="NightMode">
-  <int value="0" label="undefined"/>
-  <int value="1" label="on"/>
-  <int value="2" label="off"/>
-</enum>
-
 <enum name="NTPImpressionType">
   <int value="0" label="regular NTP impression"/>
   <int value="1" label="potential NTP impression - no open tab"/>
@@ -1553,6 +1635,7 @@ chromium-metrics-reviews@google.com.
   <int value="18" label="Location bar state restoration on tab change"/>
   <int value="19" label="NTP AI Mode button."/>
   <int value="20" label="NTP plus button."/>
+  <int value="21" label="Keyboard navigation focus."/>
 </enum>
 
 <!-- LINT.ThenChange(//components/omnibox/browser/android/java/src/org/chromium/components/omnibox/OmniboxFocusReason.java:OmniboxFocusReason) -->
@@ -1918,25 +2001,6 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Tab Used"/>
   <int value="3" label="Tab Crashed"/>
   <int value="4" label="Tab Destroyed"/>
-</enum>
-
-<enum name="StackingAnimationType">
-  <summary>
-    The type of stacking animation when it is triggered. The type indicates the
-    relation between current displayed messages and incoming messages.
-  </summary>
-  <int value="0"
-      label="SHOW_ALL - 2 messages fill the empty message container"/>
-  <int value="1"
-      label="SHOW_FRONT_ONLY - 1 message fills the empty message container"/>
-  <int value="2"
-      label="REMOVE_FRONT_AND_SHOW_BACK - remove front and the back will be
-             brought to front"/>
-  <int value="3" label="REMOVE_ALL - remove 2 messages"/>
-  <int value="4" label="REMOVE_FRONT_ONLY - remove the only message"/>
-  <int value="5" label="REMOVE_BACK_ONLY - remove back message and keep front"/>
-  <int value="6" label="SHOW_BACK_ONLY - insert a new message at back"/>
-  <int value="7" label="INSERT_AT_FRONT - insert a new message at front"/>
 </enum>
 
 <enum name="StandbyBucket">
@@ -2732,33 +2796,6 @@ chromium-metrics-reviews@google.com.
   <int value="7" label="Invalidate + frame submitted + params changed"/>
 </enum>
 
-<enum name="WebViewForceDarkBehavior">
-  <int value="0" label="Force dark only"/>
-  <int value="1" label="Media query only"/>
-  <int value="2" label="Prefer media query over force dark"/>
-</enum>
-
-<enum name="WebViewForceDarkMode">
-  <int value="0" label="OS undefined, WebView off"/>
-  <int value="1" label="OS undefined, WebView auto"/>
-  <int value="2" label="OS undefined, WebView on"/>
-  <int value="3" label="OS no, WebView off"/>
-  <int value="4" label="OS no, WebView auto"/>
-  <int value="5" label="OS no, WebView on"/>
-  <int value="6" label="OS yes, WebView off"/>
-  <int value="7" label="OS yes, WebView auto"/>
-  <int value="8" label="OS yes, WebView on"/>
-</enum>
-
-<enum name="WebViewInDarkModeVsNightMode">
-  <int value="0" label="WebView dark, night mode undefined"/>
-  <int value="1" label="WebView dark, night mode on"/>
-  <int value="2" label="WebView dark, night mode off"/>
-  <int value="3" label="WebView light, night mode undefined"/>
-  <int value="4" label="WebView light, night mode on"/>
-  <int value="5" label="WebView light, night mode off"/>
-</enum>
-
 <enum name="WebViewLayoutAlgorithm">
   <int value="0" label="NORMAL"/>
   <int value="1" label="SINGLE_COLUMN"/>
@@ -2779,42 +2816,6 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Browser-initiated cross-origin"/>
   <int value="4" label="Renderer-initiated same-origin"/>
   <int value="5" label="Renderer-initiated cross-origin"/>
-</enum>
-
-<enum name="WebViewNightModeVsLightTheme">
-  <int value="0" label="Night mode undefined, light theme undefined"/>
-  <int value="1" label="Night mode undefined, light theme no"/>
-  <int value="2" label="Night mode undefined, light theme yes"/>
-  <int value="3" label="Night mode on, light theme undefined"/>
-  <int value="4" label="Night mode on, light theme no"/>
-  <int value="5" label="Night mode on, light theme yes"/>
-  <int value="6" label="Night mode off, light theme undefined"/>
-  <int value="7" label="Night mode off, light theme no"/>
-  <int value="8" label="Night mode off, light theme yes"/>
-</enum>
-
-<enum name="WebViewPrimaryTextLuminanceVsLightTheme">
-  <int value="0" label="Text undefined, light theme undefined"/>
-  <int value="1" label="Text undefined, light theme no"/>
-  <int value="2" label="Text undefined, light theme yes"/>
-  <int value="3" label="Text light, light theme undefined"/>
-  <int value="4" label="Text light, light theme no"/>
-  <int value="5" label="Text light, light theme yes"/>
-  <int value="6" label="Text dark, light theme undefined"/>
-  <int value="7" label="Text dark, light theme no"/>
-  <int value="8" label="Text dark, light theme yes"/>
-</enum>
-
-<enum name="WebViewPrimaryTextLuminanceVsNightMode">
-  <int value="0" label="Text undefined, night mode undefined"/>
-  <int value="1" label="Text undefined, night mode on"/>
-  <int value="2" label="Text undefined, night mode off"/>
-  <int value="3" label="Text light, night mode undefined"/>
-  <int value="4" label="Text light, night mode on"/>
-  <int value="5" label="Text light, night mode off"/>
-  <int value="6" label="Text dark, night mode undefined"/>
-  <int value="7" label="Text dark, night mode on"/>
-  <int value="8" label="Text dark, night mode off"/>
 </enum>
 
 <!-- LINT.IfChange(WebViewRendererKeepAliveEvent) -->
@@ -2963,6 +2964,38 @@ chromium-metrics-reviews@google.com.
   <int value="108" label="getProfileStore"/>
   <int value="109" label="webViewInstanceGetSettings"/>
   <int value="110" label="webViewInstanceGetAwContents"/>
+  <int value="111" label="profileStoreGetProfile"/>
+  <int value="112" label="profileStoreGetOrCreateProfile"/>
+  <int value="113" label="profileStoreGetAllProfileNames"/>
+  <int value="114" label="profileStoreDeleteProfile"/>
+  <int value="115" label="profilePreconnect"/>
+  <int value="116" label="profileGetCookieManager"/>
+  <int value="117" label="profileGetWebStorage"/>
+  <int value="118" label="profileGetGeolocationPermissions"/>
+  <int value="119" label="profileGetServiceWorkerController"/>
+  <int value="120" label="profilePrefetchUrl"/>
+  <int value="121" label="profilePrefetchUrlAsync"/>
+  <int value="122" label="profileCancelPrefetch"/>
+  <int value="123" label="profileSetMaxPrerenders"/>
+  <int value="124" label="profileClearMaxPrerenders"/>
+  <int value="125" label="profileGetMaxPrerenders"/>
+  <int value="126" label="profileSetMaxPrefetches"/>
+  <int value="127" label="profileClearMaxPrefetches"/>
+  <int value="128" label="profileGetMaxPrefetches"/>
+  <int value="129" label="profileSetPrefetchTtlSeconds"/>
+  <int value="130" label="profileClearPrefetchTtl"/>
+  <int value="131" label="profileGetPrefetchTtlSeconds"/>
+  <int value="132" label="profileSetSpeculativeLoadingConfig"/>
+  <int value="133" label="profileGetBrowserContext"/>
+  <int value="134" label="profileWarmUpRendererProcess"/>
+  <int value="135" label="profileSetOriginMatchedHeader"/>
+  <int value="136" label="profileAddOriginMatchedHeader"/>
+  <int value="137" label="profileHasOriginMatchedHeader"/>
+  <int value="138" label="profileFindOriginMatchedHeaders"/>
+  <int value="139" label="profileClearOriginMatchedHeader"/>
+  <int value="140" label="profileClearAllOriginMatchedHeaders"/>
+  <int value="141" label="profileAddQuicHints"/>
+  <int value="142" label="profileGetHttpCacheManager"/>
 </enum>
 
 <!-- LINT.ThenChange(//base/tracing/protos/chrome_track_event.proto:WebViewStartup) -->

@@ -26,6 +26,8 @@
 #include "third_party/blink/public/common/security/protocol_handler_security_level.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest_manager.mojom.h"
+#include "third_party/icu/source/common/unicode/uchar.h"
+#include "third_party/icu/source/common/unicode/utf16.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -92,6 +94,22 @@ std::optional<std::string> MaybeGetBadMessageStringForManifest(
     for (const auto& file_handler : manifest.file_handlers) {
       if (!document_origin.IsSameOriginWith(file_handler->action)) {
         return "Manifest file_handlers must be same-origin with the document.";
+      }
+      for (const auto& [mime_type, extensions] : file_handler->accept) {
+        for (const auto& extension : extensions) {
+          for (size_t i = 0; i < extension.length();) {
+            UChar32 c;
+            U16_NEXT(extension, i, extension.length(), c);
+            // TODO(crbug.com/530303003): This check for control and format
+            // characters is duplicated across manifest parsing, IPC validation,
+            // and PWA display. Consider consolidating it into a shared helper
+            // in //base/strings/string_util.h.
+            if (base::IsUnicodeControl(c) || u_charType(c) == U_FORMAT_CHAR) {
+              return "Manifest file_handlers accept extension contains invalid "
+                     "control or format characters.";
+            }
+          }
+        }
       }
     }
 
@@ -204,6 +222,15 @@ void ManifestManagerHost::BindObserver(
 
 void ManifestManagerHost::GetManifest(GetManifestCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (page().GetMainDocument().GetLastCommittedURL().SchemeIs(
+          url::kAboutScheme)) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback),
+                       blink::mojom::ManifestRequestResult::kNoManifestAllowed,
+                       GURL(), blink::mojom::Manifest::New()));
+    return;
+  }
   auto& manifest_manager = GetManifestManager();
   int request_id = callbacks_.Add(
       std::make_unique<GetManifestCallback>(std::move(callback)));
@@ -240,6 +267,14 @@ base::CallbackListSubscription ManifestManagerHost::GetAllSpecifiedManifests(
 
 void ManifestManagerHost::RequestManifestDebugInfo(
     blink::mojom::ManifestManager::RequestManifestDebugInfoCallback callback) {
+  if (page().GetMainDocument().GetLastCommittedURL().SchemeIs(
+          url::kAboutScheme)) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), GURL(),
+                                  blink::mojom::Manifest::New(),
+                                  blink::mojom::ManifestDebugInfo::New()));
+    return;
+  }
   GetManifestManager().RequestManifestDebugInfo(std::move(callback));
 }
 
@@ -386,6 +421,10 @@ void ManifestManagerHost::ManifestUrlChanged(const GURL& manifest_url) {
 }
 
 void ManifestManagerHost::MaybeFetchManifestForSubscriptions() {
+  if (page().GetMainDocument().GetLastCommittedURL().SchemeIs(
+          url::kAboutScheme)) {
+    return;
+  }
   bool is_manifest_fetch_in_progress =
       current_fetching_manifest_url_.has_value() &&
       current_fetching_manifest_url_ == page().GetManifestUrl();

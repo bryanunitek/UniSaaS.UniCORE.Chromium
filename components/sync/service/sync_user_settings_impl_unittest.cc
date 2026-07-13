@@ -225,7 +225,8 @@ TEST_F(SyncUserSettingsImplTest,
                             kSeparateLocalAndAccountSearchEngines,
                             syncer::kSeparateLocalAndAccountThemes,
                             switches::kEnablePreferencesAccountStorage},
-      /*disabled_features=*/{kReplaceSyncPromosWithSignInPromos});
+      /*disabled_features=*/{kReplaceSyncPromosWithSignInPromos,
+                             kReplaceSyncPromosWithSigninPromosNewSignin});
 
   std::unique_ptr<SyncUserSettingsImpl> sync_user_settings =
       MakeSyncUserSettings(GetUserTypes());
@@ -317,6 +318,77 @@ TEST_F(SyncUserSettingsImplTest, SetSelectedTypeInTransportMode) {
 
   EXPECT_EQ(sync_user_settings->GetSelectedTypes(), default_types);
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+TEST_F(SyncUserSettingsImplTest,
+       SetSelectedTypeInTransportModeChromeOsWithReplaceSyncPromosEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kReplaceSyncPromosWithSignInPromos);
+
+  SetSyncAccountState(SyncPrefs::SyncAccountState::kSignedInWithoutSyncConsent);
+  std::unique_ptr<SyncUserSettingsImpl> sync_user_settings =
+      MakeSyncUserSettings(GetUserTypes());
+
+  const UserSelectableTypeSet default_types =
+      sync_user_settings->GetSelectedTypes();
+  ASSERT_TRUE(default_types.Has(UserSelectableType::kPayments));
+
+  // Exactly one notification is expected when the type is changed, even though
+  // two underlying preferences are updated.
+  EXPECT_CALL(delegate_, OnSelectedTypesChanged()).Times(1);
+
+  sync_user_settings->SetSelectedType(UserSelectableType::kPayments, false);
+
+  // The active types (for account) should be updated.
+  EXPECT_THAT(
+      sync_user_settings->GetSelectedTypes(),
+      ContainerEq(Difference(default_types, {UserSelectableType::kPayments})));
+
+  // The syncing user types should ALSO be updated. This is verified by
+  // transitioning to kSyncing state (which makes GetSelectedTypes() read from
+  // syncing user prefs).
+  SetSyncAccountState(SyncPrefs::SyncAccountState::kSyncing);
+  EXPECT_THAT(
+      sync_user_settings->GetSelectedTypes(),
+      ContainerEq(Difference(default_types, {UserSelectableType::kPayments})));
+}
+
+TEST_F(SyncUserSettingsImplTest,
+       SetSelectedTypeInTransportModeChromeOsWithReplaceSyncPromosDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(kReplaceSyncPromosWithSignInPromos);
+
+  // Measure default syncing user types first.
+  SetSyncAccountState(SyncPrefs::SyncAccountState::kSyncing);
+  std::unique_ptr<SyncUserSettingsImpl> sync_user_settings =
+      MakeSyncUserSettings(GetUserTypes());
+  const UserSelectableTypeSet default_syncing_types =
+      sync_user_settings->GetSelectedTypes();
+  ASSERT_TRUE(default_syncing_types.Has(UserSelectableType::kPayments));
+
+  // Switch to transport mode for the actual test.
+  SetSyncAccountState(SyncPrefs::SyncAccountState::kSignedInWithoutSyncConsent);
+  const UserSelectableTypeSet default_transport_types =
+      sync_user_settings->GetSelectedTypes();
+  ASSERT_TRUE(default_transport_types.Has(UserSelectableType::kPayments));
+
+  // Exactly one notification is expected when the type is changed.
+  EXPECT_CALL(delegate_, OnSelectedTypesChanged()).Times(1);
+
+  sync_user_settings->SetSelectedType(UserSelectableType::kPayments, false);
+
+  // The active types (for account) should be updated.
+  EXPECT_THAT(sync_user_settings->GetSelectedTypes(),
+              ContainerEq(Difference(default_transport_types,
+                                     {UserSelectableType::kPayments})));
+
+  // The syncing user types should NOT be updated (should still be
+  // default_syncing_types).
+  SetSyncAccountState(SyncPrefs::SyncAccountState::kSyncing);
+  EXPECT_THAT(sync_user_settings->GetSelectedTypes(),
+              ContainerEq(default_syncing_types));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 TEST_F(SyncUserSettingsImplTest, SetSelectedTypeInFullSyncMode) {
   std::unique_ptr<SyncUserSettingsImpl> sync_user_settings =
@@ -573,17 +645,17 @@ TEST_F(SyncUserSettingsImplTest, ShouldSyncSessionsOnlyIfOpenTabsIsSelected) {
       /*types=*/{UserSelectableType::kHistory, UserSelectableType::kTabs});
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   // For android and iOS, we enable SAVED_TAB_GROUP under OpenTabs as well.
-  EXPECT_EQ(
-      GetPreferredUserTypes(*sync_user_settings),
-      Union(AlwaysPreferredUserTypes(),
-            {COLLABORATION_GROUP, HISTORY, HISTORY_DELETE_DIRECTIVES,
-             SAVED_TAB_GROUP, SHARED_COMMENT, SHARED_TAB_GROUP_DATA, SESSIONS,
-             USER_EVENTS, SHARED_TAB_GROUP_ACCOUNT_DATA, WORKSPACE_DESK}));
+  EXPECT_EQ(GetPreferredUserTypes(*sync_user_settings),
+            Union(AlwaysPreferredUserTypes(),
+                  {COLLABORATION_GROUP, HISTORY, HISTORY_DELETE_DIRECTIVES,
+                   SAVED_TAB_GROUP, SHARED_COMMENT, SHARED_TAB_GROUP_DATA,
+                   SESSIONS, USER_EVENTS, SHARED_TAB_GROUP_ACCOUNT_DATA,
+                   WORKSPACE_DESK, ENCRYPTED_TAB_CONTEXT_CONTAINER}));
 #else
   EXPECT_EQ(GetPreferredUserTypes(*sync_user_settings),
             Union(AlwaysPreferredUserTypes(),
                   {HISTORY, HISTORY_DELETE_DIRECTIVES, SESSIONS, USER_EVENTS,
-                   WORKSPACE_DESK}));
+                   WORKSPACE_DESK, ENCRYPTED_TAB_CONTEXT_CONTAINER}));
 #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 
   // History only: SESSIONS-related types are gone.
@@ -599,14 +671,16 @@ TEST_F(SyncUserSettingsImplTest, ShouldSyncSessionsOnlyIfOpenTabsIsSelected) {
       /*sync_everything=*/false,
       /*types=*/{UserSelectableType::kTabs});
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-  EXPECT_EQ(GetPreferredUserTypes(*sync_user_settings),
-            Union(AlwaysPreferredUserTypes(),
-                  {COLLABORATION_GROUP, SAVED_TAB_GROUP, SESSIONS,
-                   SHARED_TAB_GROUP_DATA, SHARED_TAB_GROUP_ACCOUNT_DATA,
-                   WORKSPACE_DESK, SHARED_COMMENT}));
+  EXPECT_EQ(
+      GetPreferredUserTypes(*sync_user_settings),
+      Union(AlwaysPreferredUserTypes(),
+            {COLLABORATION_GROUP, SAVED_TAB_GROUP, SESSIONS,
+             SHARED_TAB_GROUP_DATA, SHARED_TAB_GROUP_ACCOUNT_DATA,
+             WORKSPACE_DESK, SHARED_COMMENT, ENCRYPTED_TAB_CONTEXT_CONTAINER}));
 #else
   EXPECT_EQ(GetPreferredUserTypes(*sync_user_settings),
-            Union(AlwaysPreferredUserTypes(), {SESSIONS, WORKSPACE_DESK}));
+            Union(AlwaysPreferredUserTypes(),
+                  {SESSIONS, WORKSPACE_DESK, ENCRYPTED_TAB_CONTEXT_CONTAINER}));
 #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 
 // SavedTabGroups enabled on desktop. It should enable both saved tab groups and

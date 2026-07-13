@@ -601,8 +601,6 @@ class AutofillPredictionPreferenceTest
 // overall field type.
 TEST_P(AutofillPredictionPreferenceTest,
        AutofillPredictionPreferenceTestParams) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kAutofillPreferPhoneCountryCodeTypeOverCountryHtmlType};
   AutofillPredictionPreferenceTestParams test_case = GetParam();
   AutofillField field;
   field.set_form_control_type(test_case.form_control_type);
@@ -985,8 +983,6 @@ INSTANTIATE_TEST_SUITE_P(
 // Tests the behavior of `AutofillField::last_modifier()` when the purpose is to
 // figure out whether a field was last modified by autofill.
 TEST_F(AutofillFieldTest, IsLastModifierAutofill) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kAutofillFixIsAutofilled);
   AutofillField field;
   EXPECT_NE(field.last_modifier(), FieldModifier::kAutofill);
 
@@ -1003,8 +999,6 @@ TEST_F(AutofillFieldTest, IsLastModifierAutofill) {
 // Tests the behavior of `AutofillField::[last|all]_modifier()` when the purpose
 // is to figure out whether a field was previously autofilled (but now is not).
 TEST_F(AutofillFieldTest, PreviouslyAutofilled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kAutofillFixIsAutofilled);
   AutofillField field;
   auto previously_autofilled = [](const AutofillField& field) {
     return field.all_modifiers().contains(FieldModifier::kAutofill) &&
@@ -1028,8 +1022,6 @@ TEST_F(AutofillFieldTest, PreviouslyAutofilled) {
 // Tests the behavior of `AutofillField::[last|all]_modifier()` when the purpose
 // is to figure out whether a field was ever edited by the user.
 TEST_F(AutofillFieldTest, IsUserEdited) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kAutofillFixIsAutofilled);
   AutofillField field;
   EXPECT_FALSE(field.all_modifiers().contains(FieldModifier::kUser));
 

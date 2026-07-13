@@ -96,6 +96,7 @@ interface AnimationEffect
     method updateTiming
 interface AnimationEvent : Event
     attribute @@toStringTag
+    getter animation
     getter animationName
     getter elapsedTime
     getter pseudoElement
@@ -401,6 +402,7 @@ interface Blob
     method slice
     method stream
     method text
+    method textStream
 interface BlobEvent : Event
     attribute @@toStringTag
     getter data
@@ -2706,6 +2708,29 @@ interface FontFace
     setter variant
     setter variationSettings
     setter weight
+interface FontFaceSet : EventTarget
+    attribute @@toStringTag
+    getter onloading
+    getter onloadingdone
+    getter onloadingerror
+    getter ready
+    getter size
+    getter status
+    method @@iterator
+    method add
+    method check
+    method clear
+    method constructor
+    method delete
+    method entries
+    method forEach
+    method has
+    method keys
+    method load
+    method values
+    setter onloading
+    setter onloadingdone
+    setter onloadingerror
 interface FontFaceSetLoadEvent : Event
     attribute @@toStringTag
     getter fontfaces
@@ -5184,6 +5209,14 @@ interface IntegrityViolationReportBody : ReportBody
     getter reportOnly
     method constructor
     method toJSON
+interface InteractionContentfulPaint : PerformanceEntry
+    attribute @@toStringTag
+    getter interactionId
+    getter largestContentfulPaint
+    getter paintTime
+    getter presentationTime
+    method constructor
+    method toJSON
 interface InterestEvent : Event
     attribute @@toStringTag
     getter source
@@ -5834,7 +5867,9 @@ interface MediaStreamTrackGenerator : MediaStreamTrack
     method constructor
 interface MediaStreamTrackProcessor
     attribute @@toStringTag
+    getter discardedFrames
     getter readable
+    getter totalFrames
     method constructor
 interface MediaStreamTrackVideoStats
     attribute @@toStringTag
@@ -6584,6 +6619,7 @@ interface PerformanceEntry
     getter duration
     getter entryType
     getter name
+    getter navigationId
     getter startTime
     method constructor
     method toJSON
@@ -6615,6 +6651,9 @@ interface PerformanceLongTaskTiming : PerformanceEntry
 interface PerformanceMark : PerformanceEntry
     attribute @@toStringTag
     getter detail
+    method constructor
+interface PerformanceMarkConditional : PerformanceEntry
+    attribute @@toStringTag
     method constructor
 interface PerformanceMeasure : PerformanceEntry
     attribute @@toStringTag
@@ -6721,6 +6760,14 @@ interface PerformanceServerTiming
     getter name
     method constructor
     method toJSON
+interface PerformanceSoftNavigation : PerformanceEntry
+    attribute @@toStringTag
+    getter interactionId
+    getter navigationType
+    getter paintTime
+    getter presentationTime
+    method constructor
+    method getLargestInteractionContentfulPaint
 interface PerformanceTiming
     attribute @@toStringTag
     getter connectEnd
@@ -6766,6 +6813,13 @@ interface Permissions
     attribute @@toStringTag
     method constructor
     method query
+interface PermissionsPolicy
+    attribute @@toStringTag
+    method allowedFeatures
+    method allowsFeature
+    method constructor
+    method features
+    method getAllowlistForFeature
 interface PictureInPictureEvent : Event
     attribute @@toStringTag
     getter pictureInPictureWindow
@@ -7271,6 +7325,7 @@ interface Request
     method formData
     method json
     method text
+    method textStream
 interface ResizeObserver
     attribute @@toStringTag
     method constructor
@@ -7311,6 +7366,7 @@ interface Response
     method formData
     method json
     method text
+    method textStream
 interface SVGAElement : SVGGraphicsElement
     attribute @@toStringTag
     getter download
@@ -9162,6 +9218,7 @@ interface TransformStreamDefaultController
     method terminate
 interface TransitionEvent : Event
     attribute @@toStringTag
+    getter animation
     getter elapsedTime
     getter propertyName
     getter pseudoElement
@@ -10922,6 +10979,7 @@ interface WheelEvent : MouseEvent
     getter deltaX
     getter deltaY
     getter deltaZ
+    getter momentum
     getter wheelDelta
     getter wheelDeltaX
     getter wheelDeltaY

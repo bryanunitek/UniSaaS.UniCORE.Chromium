@@ -13,6 +13,7 @@ import org.chromium.base.Log;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -58,9 +59,8 @@ public class NtpBackgroundDataManager {
                     getBackgroundDataGroupFromSharedPreference(platformType);
 
             if (currentGroup.isEmpty()) {
-                JSONArray newList = new JSONArray();
-                newList.put(backgroundData.toJson());
-                writeToSharedPreference(newList, platformType);
+                currentGroup.add(backgroundData);
+                writeToSharedPreference(currentGroup.toJsonArray(), platformType);
                 return;
             }
 
@@ -102,9 +102,8 @@ public class NtpBackgroundDataManager {
                     getBackgroundDataGroupFromSharedPreference(platformTypeToSave);
 
             if (currentGroup.isEmpty()) {
-                JSONArray newList = new JSONArray();
-                newList.put(backgroundData.toJson());
-                writeToSharedPreference(newList, platformTypeToSave);
+                currentGroup.add(backgroundData);
+                writeToSharedPreference(currentGroup.toJsonArray(), platformTypeToSave);
                 return;
             }
 
@@ -125,7 +124,10 @@ public class NtpBackgroundDataManager {
             }
             currentGroup.add(0, backgroundData);
             if (currentGroup.size() > MAXIMUM_LOCAL_HISTORY) {
-                currentGroup.remove(currentGroup.size() - 1);
+                int indexToRemove = currentGroup.size() - 1;
+                NtpBackgroundDataBase dataToRemove = currentGroup.get(indexToRemove);
+                cleanUpForBackgroundData(dataToRemove);
+                currentGroup.remove(indexToRemove);
             }
             writeToSharedPreference(currentGroup.toJsonArray(), platformTypeToSave);
         } catch (JSONException e) {
@@ -134,6 +136,15 @@ public class NtpBackgroundDataManager {
                     "Failed to save user selected NTP's sync background data to the"
                             + " SharedPreference: data type = %d.",
                     backgroundData.getBackgroundType());
+        }
+    }
+
+    /** Removes the image file for the backgroundData. */
+    private void cleanUpForBackgroundData(NtpBackgroundDataBase backgroundData) {
+        if (backgroundData instanceof NtpBackgroundDataImageBase imageBaseData) {
+            NtpCustomizationUtils.maybeDeleteFile(
+                    NtpCustomizationUtils.getBackgroundImageFileFromPath(
+                            imageBaseData.getLastUploadImageFilePath()));
         }
     }
 

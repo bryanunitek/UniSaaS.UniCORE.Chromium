@@ -4,9 +4,13 @@
 
 #import "ios/chrome/browser/app_bar/ui/app_bar_view_controller.h"
 
+#import "base/test/scoped_feature_list.h"
 #import "ios/chrome/browser/app_bar/ui/app_bar_background_view.h"
+#import "ios/chrome/browser/app_bar/ui/app_bar_constants.h"
 #import "ios/chrome/browser/app_bar/ui/app_bar_consumer.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/layout_state_test_passkey_factory.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
@@ -40,13 +44,17 @@
 
 namespace {
 
+using layout_state::LayoutStateTestPassKeyFactory;
+
 // Tests for the AppBarViewController state.
 class AppBarViewControllerTest : public PlatformTest {
  protected:
   void SetUp() override {
     PlatformTest::SetUp();
     layout_state_ = [[LayoutState alloc] init];
-    layout_state_.appBarPosition = AppBarPosition::kBottom;
+    [layout_state_
+        setAppBarPosition:AppBarPosition::kBottom
+                  passKey:LayoutStateTestPassKeyFactory::CreateSceneKey()];
     view_controller_ = [[AppBarViewController alloc] init];
     view_controller_.layoutState = layout_state_;
     [view_controller_ view];
@@ -153,7 +161,21 @@ TEST_F(AppBarViewControllerTest, TestRotationUpdatesStackViewConstraints) {
 
   [view_controller_ updateForAngle:M_PI_2];
 
-  EXPECT_EQ(bottomConstraint.constant, -8.0);
+  EXPECT_EQ(bottomConstraint.constant, 0.0);
+}
+
+// Tests that rotation updates the height constraint dynamically.
+TEST_F(AppBarViewControllerTest, TestRotationUpdatesHeightConstraint) {
+  [view_controller_ updateForAngle:0];
+
+  NSLayoutConstraint* heightConstraint =
+      [view_controller_ valueForKey:@"heightConstraint"];
+
+  EXPECT_EQ(heightConstraint.constant, AppBarHeightPortrait());
+
+  [view_controller_ updateForAngle:M_PI_2];
+
+  EXPECT_EQ(heightConstraint.constant, AppBarHeightLandscape());
 }
 
 // Tests that the tab grid button's image color transformer always returns clear
@@ -250,10 +272,11 @@ TEST_F(AppBarViewControllerTest, TestAssistantButtonHighlightState) {
   [button layoutIfNeeded];
 
   UIView* highlightView = assistantHighlightView();
-  // It might be nil if not created yet, or created and hidden.
+  // It might be nil if not created yet.
   if (highlightView) {
-    EXPECT_TRUE(highlightView.hidden);
+    EXPECT_EQ(highlightView.alpha, 0.0);
   }
+  EXPECT_FALSE(button.accessibilityTraits & UIAccessibilityTraitSelected);
 
   // Highlighted.
   [view_controller_ setAssistantButtonState:AppBarAssistantButtonState::kAsk
@@ -266,12 +289,14 @@ TEST_F(AppBarViewControllerTest, TestAssistantButtonHighlightState) {
 
   highlightView = assistantHighlightView();
   ASSERT_NE(highlightView, nil);
-  EXPECT_FALSE(highlightView.hidden);
+  EXPECT_EQ(highlightView.alpha, 1.0);
+  EXPECT_TRUE(button.accessibilityTraits & UIAccessibilityTraitSelected);
 
-  // Verify button background color is clearColor (we use customView instead).
+  // Verify button background color is clearColor, and highlightView is a
+  // subview.
   UIButtonConfiguration* config = button.configuration;
   EXPECT_TRUE(config.background.backgroundColor == [UIColor clearColor]);
-  EXPECT_TRUE(config.background.customView != nil);
+  EXPECT_EQ(highlightView.superview, button);
 
   // Not highlighted again.
   [view_controller_ setAssistantButtonState:AppBarAssistantButtonState::kAsk
@@ -282,7 +307,8 @@ TEST_F(AppBarViewControllerTest, TestAssistantButtonHighlightState) {
   [button setNeedsUpdateConfiguration];
   [button layoutIfNeeded];
 
-  EXPECT_TRUE(highlightView.hidden);
+  EXPECT_EQ(highlightView.alpha, 0.0);
+  EXPECT_FALSE(button.accessibilityTraits & UIAccessibilityTraitSelected);
 }
 
 // Tests that long-pressing a button temporarily unhides its title text when
@@ -358,7 +384,11 @@ TEST_F(AppBarViewControllerTest, TestAssistantButtonStateAccount) {
   [button layoutIfNeeded];
 
   UIButtonConfiguration* config = button.configuration;
-  EXPECT_NSEQ(config.title, l10n_util::GetNSString(IDS_IOS_APP_BAR_SIGN_IN));
+  if (IsAppBarLabelsHidden()) {
+    EXPECT_EQ(config.title, nil);
+  } else {
+    EXPECT_NSEQ(config.title, l10n_util::GetNSString(IDS_IOS_APP_BAR_SIGN_IN));
+  }
   EXPECT_NE(config.image, nil);
 }
 
@@ -384,10 +414,156 @@ TEST_F(AppBarViewControllerTest, TestAssistantButtonStateAccountWithAvatar) {
   [button layoutIfNeeded];
 
   UIButtonConfiguration* config = button.configuration;
-  EXPECT_NSEQ(config.title, l10n_util::GetNSString(IDS_IOS_APP_BAR_ACCOUNT));
+  if (IsAppBarLabelsHidden()) {
+    EXPECT_EQ(config.title, nil);
+  } else {
+    EXPECT_NSEQ(config.title, l10n_util::GetNSString(IDS_IOS_APP_BAR_ACCOUNT));
+  }
   ASSERT_NE(config.image, nil);
-  EXPECT_EQ(config.image.size.width, 10);
-  EXPECT_EQ(config.image.size.height, 10);
+  EXPECT_EQ(config.image.size.width, 23);
+  EXPECT_EQ(config.image.size.height, 23);
+}
+
+// Tests that the tab grid button has the correct accessibility label and
+// selected traits based on tab grid visibility and tab group state.
+TEST_F(AppBarViewControllerTest, TestTabGridButtonAccessibilityAndTraits) {
+  UIButton* button = tabGridButton();
+  ASSERT_NE(button, nil);
+
+  // 1. By default, tab grid is not visible, and we are not in a tab group.
+  [view_controller_ setTabGridVisible:NO];
+  [view_controller_ setInTabGroup:NO];
+  EXPECT_NSEQ(button.accessibilityLabel,
+              l10n_util::GetNSString(IDS_IOS_APP_BAR_ALL_TABS));
+  EXPECT_TRUE(button.accessibilityTraits & UIAccessibilityTraitButton);
+  EXPECT_FALSE(button.accessibilityTraits & UIAccessibilityTraitSelected);
+
+  // 2. Set tab grid visible.
+  [view_controller_ setTabGridVisible:YES];
+  EXPECT_NSEQ(button.accessibilityLabel,
+              l10n_util::GetNSString(IDS_IOS_APP_BAR_ALL_TABS));
+  EXPECT_TRUE(button.accessibilityTraits & UIAccessibilityTraitButton);
+  EXPECT_TRUE(button.accessibilityTraits & UIAccessibilityTraitSelected);
+
+  // 3. Set tab grid not visible, and enter tab group.
+  [view_controller_ setTabGridVisible:NO];
+  [view_controller_ setInTabGroup:YES];
+  EXPECT_NSEQ(button.accessibilityLabel,
+              l10n_util::GetNSString(IDS_IOS_TOOLBAR_SHOW_TAB_GROUP));
+  EXPECT_TRUE(button.accessibilityTraits & UIAccessibilityTraitButton);
+  EXPECT_FALSE(button.accessibilityTraits & UIAccessibilityTraitSelected);
+
+  // 4. Set tab grid visible while in a tab group.
+  [view_controller_ setTabGridVisible:YES];
+  EXPECT_NSEQ(button.accessibilityLabel,
+              l10n_util::GetNSString(IDS_IOS_TOOLBAR_SHOW_TAB_GROUP));
+  EXPECT_TRUE(button.accessibilityTraits & UIAccessibilityTraitButton);
+  EXPECT_TRUE(button.accessibilityTraits & UIAccessibilityTraitSelected);
+}
+
+// Tests that the tab grid button has the correct accessibility value.
+TEST_F(AppBarViewControllerTest, TestTabGridButtonAccessibilityValue) {
+  UIButton* button = tabGridButton();
+  ASSERT_NE(button, nil);
+
+  [view_controller_ updateTabCount:3];
+  EXPECT_NSEQ(button.accessibilityValue, @"3");
+
+  [view_controller_ updateTabCount:0];
+  EXPECT_NSEQ(button.accessibilityValue, @"0");
+}
+
+// Tests that assistant button in kLens state sets correct image and title.
+TEST_F(AppBarViewControllerTest, TestAssistantButtonStateLens) {
+  UIButton* button = assistantButton();
+  ASSERT_NE(button, nil);
+
+  // Test full title when width is default (or 0).
+  [view_controller_ setAssistantButtonState:AppBarAssistantButtonState::kLens
+                                highlighted:NO
+                                    enabled:YES
+                                     avatar:nil
+                                   signedIn:NO];
+  [button setNeedsUpdateConfiguration];
+  [button layoutIfNeeded];
+
+  UIButtonConfiguration* config = button.configuration;
+  if (IsAppBarLabelsHidden()) {
+    EXPECT_EQ(config.title, nil);
+  } else {
+    EXPECT_NSEQ(config.title,
+                l10n_util::GetNSString(IDS_IOS_LENS_PRODUCT_NAME));
+  }
+  EXPECT_NE(config.image, nil);
+
+  // Set the view width to a very small size to force truncation.
+  view_controller_.view.frame = CGRectMake(0, 0, 100, 50);
+  [view_controller_ setAssistantButtonState:AppBarAssistantButtonState::kLens
+                                highlighted:NO
+                                    enabled:YES
+                                     avatar:nil
+                                   signedIn:NO];
+  [button setNeedsUpdateConfiguration];
+  [button layoutIfNeeded];
+
+  config = button.configuration;
+  if (IsAppBarLabelsHidden()) {
+    EXPECT_EQ(config.title, nil);
+  } else {
+    EXPECT_NSEQ(config.title,
+                l10n_util::GetNSString(IDS_IOS_LENS_PRODUCT_NAME_TRUNCATED));
+  }
+}
+
+// Tests that assistant button has correct accessibility label in portrait and
+// rotated modes.
+TEST_F(AppBarViewControllerTest, TestAssistantButtonAccessibilityLabel) {
+  UIButton* button = assistantButton();
+  ASSERT_NE(button, nil);
+
+  [view_controller_ setAssistantButtonState:AppBarAssistantButtonState::kAsk
+                                highlighted:NO
+                                    enabled:YES
+                                     avatar:nil
+                                   signedIn:NO];
+
+  // Verify in portrait mode (angle 0).
+  [view_controller_ updateForAngle:0];
+  EXPECT_NSEQ(button.accessibilityLabel,
+              l10n_util::GetNSString(IDS_IOS_APP_BAR_ASK_GEMINI));
+
+  // Verify in rotated/landscape mode (angle M_PI_2). Title should be nil, but
+  // accessibilityLabel should still be set.
+  [view_controller_ updateForAngle:M_PI_2];
+  EXPECT_EQ(button.configuration.title, nil);
+  EXPECT_NSEQ(button.accessibilityLabel,
+              l10n_util::GetNSString(IDS_IOS_APP_BAR_ASK_GEMINI));
+}
+
+// Tests that when kAppBarHideLabels is enabled, viewWillLayoutSubviews does not
+// cause infinite re-entrancy or crashes due to title updaters repeatedly
+// modifying button configurations.
+TEST_F(AppBarViewControllerTest, TestIdempotentTitleUpdatesWithHiddenLabels) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kAppBarHideLabels);
+
+  [view_controller_ setAssistantButtonState:AppBarAssistantButtonState::kAsk
+                                highlighted:NO
+                                    enabled:YES
+                                     avatar:nil
+                                   signedIn:NO];
+  // Trigger multiple layout passes to verify idempotency and absence of
+  // infinite recursion.
+  [view_controller_.view setNeedsLayout];
+  [view_controller_.view layoutIfNeeded];
+
+  UIButton* assistantButton = [view_controller_ valueForKey:@"assistantButton"];
+  EXPECT_EQ(assistantButton.configuration.title, nil);
+
+  [view_controller_.view setNeedsLayout];
+  [view_controller_.view layoutIfNeeded];
+
+  EXPECT_EQ(assistantButton.configuration.title, nil);
 }
 
 using AppBarViewControllerTestManual = PlatformTest;
@@ -407,6 +583,8 @@ TEST_F(AppBarViewControllerTestManual, TestIncognitoInitially) {
 
   UIButton* assistantButton = [vc valueForKey:@"assistantButton"];
   EXPECT_FALSE(assistantButton.enabled);
+  EXPECT_TRUE(assistantButton.accessibilityTraits &
+              UIAccessibilityTraitNotEnabled);
 }
 
 }  // namespace

@@ -32,6 +32,10 @@
 
 namespace {
 
+perfetto::NamedTrack GetTracingTrack(const media::ChunkDemuxer* demuxer) {
+  return perfetto::NamedTrack::FromPointer("media::ChunkDemuxer", demuxer);
+}
+
 // Helper to attempt construction of a StreamParser specific to |content_type|
 // and |codecs|.
 // TODO(wolenetz): Consider relocating this to StreamParserFactory in
@@ -471,8 +475,7 @@ DemuxerType ChunkDemuxer::GetDemuxerType() const {
 void ChunkDemuxer::Initialize(DemuxerHost* host,
                               PipelineStatusCallback init_cb) {
   DVLOG(1) << "Initialize()";
-  TRACE_EVENT_BEGIN("media", "ChunkDemuxer::Initialize",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN("media", "ChunkDemuxer::Initialize", GetTracingTrack(this));
 
   base::OnceClosure open_cb;
 
@@ -509,8 +512,7 @@ void ChunkDemuxer::Stop() {
 void ChunkDemuxer::Seek(base::TimeDelta time, PipelineStatusCallback cb) {
   DVLOG(1) << "Seek(" << time.InSecondsF() << ")";
   DCHECK(time >= base::TimeDelta());
-  TRACE_EVENT_BEGIN("media", "ChunkDemuxer::Seek",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN("media", "ChunkDemuxer::Seek", GetTracingTrack(this));
 
   base::AutoLock auto_lock(lock_);
   DCHECK(!seek_cb_);
@@ -547,9 +549,9 @@ base::Time ChunkDemuxer::GetTimelineOffset() const {
   return timeline_offset_;
 }
 
-std::vector<DemuxerStream*> ChunkDemuxer::GetAllStreams() {
+std::vector<raw_ptr<DemuxerStream>> ChunkDemuxer::GetAllStreams() {
   base::AutoLock auto_lock(lock_);
-  std::vector<DemuxerStream*> result;
+  std::vector<raw_ptr<DemuxerStream>> result;
   // Put enabled streams at the beginning of the list so that
   // MediaResource::GetFirstStream returns the enabled stream if there is one.
   // TODO(servolk): Revisit this after media track switching is supported.
@@ -1106,6 +1108,15 @@ void ChunkDemuxer::ResetParserState(const std::string& id,
     RunSeekCB_Locked(PIPELINE_OK);
 }
 
+void ChunkDemuxer::SetAppendWindow(const std::string& id,
+                                   base::TimeDelta start,
+                                   base::TimeDelta end) {
+  base::AutoLock auto_lock(lock_);
+  DCHECK(!id.empty());
+  CHECK(IsValidId_Locked(id));
+  source_state_map_[id]->SetAppendWindow(start, end);
+}
+
 void ChunkDemuxer::Remove(const std::string& id,
                           base::TimeDelta start,
                           base::TimeDelta end) {
@@ -1631,7 +1642,7 @@ void ChunkDemuxer::ShutdownAllStreams() {
 void ChunkDemuxer::RunInitCB_Locked(PipelineStatus status) {
   lock_.AssertAcquired();
   DCHECK(init_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   PipelineStatusToString(status));
   std::move(init_cb_).Run(status);
 }
@@ -1639,7 +1650,7 @@ void ChunkDemuxer::RunInitCB_Locked(PipelineStatus status) {
 void ChunkDemuxer::RunSeekCB_Locked(PipelineStatus status) {
   lock_.AssertAcquired();
   DCHECK(seek_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   PipelineStatusToString(status));
   std::move(seek_cb_).Run(status);
 }

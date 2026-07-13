@@ -89,11 +89,14 @@ class LayoutBlockFlow;
 class LayoutView;
 class LocalFrameView;
 class PaintLayer;
+class PhysicalBoxFragment;
 class StyleRequest;
 struct PaintInfo;
 struct PaintInvalidatorContext;
 struct SVGLayoutInfo;
 struct SVGLayoutResult;
+
+enum class PhysicalAxis : uint8_t;
 
 enum CursorDirective { kSetCursorBasedOnStyle, kSetCursor, kDoNotSetCursor };
 
@@ -1055,7 +1058,6 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
   bool IsButtonOrInputButton() const;
   bool IsInputButton() const;
   bool IsMenuList() const;
-  bool IsListBox() const;
 
   bool IsTablePart() const {
     NOT_DESTROYED();
@@ -2030,6 +2032,17 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
   virtual void ClearFirstInlineFragmentItemIndex() { NOT_DESTROYED(); }
   virtual void SetFirstInlineFragmentItemIndex(wtf_size_t) { NOT_DESTROYED(); }
 
+  // Gap decorations can take a list format for its styles. When the container
+  // fragments, the order of those styles must be maintained. This method
+  // returns the index of the gap within the container's decoration style
+  // pattern within the stiched container given the provided fragment relative
+  // `gap_index`.
+  virtual wtf_size_t StitchedRowGapIndex(const PhysicalBoxFragment& fragment,
+                                         wtf_size_t gap_index) const {
+    NOT_DESTROYED();
+    return gap_index;
+  }
+
   void SetHasBoxDecorationBackground(bool);
 
   void SetHorizontalWritingMode(bool has_horizontal_writing_mode) {
@@ -2252,8 +2265,14 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
 
   LayoutBlock* InclusiveContainingBlock(AncestorSkipInfo* = nullptr);
 
+  // Returns the nearest ancestor scroll container.
   const LayoutBox* ContainingScrollContainer(
       bool ignore_layout_view_for_fixed_pos = false) const;
+
+  // Returns the nearest ancestor scroll container with a scrollable overflow
+  // value in the given axis.
+  const LayoutBox* ContainingScrollContainer(PhysicalAxis axis) const;
+
   const PaintLayer* ContainingScrollContainerLayer(
       bool ignore_layout_view_for_fixed_pos = false) const;
 
@@ -2415,6 +2434,12 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
   // gfx::Rect can be larger than the integral size.
   gfx::Rect AbsoluteBoundingBoxRect(MapCoordinatesFlags = 0) const;
 
+  // Returns the absolute bounding box rect including ink overflow (such as CSS
+  // drop-shadow) of this unbounded element, mapped to absolute coordinates.
+  // This is a specialized API for unbounded elements that traverses document
+  // boundaries.
+  gfx::Rect AbsoluteBoundingBoxRectForUnboundedElement() const;
+
   // These two functions also handle inlines without content for which the
   // location of the result rect (which may be empty) should be the absolute
   // location of the inline. This is especially useful to get the bounding
@@ -2472,9 +2497,7 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
   /* The following methods are inlined in LayoutObjectInlines.h */
   // If first line style is requested and there is no applicable first line
   // style, the functions will return the style of this object.
-  inline const ComputedStyle* FirstLineStyle() const;
   inline const ComputedStyle& FirstLineStyleRef() const;
-  inline const ComputedStyle* Style(bool first_line) const;
   inline const ComputedStyle& StyleRef(bool first_line) const;
 
   const ComputedStyle& EffectiveStyle(StyleVariant style_variant) const {
@@ -2492,19 +2515,6 @@ class CORE_EXPORT LayoutObject : public GarbageCollected<LayoutObject>,
   inline Color ResolveColor(const Longhand& color_property) const {
     NOT_DESTROYED();
     return StyleRef().VisitedDependentColor(color_property);
-  }
-
-  // See ComputedStyle::VisitedDependentColorFast().
-  template <class Property>
-  static inline Color ResolveColorFast(const ComputedStyle& style_to_use,
-                                       const Property& color_property) {
-    return style_to_use.VisitedDependentColorFast(color_property);
-  }
-
-  template <class Property>
-  inline Color ResolveColorFast(const Property& color_property) const {
-    NOT_DESTROYED();
-    return StyleRef().VisitedDependentColorFast(color_property);
   }
 
   virtual CursorDirective GetCursor(const PhysicalOffset&, ui::Cursor&) const;

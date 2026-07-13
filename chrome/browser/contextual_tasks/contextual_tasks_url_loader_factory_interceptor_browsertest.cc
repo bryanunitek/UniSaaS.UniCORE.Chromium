@@ -5,6 +5,7 @@
 #include "chrome/browser/contextual_tasks/contextual_tasks_url_loader_factory_interceptor.h"
 
 #include "base/test/bind.h"
+#include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_service_factory.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service_factory.h"
@@ -19,6 +20,7 @@
 #include "components/contextual_tasks/public/contextual_tasks_service.h"
 #include "components/contextual_tasks/public/features.h"
 #include "components/contextual_tasks/public/mock_contextual_tasks_service.h"
+#include "components/omnibox/browser/mock_aim_eligibility_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -143,7 +145,7 @@ class ContextualTasksUrlLoaderFactoryInterceptorBrowserTest
     // Sign in.
     identity_test_environment_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
     identity_test_environment_adaptor_->identity_test_env()
         ->MakePrimaryAccountAvailable(kTestEmail,
                                       signin::ConsentLevel::kSignin);
@@ -159,6 +161,19 @@ class ContextualTasksUrlLoaderFactoryInterceptorBrowserTest
   void OnWillCreateBrowserContextServices(content::BrowserContext* context) {
     IdentityTestEnvironmentProfileAdaptor::
         SetIdentityTestEnvironmentFactoriesOnBrowserContext(context);
+
+    AimEligibilityServiceFactory::GetInstance()->SetTestingFactory(
+        context, base::BindRepeating([](content::BrowserContext* context)
+                                         -> std::unique_ptr<KeyedService> {
+          auto service =
+              std::make_unique<testing::NiceMock<MockAimEligibilityService>>(
+                  *Profile::FromBrowserContext(context)->GetPrefs(), nullptr,
+                  nullptr, nullptr);
+          ON_CALL(*service, IsAimEligible())
+              .WillByDefault(testing::Return(true));
+          return service;
+        }));
+
     contextual_tasks::ContextualTasksServiceFactory::GetInstance()
         ->SetTestingFactory(
             context,
@@ -607,7 +622,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksUrlLoaderFactoryInterceptorBrowserTest,
       GURL("https://" + GaiaUrls::GetInstance()->gaia_origin().host());
 
   ASSERT_TRUE(
-      content::SetCookie(browser()->profile(), gaia_url,
+      content::SetCookie(browser()->GetProfile(), gaia_url,
                          "test_cookie=test_value; Secure; SameSite=None"));
 
   // Navigate to the Contextual Tasks WebUI.

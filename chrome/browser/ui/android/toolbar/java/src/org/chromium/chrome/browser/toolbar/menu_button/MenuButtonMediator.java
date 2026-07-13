@@ -33,6 +33,7 @@ import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.toolbar.ToolbarResourceUtils;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonProperties.ShowBadgeProperty;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonProperties.ThemeProperty;
+import org.chromium.chrome.browser.ui.actions.appmenu.MenuButtonState;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuButtonHelper;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinator;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
@@ -210,6 +211,11 @@ class MenuButtonMediator implements AppMenuObserver {
         } else {
             mPropertyModel.set(MenuButtonProperties.IS_VISIBLE, visible);
         }
+    }
+
+    /** Returns whether there is enough space for the button to be shown. */
+    boolean hasSpaceToShow() {
+        return mPropertyModel.get(MenuButtonProperties.HAS_SPACE_TO_SHOW);
     }
 
     /**

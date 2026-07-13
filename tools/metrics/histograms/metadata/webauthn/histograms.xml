@@ -82,7 +82,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.Android.GmsCoreGetCredentialsResult"
-    enum="GmsCoreGetCredentialsResult" expires_after="2026-10-11">
+    enum="GmsCoreGetCredentialsResult" expires_after="2026-12-16">
   <owner>derinel@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
   <summary>
@@ -115,7 +115,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.AutomaticPasskeyUpgrade.Result"
-    enum="PasskeyUpgradeResult" expires_after="2026-10-04">
+    enum="PasskeyUpgradeResult" expires_after="2026-12-06">
   <owner>martinkr@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
   <summary>
@@ -125,7 +125,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.CableV2.TunnelEvent{Server}"
-    enum="WebAuthenticationCableV2TunnelEvent" expires_after="2026-10-11">
+    enum="WebAuthenticationCableV2TunnelEvent" expires_after="2026-12-13">
   <owner>agl@chromium.org</owner>
   <owner>martinkr@google.com</owner>
   <summary>
@@ -181,6 +181,17 @@ chromium-metrics-reviews@google.com.
   <summary>
     Records the number of records of the user's WebAuthn credentials created on
     Chrome OS.
+  </summary>
+</histogram>
+
+<histogram name="WebAuthentication.Cmtg.BlockedDelay" units="ms"
+    expires_after="2026-12-31">
+  <owner>nsatragno@chromium.org</owner>
+  <owner>chrome-webauthn@google.com</owner>
+  <summary>
+    Measures the additional delay the CMTG device key fetch is adding to the
+    WebAuthn transaction. Recorded once per transaction when the flow is blocked
+    waiting for keys to become ready.
   </summary>
 </histogram>
 
@@ -267,7 +278,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.CredentialFetchDuration.GmsCore.{Source}"
-    units="ms" expires_after="2026-10-11">
+    units="ms" expires_after="2026-12-16">
   <owner>derinel@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
   <summary>
@@ -407,7 +418,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.EnclaveLoadDuration" units="ms"
-    expires_after="2026-10-25">
+    expires_after="2026-12-27">
   <owner>kenrb@chromium.org</owner>
   <owner>chrome-webauthn@google.com</owner>
   <summary>
@@ -496,7 +507,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.GetAssertionResponseTransport"
-    enum="WebAuthenticationFidoTransport" expires_after="2026-10-11">
+    enum="WebAuthenticationFidoTransport" expires_after="2026-12-16">
   <owner>kenrb@chromium.org</owner>
   <owner>martinkr@google.com</owner>
   <summary>
@@ -531,7 +542,7 @@ chromium-metrics-reviews@google.com.
 <histogram
     name="WebAuthentication.GPM.CachedOpportunisticallyRetrievedKeyEvent"
     enum="WebAuthenticationGPMCachedOpportunisticallyRetrievedKeyEvent"
-    expires_after="2026-10-04">
+    expires_after="2026-12-06">
   <owner>ylahodiuk@google.com</owner>
   <owner>izuzic@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
@@ -581,7 +592,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.GPM.RecoveryEvent"
-    enum="WebAuthenticationGPMRecoveryEvent" expires_after="2026-11-01">
+    enum="WebAuthenticationGPMRecoveryEvent" expires_after="2027-01-03">
   <owner>ylahodiuk@google.com</owner>
   <owner>izuzic@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
@@ -628,7 +639,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.IsUVPlatformAuthenticatorAvailable2"
-    enum="Boolean" expires_after="2026-11-01">
+    enum="Boolean" expires_after="2027-01-03">
   <owner>kenrb@chromium.org</owner>
   <owner>martinkr@google.com</owner>
   <summary>
@@ -714,7 +725,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.MechanismSorter.DeduplicationHappened"
-    enum="Boolean" expires_after="2026-09-30">
+    enum="Boolean" expires_after="2026-12-16">
   <owner>derinel@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
   <summary>
@@ -746,7 +757,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.PasskeyCount" units="count"
-    expires_after="2026-10-25">
+    expires_after="2026-12-27">
   <owner>izuzic@google.com</owner>
   <owner>ylahodiuk@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
@@ -757,7 +768,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.PasskeyReadiness" enum="Boolean"
-    expires_after="2026-10-25">
+    expires_after="2026-12-27">
   <owner>izuzic@google.com</owner>
   <owner>ylahodiuk@google.com</owner>
   <owner>chrome-webauthn@google.com</owner>
@@ -847,7 +858,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebAuthentication.Windows.ForegroundedWindowsHelloDialog"
-    enum="WindowsForegroundedHelloDialog" expires_after="2026-11-01">
+    enum="WindowsForegroundedHelloDialog" expires_after="2027-01-03">
   <owner>kenrb@chromium.org</owner>
   <owner>chrome-webauthn@google.com</owner>
   <summary>

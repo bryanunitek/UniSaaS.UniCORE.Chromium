@@ -26,7 +26,7 @@ namespace {
 // first run will be maximized.
 constexpr int kForceMaximizeWidthLimit = 1366;
 
-bool ShouldForceMaximizeOnFirstRun(Profile* profile) {
+bool ShouldForceMaximizeOnFirstRun(const Profile* profile) {
   return profile->GetPrefs()->GetBoolean(prefs::kForceMaximizeOnFirstRun);
 }
 
@@ -34,7 +34,7 @@ bool ShouldForceMaximizeOnFirstRun(Profile* profile) {
 
 WindowSizerChromeOS::WindowSizerChromeOS(
     std::unique_ptr<StateProvider> state_provider,
-    const Browser* browser)
+    Browser* browser)
     : WindowSizer(std::move(state_provider), browser) {}
 
 WindowSizerChromeOS::~WindowSizerChromeOS() = default;
@@ -90,14 +90,14 @@ bool WindowSizerChromeOS::GetBrowserBounds(
   }
 
   // This should not be called on a Browser that already has a window.
-  DCHECK(!browser()->window());
+  DCHECK(!browser()->GetWindow());
 
   bool determined = false;
   if (bounds->IsEmpty()) {
     if (browser()->is_type_normal()) {
       GetTabbedBrowserBounds(bounds, show_state);
       determined = true;
-    } else if (browser()->is_trusted_source()) {
+    } else if (WindowFeatureController::From(browser())->IsTrustedSource()) {
       // For trusted popups (v1 apps and system windows), do not use the last
       // active window bounds, only use saved or default bounds.
       // For PWA app windows (which are also a trusted source) we do want to use
@@ -166,7 +166,7 @@ void WindowSizerChromeOS::GetTabbedBrowserBounds(
     display = display::Screen::Get()->GetDisplayMatching(*bounds_in_screen);
   } else if (GlobalBrowserCollection::GetInstance()->IsEmpty() &&
              !is_saved_bounds &&
-             (ShouldForceMaximizeOnFirstRun(browser()->profile()) ||
+             (ShouldForceMaximizeOnFirstRun(browser()->GetProfile()) ||
               (display.work_area().width() <= kForceMaximizeWidthLimit &&
                !command_line->HasSwitch(
                    switches::kDisableAutoMaximizeForTests)))) {

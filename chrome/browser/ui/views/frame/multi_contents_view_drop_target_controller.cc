@@ -12,9 +12,7 @@
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ref.h"
 #include "base/metrics/user_metrics.h"
-#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "base/types/to_address.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -46,15 +44,10 @@ int GetValueScaledToSize(int current_size, int min_value, int max_value) {
   return min_value + (size_ratio * (max_value - min_value));
 }
 
-// Returns whether the point is within the bounds of the view, but not within
-// the bottom |reserved_height_for_scrolling| dips.
+// Returns whether the point is within the bounds of the view.
 bool IsPointEligibleForDrag(gfx::Point point_in_view,
-                            const raw_ref<views::View> view,
-                            int reserved_height_for_scrolling = 0) {
-  gfx::Rect eligible_bounds = view->GetLocalBounds();
-  eligible_bounds.Inset(
-      gfx::Insets().set_bottom(reserved_height_for_scrolling));
-  return eligible_bounds.Contains(gfx::Rect(point_in_view, gfx::Size()));
+                            const raw_ref<views::View> view) {
+  return view->GetLocalBounds().Contains(gfx::Rect(point_in_view, gfx::Size()));
 }
 
 }  // namespace
@@ -166,7 +159,7 @@ bool MultiContentsViewDropTargetController::CanDropTab() {
   // The drop target view is visible iff the last drag point was over
   // it (i.e. if the view is visible, then we can assume that the drop is
   // happening on it).
-  return drop_target_view_->GetVisible() && !drop_target_view_->IsClosing();
+  return drop_target_view_->IsVisibleAndNotClosing();
 }
 
 bool MultiContentsViewDropTargetController::GetDropFormats(
@@ -294,8 +287,7 @@ void MultiContentsViewDropTargetController::OnWebContentsDragUpdate(
   // "Drag update" events can still be delivered even if the point is out of the
   // contents area, particularly while the drop target is animating in and
   // shifting them.
-  if (!IsPointEligibleForDrag(point, drop_target_parent_view_,
-                              kReservedHeightForScrollingDown)) {
+  if (!IsPointEligibleForDrag(point, drop_target_parent_view_)) {
     ResetDropTargetTimers();
     return;
   }
@@ -348,8 +340,20 @@ void MultiContentsViewDropTargetController::HandleDragUpdate(
       drop_target_parent_view_->height(),
       MultiContentsDropTargetView::DropTargetState::kFull, drag_type);
 
+  // This differs from drop_target_view_->side() in that it is also std::nullopt
+  // if the drop target view is currently hiding.
+  std::optional<MultiContentsDropTargetView::DropSide> currently_showing_side =
+      drop_target_view_->IsVisibleAndNotClosing() ? drop_target_view_->side()
+                                                  : std::nullopt;
   MultiContentsDropTargetView::DropSide drop_side;
-  if (point_in_view.x() <= drop_entry_point_width) {
+  if (drag_type == MultiContentsDropTargetView::DragType::kTab &&
+      currently_showing_side == MultiContentsDropTargetView::DropSide::BOTTOM &&
+      point_in_view.y() >=
+          drop_target_parent_view_->height() - drop_entry_point_height) {
+    // If the bottom drop target is already showing during a tab drag, test for
+    // the bottom drop side first so that going to the corner does not close it.
+    drop_side = MultiContentsDropTargetView::DropSide::BOTTOM;
+  } else if (point_in_view.x() <= drop_entry_point_width) {
     drop_side = is_rtl ? MultiContentsDropTargetView::DropSide::END
                        : MultiContentsDropTargetView::DropSide::START;
   } else if (point_in_view.x() >=
@@ -357,6 +361,7 @@ void MultiContentsViewDropTargetController::HandleDragUpdate(
     drop_side = is_rtl ? MultiContentsDropTargetView::DropSide::START
                        : MultiContentsDropTargetView::DropSide::END;
   } else if (base::FeatureList::IsEnabled(tabs::kSplitViewHorizontal) &&
+             drag_type == MultiContentsDropTargetView::DragType::kTab &&
              point_in_view.y() >=
                  drop_target_parent_view_->height() - drop_entry_point_height) {
     drop_side = MultiContentsDropTargetView::DropSide::BOTTOM;
@@ -366,21 +371,22 @@ void MultiContentsViewDropTargetController::HandleDragUpdate(
     return;
   }
 
-  // If we are showing the nudge on the wrong side, hide the drop target.
-  if (can_show_nudge && drop_target_view_->GetVisible() &&
-      drop_target_view_->side() != drop_side) {
+  // If we are showing the drop target on the wrong side, hide the drop target.
+  // In the case that we are showing the full drop target during a link drag,
+  // OnDragExited() will have already called HideDropTarget(), but calling it
+  // again should be a no-op.
+  if (currently_showing_side != drop_side) {
     HideDropTarget();
   }
 
-  if (can_show_nudge &&
-      drop_side != MultiContentsDropTargetView::DropSide::BOTTOM) {
+  if (can_show_nudge) {
     // Avoid transitioning to the `kNudge` state if the drop target view is
     // already visible on that side. If the timer is already running for this
     // side, don't restart the timer.
     const bool nudge_timer_running_on_same_side =
         show_nudge_timer_.has_value() && show_nudge_timer_->timer.IsRunning() &&
         show_nudge_timer_->drop_side == drop_side;
-    if (drop_target_view_->side() != drop_side &&
+    if (currently_showing_side != drop_side &&
         !nudge_timer_running_on_same_side) {
       StartNudgeShowTimer(drop_side);
     }
@@ -399,7 +405,7 @@ void MultiContentsViewDropTargetController::StartOrUpdateDropTargetTimer(
     int drop_entry_point_size,
     MultiContentsDropTargetView::DropSide drop_side,
     MultiContentsDropTargetView::DragType drag_type) {
-  if (drop_target_view_->GetVisible() && !drop_target_view_->IsClosing()) {
+  if (drop_target_view_->IsVisibleAndNotClosing()) {
     return;
   }
 
@@ -478,7 +484,7 @@ void MultiContentsViewDropTargetController::StartDropTargetHideTimer() {
 
 void MultiContentsViewDropTargetController::HideDropTarget(
     bool suppress_animation) {
-  if (drop_target_view_->GetVisible()) {
+  if (drop_target_view_->IsVisibleAndNotClosing()) {
     drop_target_view_->Hide(suppress_animation);
     drop_target_last_hidden_ = base::Time::Now();
   }

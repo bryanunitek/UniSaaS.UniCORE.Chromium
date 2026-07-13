@@ -7,16 +7,12 @@ package org.chromium.chrome.browser.ui.autofill;
 import android.content.Context;
 
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.ui.autofill.internal.R;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.autofill.AutofillSuggestion;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
-import org.chromium.ui.modelutil.LayoutViewBuilder;
-import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
-import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
-import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 
 import java.util.List;
 
@@ -28,6 +24,8 @@ public class AtMemoryBottomSheetCoordinator {
     private final BottomSheetController mBottomSheetController;
 
     public static final int ITEM_TYPE_SUGGESTION = 1;
+    public static final int ITEM_TYPE_SEARCH_TILE = 2;
+    public static final int ITEM_TYPE_ZERO_STATE = 3;
 
     private final BottomSheetObserver mBottomSheetObserver =
             new EmptyBottomSheetObserver() {
@@ -45,42 +43,42 @@ public class AtMemoryBottomSheetCoordinator {
     interface Delegate {
         void onDismissed();
 
-        void onSuggestionClicked(AutofillSuggestion suggestion);
+        void onQuerySubmitted(String query);
 
-        void onFlyoutClicked(AutofillSuggestion suggestion);
+        void onQueryTextChanged(String query);
+
+        void onSearchFocus(boolean hasFocus);
+
+        void onSuggestionClicked(int position);
+
+        void onChildSuggestionsShown(int parentPosition);
+
+        void onChildSuggestionClicked(int parentPosition, int childPosition);
+
+        boolean isSearching();
     }
 
     AtMemoryBottomSheetCoordinator(
-            Context context, BottomSheetController sheetController, Delegate delegate) {
+            Context context,
+            BottomSheetController sheetController,
+            Delegate delegate,
+            Profile profile) {
         mBottomSheetController = sheetController;
-
-        PropertyModel model =
-                new PropertyModel.Builder(AtMemoryBottomSheetProperties.ALL_KEYS)
-                        .with(AtMemoryBottomSheetProperties.VISIBLE, false)
-                        .build();
-
-        ModelList modelList = new ModelList();
-        mMediator = new AtMemoryBottomSheetMediator(delegate, model, modelList);
 
         AtMemoryBottomSheetView view = new AtMemoryBottomSheetView(context);
 
-        SimpleRecyclerViewAdapter adapter = new SimpleRecyclerViewAdapter(modelList);
-        adapter.registerType(
-                ITEM_TYPE_SUGGESTION,
-                new LayoutViewBuilder<>(R.layout.at_memory_bottom_sheet_suggestion_item),
-                AtMemoryBottomSheetSuggestionViewBinder::bind);
-        view.setRecyclerViewAdapter(adapter);
+        mMediator = new AtMemoryBottomSheetMediator(context, profile, delegate, view);
 
-        mContent = new AtMemoryBottomSheetContent(view.getContentView(), mBottomSheetController);
+        mContent = new AtMemoryBottomSheetContent(view, mBottomSheetController);
 
-        PropertyModelChangeProcessor.create(model, view, AtMemoryBottomSheetViewBinder::bind);
+        setUpModelChangeProcessors(view);
     }
 
     public void show(List<AutofillSuggestion> suggestions) {
-        mMediator.setSuggestions(suggestions);
-
         mBottomSheetController.addObserver(mBottomSheetObserver);
-        if (!mBottomSheetController.requestShowContent(mContent, /* animate= */ true)) {
+        if (mBottomSheetController.requestShowContent(mContent, /* animate= */ true)) {
+            mMediator.show(suggestions);
+        } else {
             onDismissed();
         }
     }
@@ -89,8 +87,37 @@ public class AtMemoryBottomSheetCoordinator {
         mBottomSheetController.hideContent(mContent, /* animate= */ true);
     }
 
+    public void expandSheet() {
+        mBottomSheetController.expandSheet(/* animate= */ true);
+    }
+
     private void onDismissed() {
         mBottomSheetController.removeObserver(mBottomSheetObserver);
         mMediator.onDismissed();
+    }
+
+    AtMemoryBottomSheetContent getBottomSheetContentForTesting() {
+        return mContent;
+    }
+
+    /**
+     * Sets up the Model Change Processors (MCPs) to bind the separate property models for the
+     * bottom sheet, the home screen, and the flyout screen to their respective views.
+     */
+    private void setUpModelChangeProcessors(AtMemoryBottomSheetView view) {
+        PropertyModelChangeProcessor.create(
+                mMediator.getModel(),
+                view,
+                AtMemoryBottomSheetViewBinder::bindAtMemoryBottomSheetView);
+
+        PropertyModelChangeProcessor.create(
+                mMediator.getHomeModel(),
+                view.getHomeView(),
+                AtMemoryBottomSheetViewBinder::bindAtMemoryHomeView);
+
+        PropertyModelChangeProcessor.create(
+                mMediator.getFlyoutModel(),
+                view.getFlyoutView(),
+                AtMemoryBottomSheetViewBinder::bindAtMemoryFlyoutView);
     }
 }

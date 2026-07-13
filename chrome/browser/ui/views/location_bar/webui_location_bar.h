@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/views/location_bar/webui_content_setting_image_control.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_delegate.h"
 #include "chrome/browser/ui/views/omnibox/webui_readonly_omnibox.h"
+#include "chrome/browser/ui/views/page_action/webui_page_action_control.h"
 #include "components/browser_apis/ui_controllers/toolbar/icon_handle.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
 #include "mojo/public/mojom/base/error.mojom.h"
@@ -31,6 +32,10 @@ class PermissionDashboardController;
 class WebUIPermissionDashboard;
 class Profile;
 class WebUIToolbarControlDelegate;
+
+namespace gfx {
+class Point;
+}  // namespace gfx
 
 // A LocationBar implementation using WebUI.
 class WebUILocationBar : public LocationBar,
@@ -48,11 +53,19 @@ class WebUILocationBar : public LocationBar,
       toolbar_ui_api::mojom::OmniboxViewStatePtr update) override;
   void PropagateFocusRequest(
       toolbar_ui_api::mojom::FocusRequestTarget target) override;
+  std::optional<GURL> ConsumeDroppedUrl(
+      const gfx::PointF& drop_position) override;
 
   // Called from WebUIToolbarWebView:
   void OnThemeChanged();
   base::expected<std::monostate, mojo_base::mojom::ErrorPtr> OnOmniboxAction(
       toolbar_ui_api::mojom::OmniboxActionPtr action);
+
+  // `edit_flags` use blink::ContextMenuDataEditFlags.
+  void HandleContextMenu(views::Widget* widget,
+                         const gfx::Point& point,
+                         ui::mojom::MenuSourceType source_type,
+                         int edit_flags);
 
   // LocationBar:
   void FocusLocation(bool is_user_initiated,
@@ -83,6 +96,7 @@ class WebUILocationBar : public LocationBar,
   bool IsDrawn() const override;
   bool IsFullscreen() const override;
   bool IsEditingOrEmpty() const override;
+  bool IsMouseHovered() const override;
   void InvalidateLayout() override;
   gfx::Rect Bounds() const override;
   gfx::Rect BoundsInScreen() const override;
@@ -109,8 +123,14 @@ class WebUILocationBar : public LocationBar,
   void OnLhsChipDrag(toolbar_ui_api::mojom::LhsChipIdentifier identifier,
                      ui::mojom::DragEventSource source);
 
+  void AnnounceAlert(const std::u16string& announcement);
+
   WebUIContentSettingImageControl& content_setting_image_control() {
     return content_setting_image_control_;
+  }
+
+  page_actions::WebUIPageActionControl& page_action_control() {
+    return page_action_control_;
   }
 
   // ContentSettingImageViewDelegate:
@@ -132,6 +152,7 @@ class WebUILocationBar : public LocationBar,
 
  private:
   friend class WebUILocationBarTest;
+  friend class WebUIPermissionChipTest;
 
   // Determines whether the location icon should be overridden while a chip is
   // being displayed.
@@ -146,6 +167,13 @@ class WebUILocationBar : public LocationBar,
   // Updates the state of the LHS location bar chips (e.g. security chip) and
   // pushes it to the WebUI.
   void UpdateLhsChipsState(bool icon_known = false);
+
+  // Updates the state of the content setting models (e.g. camera, microphone,
+  // sensors) to reflect status on the current page. Pushes the updated
+  // right-hand side content setting states to the WebUI. Returns true if the
+  // state of at least one left-hand side permission chip changed, indicating
+  // that `UpdateLhsChipsState()` should be called.
+  bool UpdateContentSettingModels();
 
   ui::ImageModel UpdateLocationIcon(
       toolbar_ui_api::mojom::SecurityLevel security_level,
@@ -169,6 +197,7 @@ class WebUILocationBar : public LocationBar,
   // `permission_dashboard_controller_` depends on models owned by
   // `content_setting_image_control_` during teardown.
   WebUIContentSettingImageControl content_setting_image_control_;
+  page_actions::WebUIPageActionControl page_action_control_;
 
   // Threshold for suppressing LHS chip clicks after bubble closing.
   base::TimeDelta suppression_threshold_ =

@@ -71,7 +71,6 @@ class Origin;
 namespace content {
 
 class AudioInputDeviceManager;
-class AudioServiceListener;
 class FakeMediaStreamUIProxy;
 class MediaStreamUIProxy;
 class PermissionControllerImpl;
@@ -183,9 +182,6 @@ class CONTENT_EXPORT MediaStreamManager
 
   // Used to access AudioInputDeviceManager.
   AudioInputDeviceManager* audio_input_device_manager() const;
-
-  // Used to access AudioServiceListener, must be called on UI thread.
-  AudioServiceListener* audio_service_listener();
 
   // Used to access MediaDevicesManager.
   MediaDevicesManager* media_devices_manager();
@@ -516,6 +512,8 @@ class CONTENT_EXPORT MediaStreamManager
   friend class MediaStreamManagerTest;
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest, DesktopCaptureDeviceStopped);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest, DesktopCaptureDeviceChanged);
+  FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
+                           DesktopCaptureDeviceChangeDeniedThenCancel);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
                            MultiCaptureOnMediaStreamUIWindowId);
   FRIEND_TEST_ALL_PREFIXES(MediaStreamManagerTest,
@@ -908,8 +906,6 @@ class CONTENT_EXPORT MediaStreamManager
   // Maps render process hosts to log callbacks. Used on the IO thread.
   std::map<int, base::RepeatingCallback<void(const std::string&)>>
       log_callbacks_;
-
-  std::unique_ptr<AudioServiceListener> audio_service_listener_;
 
   // Provider of system power change logging to the WebRTC logs.
   MediaStreamPowerLogger power_logger_;

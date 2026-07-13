@@ -65,19 +65,55 @@ const base::TimeDelta kApcFetchingTimeout = base::Seconds(10);
       service->CreateTask("EG Test Task", /*allow_incognito_web_states=*/false);
 
   std::vector<optimization_guide::proto::Action> actions = {action};
-  actor::CreateActorToolRequestsResult tools_result =
-      service->CreateActorToolRequests(actions, task_id);
 
-  if (!tools_result.has_value()) {
-    NSString* errorMsg = base::SysUTF8ToNSString(base::StringPrintf(
-        "Failed to create tool requests: %s",
-        actor::GetToolExecutionResultMessage(tools_result.error()).c_str()));
-    NSError* error =
-        [NSError errorWithDomain:@"mojom::ActionResultCode"
-                            code:(NSInteger)tools_result.error().code()
-                        userInfo:@{NSLocalizedDescriptionKey : errorMsg}];
-    completion(error);
+  auto action_performed_callback =
+      base::BindOnce(^(actor::PerformActionsResult result) {
+        [ActorAppInterface handleActionResults:std::move(result.action_results)
+                                    completion:completion];
+      });
+
+  service->PerformActions(task_id, actions, "Executing EG Test action",
+                          std::move(action_performed_callback));
+}
+
++ (void)executeActionsWithProto:(NSData*)actionsProto
+                     completion:(void (^)(NSError* error))completion {
+  ProfileIOS* profile = chrome_test_util::GetOriginalProfile();
+  if (!profile) {
+    completion([NSError
+        errorWithDomain:kActorAppInterfaceErrorDomain
+                   code:ActorToolExecutionResultNoProfile
+               userInfo:@{NSLocalizedDescriptionKey : @"No profile"}]);
     return;
+  }
+
+  actor::ActorService* service =
+      actor::ActorServiceFactory::GetForProfile(profile);
+  if (!service) {
+    completion([NSError
+        errorWithDomain:kActorAppInterfaceErrorDomain
+                   code:ActorToolExecutionResultNoService
+               userInfo:@{NSLocalizedDescriptionKey : @"No service"}]);
+    return;
+  }
+
+  optimization_guide::proto::Actions actions_proto;
+  if (!actions_proto.ParseFromArray([actionsProto bytes],
+                                    [actionsProto length])) {
+    completion([NSError
+        errorWithDomain:kActorAppInterfaceErrorDomain
+                   code:ActorToolExecutionResultInvalidProto
+               userInfo:@{NSLocalizedDescriptionKey : @"Invalid proto"}]);
+    return;
+  }
+
+  actor::ActorTaskId task_id = service->CreateTask(
+      "EG Test Tasks", /*allow_incognito_web_states=*/false);
+
+  std::vector<optimization_guide::proto::Action> actions;
+  actions.reserve(actions_proto.actions_size());
+  for (const auto& action : actions_proto.actions()) {
+    actions.push_back(action);
   }
 
   auto action_performed_callback =
@@ -86,8 +122,7 @@ const base::TimeDelta kApcFetchingTimeout = base::Seconds(10);
                                     completion:completion];
       });
 
-  service->PerformActions(task_id, std::move(tools_result.value()),
-                          "Executing EG Test action",
+  service->PerformActions(task_id, actions, "Executing EG Test actions",
                           std::move(action_performed_callback));
 }
 
@@ -104,18 +139,19 @@ const base::TimeDelta kApcFetchingTimeout = base::Seconds(10);
     return;
   }
 
-  const actor::ActionResult& result = results[0];
-  if (result.tool_result.IsOk()) {
-    completion(nil);
-  } else {
-    NSString* errorMsg = base::SysUTF8ToNSString(
-        GetToolExecutionResultMessage(result.tool_result));
-    NSError* error =
-        [NSError errorWithDomain:@"mojom::ActionResultCode"
-                            code:(NSInteger)result.tool_result.code()
-                        userInfo:@{NSLocalizedDescriptionKey : errorMsg}];
-    completion(error);
+  for (const actor::ActionResult& result : results) {
+    if (!result.tool_result.IsOk()) {
+      NSString* errorMsg = base::SysUTF8ToNSString(
+          GetToolExecutionResultMessage(result.tool_result));
+      NSError* error =
+          [NSError errorWithDomain:@"mojom::ActionResultCode"
+                              code:(NSInteger)result.tool_result.code()
+                          userInfo:@{NSLocalizedDescriptionKey : errorMsg}];
+      completion(error);
+      return;
+    }
   }
+  completion(nil);
 }
 
 + (NSData*)fetchLatestAPC {

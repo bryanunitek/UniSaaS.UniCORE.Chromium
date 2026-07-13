@@ -14,7 +14,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace base {
+namespace base::i18n {
 namespace {
 
 using ::testing::Eq;
@@ -24,6 +24,27 @@ LanguageTag LanguageTagOrDie(std::string_view tag) {
   return *LanguageTagConverter::GetInstance().FromString(tag);
 }
 
+TEST(LanguageTagMatcherTest, EnglishRegionalFallback) {
+  std::vector<LanguageTag> supported = {LanguageTagOrDie("en-US"),
+                                        LanguageTagOrDie("en-GB")};
+  LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
+
+  // Liberian and Filipino English should fallback to US English.
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("en-LR")),
+              Optional(LanguageTagOrDie("en-US")));
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("en-PH")),
+              Optional(LanguageTagOrDie("en-US")));
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("en-CA")),
+              Optional(LanguageTagOrDie("en-US")));
+
+  // Other English regions (like Australia or New Zeland) should fallback to
+  // British English.
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("en-AU")),
+              Optional(LanguageTagOrDie("en-GB")));
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("en-NZ")),
+              Optional(LanguageTagOrDie("en-GB")));
+}
+
 TEST(LanguageTagMatcherTest, ExactMatch) {
   std::vector<LanguageTag> supported = {LanguageTagOrDie("en-US"),
                                         LanguageTagOrDie("fr-FR")};
@@ -31,6 +52,29 @@ TEST(LanguageTagMatcherTest, ExactMatch) {
 
   EXPECT_THAT(matcher.Match(LanguageTagOrDie("en-US")),
               Optional(LanguageTagOrDie("en-US")));
+}
+
+TEST(LanguageTagMatcherTest, Catalan) {
+  std::vector<LanguageTag> supported = {LanguageTagOrDie("ca-u-va-valencia"),
+                                        LanguageTagOrDie("es")};
+  LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
+
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("ca@valencia")),
+              Optional(LanguageTagOrDie("ca-u-va-valencia")));
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("ca-ES-u-va-valencia")),
+              Optional(LanguageTagOrDie("ca-u-va-valencia")));
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("ca")),
+              Optional(LanguageTagOrDie("ca-u-va-valencia")));
+}
+
+TEST(LanguageTagMatcherTest, CatalanLegacy) {
+  std::vector<LanguageTag> supported = {LanguageTagOrDie("ca@valencia"),
+                                        LanguageTagOrDie("es")};
+  LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
+
+  // en-US should fallback to en
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("ca_ES.UTF8@valencia")),
+              Optional(LanguageTagOrDie("ca-u-va-valencia")));
 }
 
 TEST(LanguageTagMatcherTest, FallbackMatch) {
@@ -55,7 +99,7 @@ TEST(LanguageTagMatcherTest, SpanishLatinAmerica) {
                                         LanguageTagOrDie("es")};
   LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
 
-  EXPECT_THAT(matcher.Match(language_tags::SPANISH_ARGENTINA()),
+  EXPECT_THAT(matcher.Match(GetKnownLanguageTag("es-AR")),
               Eq(LanguageTagOrDie("es-419")));
 }
 
@@ -88,6 +132,15 @@ TEST(LanguageTagMatcherTest, PortugueseBrazil) {
   }
 }
 
+TEST(LanguageTagMatcherTest, TlMatchesFil) {
+  std::vector<LanguageTag> supported = {LanguageTagOrDie("en-US"),
+                                        LanguageTagOrDie("fil")};
+  LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
+
+  EXPECT_THAT(matcher.Match(LanguageTagOrDie("tl")),
+              Optional(LanguageTagOrDie("fil")));
+}
+
 TEST(LanguageTagMatcherTest, MultipleEnglishLocales) {
   {
     std::vector<LanguageTag> supported = {LanguageTagOrDie("en-US"),
@@ -118,20 +171,30 @@ TEST(LanguageTagMatcherTest, MultipleEnglishLocales) {
   }
 }
 
-TEST(LanguageTagMatcherTest, ChineseLanguages) {
-  std::vector<LanguageTag> supported = {language_tags::TAIWAN_CHINESE(),
-                                        language_tags::CHINA_CHINESE()};
+TEST(LanguageTagMatcherTest, ChineseLanguagesChina) {
+  std::vector<LanguageTag> supported = {GetKnownLanguageTag("zh-TW"),
+                                        GetKnownLanguageTag("zh-CN")};
   LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
 
-  EXPECT_THAT(matcher.Match(language_tags::CHINESE()),
-              Optional(language_tags::CHINA_CHINESE()));
+  EXPECT_THAT(matcher.Match(GetKnownLanguageTag("zh")),
+              Optional(GetKnownLanguageTag("zh-CN")));
+}
+
+TEST(LanguageTagMatcherTest, ChineseLanguagesHantToTaiwan) {
+  std::vector<LanguageTag> supported = {GetKnownLanguageTag("zh-TW"),
+                                        GetKnownLanguageTag("zh-HK"),
+                                        GetKnownLanguageTag("zh-CN")};
+  LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
+
+  EXPECT_THAT(matcher.Match(GetKnownLanguageTag("zh-Hant")),
+              Optional(GetKnownLanguageTag("zh-TW")));
 }
 
 TEST(LanguageTagMatcherTest, TaiwanChineseDoesNotMatchChinese) {
-  std::vector<LanguageTag> supported = {language_tags::TAIWAN_CHINESE()};
+  std::vector<LanguageTag> supported = {GetKnownLanguageTag("zh-TW")};
   LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
 
-  EXPECT_THAT(matcher.Match(language_tags::CHINESE()), Eq(std::nullopt));
+  EXPECT_THAT(matcher.Match(GetKnownLanguageTag("zh")), Eq(std::nullopt));
 }
 
 TEST(LanguageTagMatcherTest, ChineseRegions_ZhTwSupported) {
@@ -212,12 +275,12 @@ TEST(LanguageTagMatcherTest, MultipleChineseRegions) {
 TEST(LanguageTagMatcherTest, ComplexFallback) {
   // zh-Hans-CN should fallback to zh (which is usually zh-Hans)
   {
-    std::vector<LanguageTag> supported = {language_tags::CHINESE()};
+    std::vector<LanguageTag> supported = {GetKnownLanguageTag("zh")};
     LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
 
     LanguageTag lc_zh_hans_cn = LanguageTagOrDie("zh-Hans-CN");
     EXPECT_THAT(matcher.Match(lc_zh_hans_cn),
-                Optional(language_tags::CHINESE()));
+                Optional(GetKnownLanguageTag("zh")));
   }
 
   // zh-Hant-HK should fallback to zh-Hant
@@ -243,10 +306,10 @@ TEST(LanguageTagMatcherTest, LikelySubtagsMatch) {
 }
 
 TEST(LanguageTagMatcherTest, LikelySubtagsNoMatch) {
-  std::vector<LanguageTag> supported = {language_tags::ENGLISH_UK()};
+  std::vector<LanguageTag> supported = {GetKnownLanguageTag("en-GB")};
   LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
   EXPECT_THAT(matcher.Match(LanguageTagOrDie("en")),
-              Optional(language_tags::ENGLISH_UK()));
+              Optional(GetKnownLanguageTag("en-GB")));
 }
 
 TEST(LanguageTagMatcherTest, SerboCroatian) {
@@ -254,32 +317,31 @@ TEST(LanguageTagMatcherTest, SerboCroatian) {
   // Serbo-Croatian (sh) is an older macro-language tag, often mapped to
   // sr-Latn.
 
-  // Test 1: Preferred "sh" (Serbo-Croatian), Supported "sr-Latn".
-  // "sh" is canonicalized to "sr-Latn" by LanguageTagConverter/Rust bridge.
+  // Test 1: Preferred "sh" (Serbo-Croatian), Supported "sh".
+  // "sh" is no longer canonicalized to "sr-Latn" by LanguageTagConverter.
   {
-    std::vector<LanguageTag> supported = {language_tags::SERBO_CROATIAN()};
+    std::vector<LanguageTag> supported = {GetKnownLanguageTag("sh")};
     LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
     LanguageTag lc_sh = LanguageTagOrDie("sh");
-    // "sh" matches "sr-Latn" because LanguageTagConverter canonicalizes it.
-    EXPECT_THAT(matcher.Match(lc_sh), Optional(LanguageTagOrDie("sr-Latn")));
+    EXPECT_THAT(matcher.Match(lc_sh), Optional(LanguageTagOrDie("sh")));
   }
 
-  // Test 2: Preferred "sr-Latn" (Serbo-Croatian), Supported "hr" (Croatian).
+  // Test 2: Preferred "sr-Latn" (Serbian Latin), Supported "hr" (Croatian).
   // These are distinct languages in ICU/CLDR, so they should NOT match
   // via fallback or maximization.
   {
-    std::vector<LanguageTag> supported = {language_tags::CROATIAN()};
+    std::vector<LanguageTag> supported = {GetKnownLanguageTag("hr")};
     LanguageTagMatcher matcher = LanguageTagMatcher::Create(supported);
-    EXPECT_THAT(matcher.Match(language_tags::SERBO_CROATIAN()),
+    EXPECT_THAT(matcher.Match(GetKnownLanguageTag("sr-Latn")),
                 Eq(std::nullopt));
   }
 
   // Test 3: Preferred "sr-HR" (Serbian as spoken in Croatia), Supported
-  // "sr-Latn" (Serbian). "sr-HR" fallsback to "sr", but it is not able to
+  // "sr-Latn" (Serbian Latin). "sr-HR" fallsback to "sr", but it is not able to
   // matcch "sr-Latn".
   {
     LanguageTagMatcher matcher =
-        LanguageTagMatcher::Create({language_tags::SERBO_CROATIAN()});
+        LanguageTagMatcher::Create({GetKnownLanguageTag("sr-Latn")});
     EXPECT_THAT(matcher.Match(LanguageTagOrDie("sr-HR")), Eq(std::nullopt));
   }
 }
@@ -344,4 +406,4 @@ TEST(LanguageTagMatcherTest, ChineseVariantsAndExtensions) {
 }
 
 }  // namespace
-}  // namespace base
+}  // namespace base::i18n

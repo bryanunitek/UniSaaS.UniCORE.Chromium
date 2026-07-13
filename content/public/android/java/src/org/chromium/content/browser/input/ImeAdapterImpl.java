@@ -426,6 +426,15 @@ public class ImeAdapterImpl
         getStylusWritingImeCallback().handleStylusWritingGestureAction(-1, gestureData);
     }
 
+    /** Signals to Blink to cancel and clear any active handwriting preview spans. */
+    public void cancelPreviewGesture() {
+        if (mNativeImeAdapterAndroid == 0) {
+            Log.e(TAG, "cancelPreviewGesture called after native adapter was destroyed.");
+            return;
+        }
+        ImeAdapterImplJni.get().cancelPreviewGesture(mNativeImeAdapterAndroid);
+    }
+
     void handleGesture(OngoingGesture request) {
         mOngoingGestures.put(request.getId(), request);
         StylusWritingGestureData gestureData = request.getGestureData();
@@ -617,6 +626,11 @@ public class ImeAdapterImpl
         if (mCursorAnchorInfoController != null) {
             mCursorAnchorInfoController.setInputMethodManagerWrapper(immw);
         }
+    }
+
+    @Override
+    public InputMethodManagerWrapper getInputMethodManagerWrapper() {
+        return mInputMethodManagerWrapper;
     }
 
     @Override
@@ -1189,6 +1203,12 @@ public class ImeAdapterImpl
 
     public boolean performEditorAction(int actionCode) {
         if (!isValid()) return false;
+
+        // Only hide the keyboard on DONE if fullscreen IME is allowed/enabled.
+        // See crbug.com/498324340.
+        if (actionCode == EditorInfo.IME_ACTION_DONE && mAllowFullscreenIme) {
+            hideKeyboard();
+        }
 
         // If mTextInputAction has been specified (indicating an enterKeyHint
         // has been specified in the HTML) then we do will send the enter key
@@ -2228,6 +2248,8 @@ public class ImeAdapterImpl
         // Stylus Writing
         void handleStylusWritingGestureAction(
                 long nativeImeAdapterAndroid, int id, ByteBuffer gestureData);
+
+        void cancelPreviewGesture(long nativeImeAdapterAndroid);
 
         void performSpellCheck(long nativeImeAdapterAndroid);
 

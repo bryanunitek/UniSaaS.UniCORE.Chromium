@@ -8,6 +8,9 @@ import("//third_party/libprotobuf-mutator/fuzzable_proto_library.gni")
 
 if (safe_browsing_mode != 0) {
   source_set("phishing_classifier") {
+    _configs = configs
+    configs = []
+    configs = [ "//third_party/tflite:tflite_shim_config" ] + _configs
     sources = [
       "murmurhash3_util.cc",
       "murmurhash3_util.h",
@@ -33,7 +36,6 @@ if (safe_browsing_mode != 0) {
     deps = [
       "//cc/paint",
       "//components/paint_preview/common",
-      "//components/safe_browsing:buildflags",
       "//components/safe_browsing/content/common:interfaces",
       "//components/safe_browsing/content/renderer",
       "//components/safe_browsing/core/common",
@@ -43,7 +45,6 @@ if (safe_browsing_mode != 0) {
       "//components/safe_browsing/core/common/proto:client_model_proto",
       "//components/safe_browsing/core/common/proto:csd_proto",
       "//content/public/renderer",
-      "//crypto",
       "//mojo/public/mojom/base:protobuf_support",
       "//skia",
       "//third_party/blink/public:blink_headers",
@@ -82,7 +83,6 @@ if (safe_browsing_mode != 0) {
         "//skia",
         "//third_party/libprotobuf-mutator",
       ]
-      deps += [ "//components/safe_browsing/content/browser:client_side_detection_service" ]
 
       # TODO(crbug.com/505034799): Migrate to FUZZ_TEST.
       is_fuzztest_compatible = false

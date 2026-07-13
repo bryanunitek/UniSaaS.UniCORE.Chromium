@@ -45,7 +45,6 @@
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_menu_model.h"
 #include "chrome/browser/web_applications/external_install_options.h"
-#include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
@@ -417,8 +416,7 @@ IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, DISABLED_OpenLinkInNewTab) {
 #define MAYBE_CtrlClickLink CtrlClickLink
 #endif
 IN_PROC_BROWSER_TEST_P(HostedOrWebAppTest, MAYBE_CtrlClickLink) {
-  if (apps::features::IsNavigationCapturingReimplEnabled() &&
-      GetParam() == AppType::WEB_APP) {
+  if (GetParam() == AppType::WEB_APP) {
     GTEST_SKIP() << "Ctrl-click tests for web apps are thoroughly handled in "
                     "WebAppLinkCapturingParameterizedBrowserTest";
   }
@@ -1008,7 +1006,7 @@ class HostedAppProcessModelTest : public HostedOrWebAppTest {
 
     should_swap_for_cross_site_ = content::AreAllSitesIsolatedForTesting();
 
-    process_map_ = extensions::ProcessMap::Get(browser()->profile());
+    process_map_ = extensions::ProcessMap::Get(browser()->GetProfile());
 
     same_dir_url_ = embedded_test_server()->GetURL("app.site.test",
                                                    "/frame_tree/simple.htm");
@@ -1928,7 +1926,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
                                              url::Origin::Create(bar_app_url)));
 
   // Both processes should still be app processes.
-  auto* process_map = extensions::ProcessMap::Get(browser()->profile());
+  auto* process_map = extensions::ProcessMap::Get(browser()->GetProfile());
   EXPECT_TRUE(process_map->Contains(foo_process->GetDeprecatedID()));
   EXPECT_TRUE(process_map->Contains(bar_process->GetDeprecatedID()));
 }
@@ -1990,7 +1988,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessPDFTest,
   EXPECT_EQ(foo_app_url, foo_contents->GetLastCommittedURL());
 
   // Ensure the app URL loaded in a hosted app process.
-  auto* process_map = extensions::ProcessMap::Get(browser()->profile());
+  auto* process_map = extensions::ProcessMap::Get(browser()->GetProfile());
   content::RenderFrameHost* app_frame = foo_contents->GetPrimaryMainFrame();
   EXPECT_TRUE(
       process_map->Contains(app_frame->GetProcess()->GetDeprecatedID()));
@@ -2190,7 +2188,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppSitePerProcessTest,
   scoped_refptr<content::SiteInstance> foo_site_instance =
       web_contents->GetPrimaryMainFrame()->GetSiteInstance();
   auto* foo_process = foo_site_instance->GetProcess();
-  auto* process_map = extensions::ProcessMap::Get(browser()->profile());
+  auto* process_map = extensions::ProcessMap::Get(browser()->GetProfile());
   EXPECT_TRUE(process_map->Contains(foo_process->GetDeprecatedID()));
 
   // At this point the main frame process should have access to foo.com data
@@ -2332,7 +2330,7 @@ IN_PROC_BROWSER_TEST_P(HostedAppProcessModelTest,
   EXPECT_NE(foo_process, bar_process);
 
   // Ensure all tabs are in app processes.
-  auto* process_map = extensions::ProcessMap::Get(browser()->profile());
+  auto* process_map = extensions::ProcessMap::Get(browser()->GetProfile());
   EXPECT_TRUE(process_map->Contains(foo_process->GetDeprecatedID()));
   EXPECT_TRUE(process_map->Contains(bar_process->GetDeprecatedID()));
 

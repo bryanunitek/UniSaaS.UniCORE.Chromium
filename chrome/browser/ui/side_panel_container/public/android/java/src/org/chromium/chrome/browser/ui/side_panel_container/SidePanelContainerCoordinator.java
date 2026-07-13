@@ -7,10 +7,10 @@ package org.chromium.chrome.browser.ui.side_panel_container;
 import android.graphics.Rect;
 import android.view.View;
 
-import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ui.side_panel.SidePanelCoordinatorAndroid;
+import org.chromium.chrome.browser.ui.side_panel_container.dev.SidePanelDevFeature;
 
 /** Coordinator of the side panel container UI. */
 @NullMarked
@@ -20,14 +20,17 @@ public interface SidePanelContainerCoordinator {
     int MIN_WINDOW_WIDTH_DP_FOR_WIDE_SIDE_PANEL = 1200;
 
     /**
-     * Minimum side panel width.
+     * Minimum side panel <i>content</i> width.
      *
-     * <p>If the window width can't accommodate both (minimum side panel width) and (minimum {@code
-     * WebContents} width), the side panel will be closed.
+     * <p>The minimum side panel <i>container</i> width should be (the minimum content width + the
+     * container's total horizontal padding).
+     *
+     * <p>If the window width can't accommodate both (minimum side panel container width) and
+     * (minimum {@code WebContents} width), the side panel will be closed.
      *
      * @see org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator#MIN_WEB_CONTENTS_WIDTH_DP
      */
-    int MIN_SIDE_PANEL_WIDTH_DP = 200;
+    int MIN_SIDE_PANEL_CONTENT_WIDTH_DP = 200;
 
     /**
      * Fixed, narrow side panel width for when the window can accommodate both the side panel and
@@ -58,38 +61,51 @@ public interface SidePanelContainerCoordinator {
      *
      * @param sidePanelCoordinatorAndroid For communicating with the native {@code
      *     SidePanelCoordinatorAndroid}, which manages states for all side panel features.
+     * @param sidePanelDevFeature For communicating with the dev feature. This should always be null
+     *     in production.
      */
-    void init(SidePanelCoordinatorAndroid sidePanelCoordinatorAndroid);
+    void init(
+            SidePanelCoordinatorAndroid sidePanelCoordinatorAndroid,
+            @Nullable SidePanelDevFeature sidePanelDevFeature);
 
     /**
-     * Populates {@link SidePanelContent} into this side panel container.
+     * Starts opening this side panel container with the given {@link SidePanelContent}.
      *
-     * <p>This method is intended for a side panel feature.
-     *
-     * <p>If the container is closed, calling this method will show the container. If the container
-     * already has content, the existing content will be replaced with no animation.
+     * <p>This method is intended for a side panel feature and should only be called when the side
+     * panel isn't shown.
      *
      * @param content Wrapper object for the content to show in the side panel.
-     * @param onAnimationFinishedCallback Callback to invoke after content is populated.
      * @param startingBounds Optional bounds for the animation to start from.
      * @param suppressAnimations Whether or not to suppress animations for this populate request.
      */
-    void populateContent(
-            SidePanelContent content,
-            Callback<@Nullable Void> onAnimationFinishedCallback,
-            @Nullable Rect startingBounds,
-            boolean suppressAnimations);
+    void startOpeningPanel(
+            SidePanelContent content, @Nullable Rect startingBounds, boolean suppressAnimations);
 
     /**
-     * Removes {@link SidePanelContent} from this side panel container and closes the container.
+     * Starts closing this side panel container.
      *
-     * <p>This method is for a side panel feature. Calling it will also close the container.
+     * <p>This method is for a side panel feature.
      *
-     * @param onAnimationFinishedCallback Callback to invoke after content is removed.
      * @param suppressAnimations Whether or not to suppress animations for this removal.
      */
-    void removeContentAndClose(
-            Callback<@Nullable Void> onAnimationFinishedCallback, boolean suppressAnimations);
+    void startClosingPanel(boolean suppressAnimations);
+
+    /**
+     * Starts replacing the {@link SidePanelContent} inside this container.
+     *
+     * <p>This method is for a side panel feature and should only be called when the side panel is
+     * shown.
+     *
+     * <p>Note that replacing the content shouldn't have animations, but it still needs to be async
+     * to make the UI smooth. For example, if the new content is a {@code ThinWebView}, we need to
+     * wait for the first frame of its web contents before removing the old content.
+     *
+     * @param newContent Wrapper object for the new content to show in the side panel.
+     */
+    void startReplacingPanelContent(SidePanelContent newContent);
+
+    /** Immediately ends all ongoing animations. */
+    void endAnimations();
 
     /** Returns whether the given {@link SidePanelContent} is shown in this side panel container. */
     boolean isShowing(SidePanelContent sidePanelContent);
@@ -99,4 +115,7 @@ public interface SidePanelContainerCoordinator {
 
     /** Destroys all objects owned by this coordinator. */
     void destroy();
+
+    /** Returns the main {@link View} for testing. */
+    View getViewForTesting();
 }

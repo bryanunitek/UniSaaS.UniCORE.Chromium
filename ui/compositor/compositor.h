@@ -231,17 +231,6 @@ class COMPOSITOR_EXPORT Compositor
   // from changes to layer properties.
   void ScheduleRedrawRect(const gfx::Rect& damage_rect);
 
-#if BUILDFLAG(IS_WIN)
-  // Until this is called with |should| true then both DisableSwapUntilResize()
-  // and ReenableSwap() do nothing.
-  void SetShouldDisableSwapUntilResize(bool should);
-
-  // Attempts to immediately swap a frame with the current size if possible,
-  // then disables swapping on this surface until it is resized.
-  void DisableSwapUntilResize();
-  void ReenableSwap();
-#endif
-
   // Sets the compositor's device scale factor and size.
   void SetScaleAndSize(float scale,
                        const gfx::Size& size_in_pixel,
@@ -256,8 +245,6 @@ class COMPOSITOR_EXPORT Compositor
   // Set the current CGDirectDisplayID and update the private client.
   void SetVSyncDisplayID(const int64_t display_id);
   int64_t display_id() const;
-
-  void RefreshRateChangedOnSameDisplay();
 #endif
 
   const gfx::DisplayColorSpaces& display_color_spaces() const {
@@ -563,6 +550,12 @@ class COMPOSITOR_EXPORT Compositor
     external_begin_frame_controler_client_factory_ = factory;
   }
 
+  // Sets wait_for_all_frame_sinks in RootCompositorFrameSinkParams.
+  void set_wait_for_all_frame_sinks(bool wait) {
+    wait_for_all_frame_sinks_ = wait;
+  }
+  bool wait_for_all_frame_sinks() const { return wait_for_all_frame_sinks_; }
+
   // TODO(crbug.com/389771428) - Right now the local property tree is
   // an incomplete thing that only partially matches the one the LayerTreeHost
   // actually uses. Eventually we want to make it completely match and then
@@ -609,6 +602,7 @@ class COMPOSITOR_EXPORT Compositor
       external_begin_frame_controller_;
   raw_ptr<ExternalBeginFrameControllerClientFactory, DanglingUntriaged>
       external_begin_frame_controler_client_factory_;
+  bool wait_for_all_frame_sinks_ = true;
 
   // Used to hold on to IssueExternalBeginFrame(NoAck) arguments if
   // |external_begin_frame_controller_| isn't ready yet.
@@ -701,13 +695,6 @@ class COMPOSITOR_EXPORT Compositor
   CompositorLockManager lock_manager_;
 
   std::unique_ptr<ScrollInputHandler> scroll_input_handler_;
-
-#if BUILDFLAG(IS_WIN)
-  bool should_disable_swap_until_resize_ = false;
-#endif
-
-  // Set in DisableSwapUntilResize and reset when a resize happens.
-  bool disabled_swap_until_resize_ = false;
 
   bool animations_are_enabled_ = true;
 

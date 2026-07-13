@@ -23,7 +23,6 @@ import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -66,9 +65,11 @@ import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.MockTabAttributes;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabDestroyStatus;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab.TabState;
 import org.chromium.chrome.browser.tab.TabStateAttributes;
+import org.chromium.chrome.browser.tab.TabStateAttributesRegistry;
 import org.chromium.chrome.browser.tab.TabStateExtractor;
 import org.chromium.chrome.browser.tab.WebContentsState;
 import org.chromium.chrome.browser.tab.state.ShoppingPersistedTabData;
@@ -86,12 +87,12 @@ import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.chrome.browser.tabwindow.WindowId;
 import org.chromium.chrome.browser.ui.RootUiCoordinator;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuPropertiesDelegate;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabCreator;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabCreatorManager;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModelSelector;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
 import java.io.File;
@@ -111,8 +112,6 @@ public class TabPersistentStoreTest {
     // Test activity type that does not restore tab on cold restart.
     // Any type other than ActivityType.TABBED works.
     private static final @ActivityType int NO_RESTORE_TYPE = ActivityType.CUSTOM_TAB;
-
-    @Rule public final ChromeBrowserTestRule mBrowserTestRule = new ChromeBrowserTestRule();
 
     private ChromeActivity mChromeActivity;
 
@@ -326,6 +325,7 @@ public class TabPersistentStoreTest {
 
     @Before
     public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         TabPersistentStoreImpl.resetDeferredStartupCompleteForTesting();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -346,7 +346,9 @@ public class TabPersistentStoreTest {
                                 protected void createTabModels() {}
 
                                 @Override
-                                protected void destroyTabModels() {}
+                                protected @TabDestroyStatus int destroyTabModels() {
+                                    return TabDestroyStatus.NO_SHUTDOWN;
+                                }
 
                                 @Override
                                 protected LaunchCauseMetrics createLaunchCauseMetrics() {
@@ -420,7 +422,9 @@ public class TabPersistentStoreTest {
                             mChromeActivity, ActivityState.DESTROYED);
                     ApplicationStatus.unregisterActivityStateListener(mActivityStateListener);
                 });
-        mMockDirectory.tearDown();
+        if (mMockDirectory != null) {
+            mMockDirectory.tearDown();
+        }
     }
 
     private TabPersistentStoreImpl buildTabPersistentStore(
@@ -703,7 +707,8 @@ public class TabPersistentStoreTest {
         CallbackHelper helper = new CallbackHelper();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    TabStateAttributes.from(tabs[0])
+                    TabStateAttributesRegistry.getAttributesFor(
+                                    tabs[0], TabPersistentStoreImpl.class)
                             .setStateForTesting(TabStateAttributes.DirtinessState.DIRTY);
                     store.getTabsToSaveForTesting().add(tabs[0]);
                     store.saveState();

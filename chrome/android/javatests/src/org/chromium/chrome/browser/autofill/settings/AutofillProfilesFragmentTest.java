@@ -75,11 +75,13 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.base.test.util.UserActionTester;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AndroidAutofillAvailabilityStatus;
@@ -91,7 +93,7 @@ import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManager.Entity
 import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManagerFactory;
 import org.chromium.chrome.browser.autofill.editors.address.AddressEditorMediator;
 import org.chromium.chrome.browser.autofill.editors.address.EditorDialogView;
-import org.chromium.chrome.browser.autofill.options.AutofillOptionsFragment;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
 import org.chromium.chrome.browser.device_reauth.ReauthenticatorBridge;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherFactory;
@@ -118,6 +120,7 @@ import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.sync.SyncService;
 import org.chromium.components.sync.UserSelectableType;
 import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -216,6 +219,7 @@ public class AutofillProfilesFragmentTest {
     @Mock private EntityDataManager mEntityDataManager;
 
     private AutofillTestHelper mHelper;
+    private UserActionTester mUserActionTester;
 
     @Before
     public void setUp() throws TimeoutException {
@@ -225,6 +229,9 @@ public class AutofillProfilesFragmentTest {
         EntityDataManagerFactory.setInstanceForTesting(mEntityDataManager);
         when(mEntityDataManager.isWalletPublicPassStorageEnabled()).thenReturn(true);
         when(mEntityDataManager.canListEntityInstancesInSettings()).thenReturn(true);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> SyncServiceFactory.setInstanceForTesting(mSyncService));
+        when(mSyncService.getSelectedTypes()).thenReturn(Collections.emptySet());
         mSettingsActivityTestRule.startSettingsActivity();
         mHelper = new AutofillTestHelper();
         mHelper.setProfile(sLocalOrSyncProfile);
@@ -275,10 +282,12 @@ public class AutofillProfilesFragmentTest {
                             AndroidAutofillAvailabilityStatus.SETTING_TURNED_OFF);
                 });
         HelpAndFeedbackLauncherFactory.setInstanceForTesting(mHelpAndFeedbackLauncher);
+        mUserActionTester = new UserActionTester();
     }
 
     @After
     public void tearDown() throws TimeoutException {
+        mUserActionTester.tearDown();
         Intents.release();
         mHelper.clearAllDataForTesting();
     }
@@ -317,6 +326,7 @@ public class AutofillProfilesFragmentTest {
         AutofillProfileEditorPreference addedProfile = findPreference("Alice Doe");
         assertNotNull(addedProfile);
         assertEquals("111 Added St, 90291", addedProfile.getSummary());
+        assertTrue(mUserActionTester.getActions().contains("AutofillAddressesAdded"));
     }
 
     /**
@@ -606,6 +616,7 @@ public class AutofillProfilesFragmentTest {
         assertNotNull(editedProfile);
         assertEquals("111 Edited St, 90291", editedProfile.getSummary());
         assertNull(findPreference("John Doe"));
+        assertTrue(mUserActionTester.getActions().contains("AutofillAddressesEdited"));
     }
 
     @Test
@@ -683,6 +694,7 @@ public class AutofillProfilesFragmentTest {
         // Check if the preferences are updated correctly.
         checkPreferenceCount(7 /* One toggle + one add button + five profiles. */);
         assertNotNull(findPreference("Account Updated #2"));
+        assertTrue(mUserActionTester.getActions().contains("AutofillAddressesEdited"));
     }
 
     @Test
@@ -2180,8 +2192,7 @@ public class AutofillProfilesFragmentTest {
 
     private void setUpMockSyncService(Set<Integer> selectedTypes) {
         ThreadUtils.runOnUiThreadBlocking(
-                () -> SyncServiceFactory.setInstanceForTesting(mSyncService));
-        when(mSyncService.getSelectedTypes()).thenReturn(selectedTypes);
+                () -> when(mSyncService.getSelectedTypes()).thenReturn(selectedTypes));
     }
 
     @Test
@@ -2409,6 +2420,7 @@ public class AutofillProfilesFragmentTest {
 
     @Test
     @SmallTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/532514140
     public void testHelpMenuTriggersAutofillHelp() {
         onView(withId(R.id.menu_id_targeted_help)).perform(click());
 

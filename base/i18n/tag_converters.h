@@ -12,13 +12,20 @@
 
 #include "base/containers/fixed_flat_set.h"
 #include "base/i18n/base_i18n_export.h"
+#include "base/i18n/internal/bcp47_parser.h"
 #include "base/i18n/internal/icu_bridge.rs.h"
+#include "base/i18n/internal/immutable_string.h"
 #include "base/i18n/language_tag.h"
 
 namespace base {
-namespace i18n::internal {
+class Value;
+}
+
+namespace base::i18n_internal {
 struct Icu4xLocale;
 }
+
+namespace base::i18n {
 
 // Helper class for parsing and validating language tags.
 //
@@ -55,13 +62,24 @@ class BASE_I18N_EXPORT LanguageTagConverter {
   std::optional<LanguageTag> FromString(std::string_view tag) const;
   // Internal usage.
   LanguageTag FromIcu4xLocale(
-      const base::i18n::internal::Icu4xLocale& icu_locale) const;
+      const i18n_internal::Icu4xLocale& icu_locale) const;
 
  private:
   class Impl;
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace base
+// Converts a LanguageTag to a string base::Value.
+BASE_I18N_EXPORT base::Value LanguageTagToValue(const LanguageTag& tag);
+
+// Parses a LanguageTag from a base::Value.
+// Returns std::nullopt if `value` is nullptr, not a string Value, or not a
+// valid BCP 47 language tag.
+BASE_I18N_EXPORT std::optional<LanguageTag> ValueToLanguageTag(
+    const base::Value* value);
+BASE_I18N_EXPORT std::optional<LanguageTag> ValueToLanguageTag(
+    const base::Value& value);
+
+}  // namespace base::i18n
 
 #endif  // BASE_I18N_TAG_CONVERTERS_H_

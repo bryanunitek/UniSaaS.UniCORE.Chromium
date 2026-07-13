@@ -144,11 +144,6 @@ inline constexpr char kOobeStartTime[] = "oobe.oobe_start_time";
 // pref is used to hold that consent across browser restart.
 inline constexpr char kOobeGuestMetricsEnabled[] = "oobe.guest_metrics_enabled";
 
-// Integer pref to hold guest metrics reporting level captured during guest
-// ToS/OOBE.
-inline constexpr char kOobeGuestMetricsReportingLevel[] =
-    "oobe.guest_metrics_reporting_level";
-
 // Indicates that the reven board was updated from CloudReady to Flex.
 // TODO(https://crbug.com/1322394): deprecate this pref once update from
 // CloudReady won't be available anymore.
@@ -251,6 +246,16 @@ inline constexpr char kEduCoexistenceArcMigrationCompleted[] =
 
 // Preference storing Easy Unlock pairing data.
 inline constexpr char kEasyUnlockPairing[] = "easy_unlock.pairing";
+
+// A Local State enum pref that controls the behavior when a user's online
+// password does not match the local cryptohome password (e.g. after an online
+// password change).
+// The following values are supported:
+// 0: Default behavior. The user is prompted to enter their old password or
+//    use the cryptohome recovery flow.
+// 1: AutoWipe. The user's cryptohome is automatically wiped and recreated.
+inline constexpr char kDeviceOnlinePasswordMismatchBehavior[] =
+    "device_online_password_mismatch_behavior";
 
 }  // namespace ash::prefs
 

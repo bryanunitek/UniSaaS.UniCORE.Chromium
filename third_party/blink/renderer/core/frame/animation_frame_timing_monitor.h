@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/timing/animation_frame_timing_info.h"
+#include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
@@ -112,9 +113,12 @@ class CORE_EXPORT AnimationFrameTimingMonitor final
   void DidFinishSyncXHR(base::TimeDelta);
   void WillHandleInput(LocalFrame*);
 
+  void MarkConditional(const AtomicString& name, base::TimeTicks start_time);
+
  private:
   Member<AnimationFrameTimingInfo> current_frame_timing_info_;
   HeapVector<Member<ScriptTimingInfo>> current_scripts_;
+  HeapVector<Member<ConditionalMarkInfo>> conditional_marks_;
   viz::BeginFrameId current_begin_frame_id_;
   struct PendingScriptInfo {
     ScriptTimingInfo::InvokerType invoker_type;
@@ -190,6 +194,10 @@ class CORE_EXPORT AnimationFrameTimingMonitor final
   bool did_see_ui_events_ = false;
   WeakMember<LocalFrame> frame_handling_input_;
   bool multiple_focused_frames_in_same_task_ = false;
+
+  WeakMember<LocalDOMWindow> task_attributed_window_;
+  bool task_has_multiple_attributed_windows_ = false;
+  bool task_longtask_reported_ = false;
 
   unsigned entry_point_depth_ = 0;
 

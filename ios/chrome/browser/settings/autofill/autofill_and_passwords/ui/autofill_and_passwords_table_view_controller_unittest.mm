@@ -6,6 +6,8 @@
 
 #import "base/apple/foundation_util.h"
 #import "base/test/scoped_feature_list.h"
+#import "base/test/with_feature_override.h"
+#import "components/autofill/core/common/autofill_features.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/signin_promo_view_configurator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/table_view_signin_promo_item.h"
@@ -21,11 +23,11 @@
 namespace {
 
 class AutofillAndPasswordsTableViewControllerTest
-    : public LegacyChromeTableViewControllerTest {
+    : public base::test::WithFeatureOverride,
+      public LegacyChromeTableViewControllerTest {
  protected:
-  AutofillAndPasswordsTableViewControllerTest() {
-    feature_list_.InitAndEnableFeature(kYourSavedInfoSettingsPageIos);
-  }
+  AutofillAndPasswordsTableViewControllerTest()
+      : base::test::WithFeatureOverride(kYourSavedInfoSettingsPageIos) {}
 
   void SetUp() override {
     LegacyChromeTableViewControllerTest::SetUp();
@@ -37,11 +39,96 @@ class AutofillAndPasswordsTableViewControllerTest
         initWithStyle:UITableViewStylePlain];
   }
 
- private:
-  base::test::ScopedFeatureList feature_list_;
+  void CheckTrailingDetailItemTextWithId(int expected_trailing_detail_text_id,
+                                         int section_id,
+                                         int item_id) {
+    TableViewDetailIconItem* item =
+        base::apple::ObjCCastStrict<TableViewDetailIconItem>(
+            GetTableViewItem(section_id, item_id));
+    EXPECT_NSEQ(l10n_util::GetNSString(expected_trailing_detail_text_id),
+                item.trailingDetailText);
+  }
 };
 
-TEST_F(AutofillAndPasswordsTableViewControllerTest, TestModel) {
+TEST_P(AutofillAndPasswordsTableViewControllerTest, TestModel) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{autofill::features::kAutofillAiWithDataSchema,
+                            autofill::features::kAutofillAmbientAutofill},
+      /*disabled_features=*/{});
+
+  AutofillAndPasswordsTableViewController* view_controller =
+      base::apple::ObjCCastStrict<AutofillAndPasswordsTableViewController>(
+          controller());
+
+  [view_controller setPasswordsEnabled:YES];
+  [view_controller setAutofillCreditCardEnabled:NO];
+  [view_controller setAutofillProfileEnabled:YES];
+  [view_controller setIdentityDocsEnabled:YES];
+  [view_controller setTravelInfoEnabled:NO];
+  [view_controller setShoppingEnabled:YES];
+  [view_controller setShouldShowAutofillAIFeatures:YES];
+
+  [view_controller loadModel];
+
+  EXPECT_EQ(1, NumberOfSections());
+  EXPECT_EQ(7, NumberOfItemsInSection(0));
+
+  if (IsParamFeatureEnabled()) {
+    CheckDetailItemTextWithIds(
+        IDS_IOS_PASSWORD_MANAGER,
+        IDS_AUTOFILL_AND_PASSWORDS_PASSWORD_MANAGER_SUMMARY, 0, 0);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 0);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENTS_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_PAYMENTS_SUMMARY, 0,
+                               1);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_OFF, 0, 1);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_CONTACT_INFO_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_CONTACT_INFO_SUMMARY,
+                               0, 2);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 2);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_IDENTITY_DOCS_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_IDENTITY_DOCS_SUMMARY,
+                               0, 3);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 3);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_TRAVEL_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_TRAVEL_SUMMARY, 0, 4);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_OFF, 0, 4);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_SHOPPING_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_SHOPPING_SUMMARY, 0,
+                               5);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 5);
+  } else {
+    CheckDetailItemTextWithIds(IDS_IOS_PASSWORD_MANAGER, IDS_IOS_SETTING_ON, 0,
+                               0);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENT_METHODS,
+                               IDS_IOS_SETTING_OFF, 0, 1);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_ADDRESSES_SETTINGS_TITLE,
+                               IDS_IOS_SETTING_ON, 0, 2);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_IDENTITY_DOCS_TITLE,
+                               IDS_IOS_SETTING_ON, 0, 3);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_TRAVEL_TITLE, IDS_IOS_SETTING_OFF,
+                               0, 4);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_SHOPPING_TITLE, IDS_IOS_SETTING_ON,
+                               0, 5);
+  }
+
+  CheckTextCellTextAndDetailText(
+      l10n_util::GetNSString(IDS_IOS_SETTINGS_AUTOFILL_SETTINGS), nil, 0, 6);
+}
+
+TEST_P(AutofillAndPasswordsTableViewControllerTest,
+       TestShoppingInfoHiddenWhenAmbientAutofillDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{autofill::features::kAutofillAiWithDataSchema},
+      /*disabled_features=*/{autofill::features::kAutofillAmbientAutofill});
+
   AutofillAndPasswordsTableViewController* view_controller =
       base::apple::ObjCCastStrict<AutofillAndPasswordsTableViewController>(
           controller());
@@ -58,22 +145,53 @@ TEST_F(AutofillAndPasswordsTableViewControllerTest, TestModel) {
   EXPECT_EQ(1, NumberOfSections());
   EXPECT_EQ(6, NumberOfItemsInSection(0));
 
-  CheckDetailItemTextWithIds(IDS_IOS_PASSWORD_MANAGER, IDS_IOS_SETTING_ON, 0,
-                             0);
-  CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENTS_TITLE, IDS_IOS_SETTING_OFF,
-                             0, 1);
-  CheckDetailItemTextWithIds(IDS_AUTOFILL_CONTACT_INFO_TITLE,
-                             IDS_IOS_SETTING_ON, 0, 2);
-  CheckDetailItemTextWithIds(IDS_AUTOFILL_IDENTITY_DOCS_TITLE,
-                             IDS_IOS_SETTING_ON, 0, 3);
-  CheckDetailItemTextWithIds(IDS_AUTOFILL_TRAVEL_TITLE, IDS_IOS_SETTING_OFF, 0,
-                             4);
+  if (IsParamFeatureEnabled()) {
+    CheckDetailItemTextWithIds(
+        IDS_IOS_PASSWORD_MANAGER,
+        IDS_AUTOFILL_AND_PASSWORDS_PASSWORD_MANAGER_SUMMARY, 0, 0);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 0);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENTS_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_PAYMENTS_SUMMARY, 0,
+                               1);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_OFF, 0, 1);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_CONTACT_INFO_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_CONTACT_INFO_SUMMARY,
+                               0, 2);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 2);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_IDENTITY_DOCS_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_IDENTITY_DOCS_SUMMARY,
+                               0, 3);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 3);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_TRAVEL_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_TRAVEL_SUMMARY, 0, 4);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_OFF, 0, 4);
+  } else {
+    CheckDetailItemTextWithIds(IDS_IOS_PASSWORD_MANAGER, IDS_IOS_SETTING_ON, 0,
+                               0);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENT_METHODS,
+                               IDS_IOS_SETTING_OFF, 0, 1);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_ADDRESSES_SETTINGS_TITLE,
+                               IDS_IOS_SETTING_ON, 0, 2);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_IDENTITY_DOCS_TITLE,
+                               IDS_IOS_SETTING_ON, 0, 3);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_TRAVEL_TITLE, IDS_IOS_SETTING_OFF,
+                               0, 4);
+  }
+
   CheckTextCellTextAndDetailText(
       l10n_util::GetNSString(IDS_IOS_SETTINGS_AUTOFILL_SETTINGS), nil, 0, 5);
 }
 
-TEST_F(AutofillAndPasswordsTableViewControllerTest,
-       TestIdentityDocsAndTravelInfoHidden) {
+TEST_P(AutofillAndPasswordsTableViewControllerTest,
+       TestIdentityDocsTravelInfoAndShoppingInfoHidden) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      autofill::features::kAutofillAiWithDataSchema);
+
   AutofillAndPasswordsTableViewController* view_controller =
       base::apple::ObjCCastStrict<AutofillAndPasswordsTableViewController>(
           controller());
@@ -90,17 +208,35 @@ TEST_F(AutofillAndPasswordsTableViewControllerTest,
   EXPECT_EQ(1, NumberOfSections());
   EXPECT_EQ(4, NumberOfItemsInSection(0));
 
-  CheckDetailItemTextWithIds(IDS_IOS_PASSWORD_MANAGER, IDS_IOS_SETTING_ON, 0,
-                             0);
-  CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENTS_TITLE, IDS_IOS_SETTING_OFF,
-                             0, 1);
-  CheckDetailItemTextWithIds(IDS_AUTOFILL_CONTACT_INFO_TITLE,
-                             IDS_IOS_SETTING_ON, 0, 2);
+  if (IsParamFeatureEnabled()) {
+    CheckDetailItemTextWithIds(
+        IDS_IOS_PASSWORD_MANAGER,
+        IDS_AUTOFILL_AND_PASSWORDS_PASSWORD_MANAGER_SUMMARY, 0, 0);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 0);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENTS_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_PAYMENTS_SUMMARY, 0,
+                               1);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_OFF, 0, 1);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_CONTACT_INFO_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_CONTACT_INFO_SUMMARY,
+                               0, 2);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 2);
+  } else {
+    CheckDetailItemTextWithIds(IDS_IOS_PASSWORD_MANAGER, IDS_IOS_SETTING_ON, 0,
+                               0);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENT_METHODS,
+                               IDS_IOS_SETTING_OFF, 0, 1);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_ADDRESSES_SETTINGS_TITLE,
+                               IDS_IOS_SETTING_ON, 0, 2);
+  }
+
   CheckTextCellTextAndDetailText(
       l10n_util::GetNSString(IDS_IOS_SETTINGS_AUTOFILL_SETTINGS), nil, 0, 3);
 }
 
-TEST_F(AutofillAndPasswordsTableViewControllerTest, PromoStateChanged) {
+TEST_P(AutofillAndPasswordsTableViewControllerTest, PromoStateChanged) {
   AutofillAndPasswordsTableViewController* view_controller =
       base::apple::ObjCCastStrict<AutofillAndPasswordsTableViewController>(
           controller());
@@ -159,7 +295,7 @@ TEST_F(AutofillAndPasswordsTableViewControllerTest, PromoStateChanged) {
   EXPECT_EQ(1, NumberOfSections());
 }
 
-TEST_F(AutofillAndPasswordsTableViewControllerTest,
+TEST_P(AutofillAndPasswordsTableViewControllerTest,
        ConfigureSigninPromoWithConfigurator) {
   AutofillAndPasswordsTableViewController* view_controller =
       base::apple::ObjCCastStrict<AutofillAndPasswordsTableViewController>(
@@ -178,7 +314,8 @@ TEST_F(AutofillAndPasswordsTableViewControllerTest,
 
   // Calling configureSigninPromoWithConfigurator before promo exists should be
   // a no-op.
-  [view_controller configureSigninPromoWithConfigurator:configurator1];
+  [view_controller configureSigninPromoWithConfigurator:configurator1
+                                        identityChanged:NO];
 
   NSString* promo_text =
       l10n_util::GetNSString(IDS_IOS_SIGNIN_PROMO_AUTOFILL_AND_PASSWORDS);
@@ -200,11 +337,62 @@ TEST_F(AutofillAndPasswordsTableViewControllerTest,
                        hasCloseButton:YES
                      hasSignInSpinner:NO];
 
-  [view_controller configureSigninPromoWithConfigurator:configurator2];
+  [view_controller configureSigninPromoWithConfigurator:configurator2
+                                        identityChanged:NO];
 
   promo_item = base::apple::ObjCCastStrict<TableViewSigninPromoItem>(
       GetTableViewItem(0, 0));
   EXPECT_EQ(promo_item.configurator, configurator2);
 }
+
+TEST_P(AutofillAndPasswordsTableViewControllerTest,
+       TestAutofillSettingsHidden) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      autofill::features::kAutofillAiWithDataSchema);
+
+  AutofillAndPasswordsTableViewController* view_controller =
+      base::apple::ObjCCastStrict<AutofillAndPasswordsTableViewController>(
+          controller());
+
+  [view_controller setPasswordsEnabled:YES];
+  [view_controller setAutofillCreditCardEnabled:NO];
+  [view_controller setAutofillProfileEnabled:YES];
+  [view_controller setIdentityDocsEnabled:YES];
+  [view_controller setTravelInfoEnabled:NO];
+  [view_controller setShouldShowAutofillAIFeatures:NO];
+
+  [view_controller loadModel];
+
+  EXPECT_EQ(1, NumberOfSections());
+  EXPECT_EQ(3, NumberOfItemsInSection(0));
+
+  if (IsParamFeatureEnabled()) {
+    CheckDetailItemTextWithIds(
+        IDS_IOS_PASSWORD_MANAGER,
+        IDS_AUTOFILL_AND_PASSWORDS_PASSWORD_MANAGER_SUMMARY, 0, 0);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 0);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENTS_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_PAYMENTS_SUMMARY, 0,
+                               1);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_OFF, 0, 1);
+
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_CONTACT_INFO_TITLE,
+                               IDS_AUTOFILL_AND_PASSWORDS_CONTACT_INFO_SUMMARY,
+                               0, 2);
+    CheckTrailingDetailItemTextWithId(IDS_IOS_SETTING_ON, 0, 2);
+  } else {
+    CheckDetailItemTextWithIds(IDS_IOS_PASSWORD_MANAGER, IDS_IOS_SETTING_ON, 0,
+                               0);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_PAYMENT_METHODS,
+                               IDS_IOS_SETTING_OFF, 0, 1);
+    CheckDetailItemTextWithIds(IDS_AUTOFILL_ADDRESSES_SETTINGS_TITLE,
+                               IDS_IOS_SETTING_ON, 0, 2);
+  }
+}
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
+    AutofillAndPasswordsTableViewControllerTest);
 
 }  // namespace

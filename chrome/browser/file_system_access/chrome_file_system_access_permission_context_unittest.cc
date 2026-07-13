@@ -42,8 +42,11 @@
 #include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
+#include "components/safe_browsing/buildflags.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/site_instance.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
@@ -75,6 +78,10 @@
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"  // nogncheck
 #include "chrome/browser/enterprise/connectors/test/fake_content_analysis_delegate.h"
 #include "chrome/browser/policy/dm_token_utils.h"
+#endif
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "components/safe_browsing/content/common/file_type_policies_test_util.h"
 #endif
 
 using content::BrowserContext;
@@ -513,6 +520,21 @@ class ChromeFileSystemAccessPermissionContextTest : public testing::Test {
     }));
   }
 
+  std::unique_ptr<content::WebContents> CreateGuestWebContents(
+      const GURL& url) {
+    const content::StoragePartitionConfig kGuestConfig =
+        content::StoragePartitionConfig::Create(
+            profile(), "test_partition", "guest_partition", /*in_memory=*/true);
+    scoped_refptr<content::SiteInstance> guest_instance =
+        content::SiteInstance::CreateForGuest(profile(), kGuestConfig);
+    std::unique_ptr<content::WebContents> guest_contents =
+        content::WebContentsTester::CreateTestWebContents(profile(),
+                                                          guest_instance);
+    content::WebContentsTester::For(guest_contents.get())
+        ->NavigateAndCommit(url);
+    return guest_contents;
+  }
+
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   base::ScopedTempDir temp_dir_;
@@ -547,6 +569,27 @@ class ChromeFileSystemAccessPermissionContextSymbolicLinkCheckTest
  protected:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CanShowFilePicker_BlocksGuestViews) {
+  // 1. Test HTTPS Guest (should be blocked)
+  {
+    std::unique_ptr<content::WebContents> guest =
+        CreateGuestWebContents(GURL("https://example.com/"));
+    EXPECT_FALSE(permission_context()
+                     ->CanShowFilePicker(guest->GetPrimaryMainFrame())
+                     .has_value());
+  }
+
+  // 2. Test about:blank Guest (should be blocked)
+  {
+    std::unique_ptr<content::WebContents> guest =
+        CreateGuestWebContents(GURL("about:blank"));
+    EXPECT_FALSE(permission_context()
+                     ->CanShowFilePicker(guest->GetPrimaryMainFrame())
+                     .has_value());
+  }
+}
 
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
        ConfirmSensitiveEntryAccess_NoSpecialPath) {
@@ -1093,6 +1136,18 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
                         ".fileprovider/cache/file"})),
       HandleType::kFile));
 
+  // Percent-encoded authority should also fail.
+  EXPECT_TRUE(IsOpenAbort(
+      base::FilePath(
+          base::StrCat({"content://", base::android::apk_info::package_name(),
+                        "%2Efileprovider/cache/dir"})),
+      HandleType::kDirectory));
+  EXPECT_TRUE(IsOpenAbort(
+      base::FilePath(
+          base::StrCat({"content://", base::android::apk_info::package_name(),
+                        "%2efileprovider/cache/file"})),
+      HandleType::kFile));
+
   EXPECT_TRUE(IsOpenAllowed(base::FilePath("content://authority/dir"),
                             HandleType::kDirectory));
   EXPECT_TRUE(IsOpenAllowed(base::FilePath("content://authority/file"),
@@ -1371,6 +1426,16 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   // setting here because `ALLOW` is not an acceptable option.
   EXPECT_TRUE(permission_context()->CanObtainWritePermission(kChromeOrigin));
 }
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+TEST_F(ChromeFileSystemAccessPermissionContextTest, IsFileTypeDangerous) {
+  safe_browsing::FileTypePoliciesTestOverlay scoped_dangerous =
+      safe_browsing::ScopedMarkAllFilesDangerousForTesting();
+
+  const base::FilePath kPath(FILE_PATH_LITERAL("/foo/bar.dll"));
+  EXPECT_TRUE(permission_context()->IsFileTypeDangerous(kPath));
+}
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 TEST_F(ChromeFileSystemAccessPermissionContextTest, PolicyReadGuardPermission) {
   auto* prefs = profile()->GetTestingPrefService();

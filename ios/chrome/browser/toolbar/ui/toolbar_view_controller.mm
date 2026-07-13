@@ -13,11 +13,13 @@
 #import "base/time/time.h"
 #import "ios/chrome/browser/composebox/public/composebox_entrypoint.h"
 #import "ios/chrome/browser/intents/model/intents_donation_helper.h"
+#import "ios/chrome/browser/ntp/shared/metrics/home_metrics.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
 #import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
@@ -45,32 +47,54 @@
 #import "ui/base/l10n/l10n_util.h"
 #import "ui/gfx/ios/uikit_util.h"
 
+// Hack protocol for the glass prototype to avoid depending on the location bar.
+// TODO(crbug.com/533411227): Remove this.
+@protocol LocationBarTextWidthProvider <NSObject>
+- (CGFloat)locationBarTextWidth;
+@end
+
 namespace {
 
+// Spacing between buttons in the toolbar's horizontal stack view.
 constexpr CGFloat kStackViewSpacing = 9;
+
+// Duration of the banner promo slide animation.
 const base::TimeDelta kBannerPromoAnimationDuration = base::Seconds(0.5);
 
-constexpr CGFloat kButtonMinScale = 0.2;
+// The minimum scale factor for a button.
+constexpr CGFloat kButtonMinScale = 0.37;
 
-constexpr CGFloat kAnimationDuration = 0.2f;
+// Duration of standard toolbar transition animations (fade, scale).
+constexpr CGFloat kAnimationDuration = 0.2;
 
+// Margin between the location bar and the tab group indicator view.
 constexpr CGFloat kLocationBarToTabGroupMargin = 6;
 
 // The margin for the leading/trailing edges of the stack view.
+// Regular-Regular (iPad) size class margin.
 constexpr CGFloat kStackViewMarginRegularRegular = 16;
+// iPhone landscape margin.
 constexpr CGFloat kStackViewMarginLandscape = 46;
+// iPhone portrait margin.
 constexpr CGFloat kStackViewMarginPortrait = 9;
 
 // The margin between the stack views and the location bar.
+// Regular-Regular (iPad) size class margin.
 constexpr CGFloat kLocationBarStackViewMarginRegularRegular = 40;
+// iPhone portrait margin.
 constexpr CGFloat kLocationBarStackViewMarginPortrait = 9;
+// iPhone landscape margin.
 constexpr CGFloat kLocationBarStackViewMarginLandscape = 18;
 
-// Max width of the location bar.
+// Maximum allowed width for the location bar.
 constexpr CGFloat kLocationBarMaxWidth = 600;
 
 // The threshold for the fullscreen progress of a collapsed toolbar.
 constexpr CGFloat kFullscreenCollapsedThreshold = 0.05;
+
+// The threshold for fullscreen progress above which buttons are fully visible
+// and unscaled.
+constexpr CGFloat kFullscreenProgressThreshold = 0.99;
 
 // Timing to finish the animation of the progress bar before hiding it.
 const base::TimeDelta kProgressBarEndAnimationDuration =
@@ -103,6 +127,8 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
   // Page load progress bar on the edge of the toolbar.
   ToolbarProgressBar* _progressBar;
+  // Container for the `_progressBar`.
+  UIView* _progressBarContainer;
 
   // The inner separator line for the toolbar. Positioned at the top edge of the
   // bottom toolbar or bottom edge of the top toolbar to separate the toolbar
@@ -179,6 +205,9 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   // Whether the visible page is the NTP.
   BOOL _NTPVisible;
 
+  // Whether the NTP is showing the Start Surface.
+  BOOL _isStartSurface;
+
   // Whether the visible page is loading.
   BOOL _isLoading;
 
@@ -204,6 +233,19 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   // Constraints for the banner promo in non-split toolbar mode (where the
   // banner is below the toolbar).
   NSArray<NSLayoutConstraint*>* _bannerPromoBelowConstraints;
+
+  // The width constraint for the location bar background view.
+  NSLayoutConstraint* _locationBarBackgroundWidthConstraint;
+
+  // Visual effect view spanning the entire background.
+  UIVisualEffectView* _toolbarBackgroundVisualEffectView;
+  // Underlay view below _toolbarBackgroundVisualEffectView with 25% black
+  // background.
+  UIView* _toolbarBackgroundUnderlayView;
+  // Overlay view positioned on top of the location bar background.
+  UIView* _locationBarOverlayView;
+  // Interactive property animator for scroll progress.
+  UIViewPropertyAnimator* _scrollAnimator;
 }
 
 - (instancetype)initInIncognito:(BOOL)incognito topPosition:(BOOL)topPosition {
@@ -211,8 +253,19 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   if (self) {
     _incognito = incognito;
     _topPosition = topPosition;
+    _fullscreenProgress = 1.0;
   }
   return self;
+}
+
+- (void)dealloc {
+  if (IsToolbarGlassPrototypeEnabled()) {
+    UIViewPropertyAnimator* animator = _scrollAnimator;
+    if (animator && animator.state != UIViewAnimatingStateInactive) {
+      [animator stopAnimation:YES];
+      [animator finishAnimationAtPosition:UIViewAnimatingPositionCurrent];
+    }
+  }
 }
 
 #pragma mark - Public
@@ -336,7 +389,9 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 - (void)viewDidLoad {
   [super viewDidLoad];
   self.view.translatesAutoresizingMaskIntoConstraints = NO;
-  self.view.backgroundColor = [UIColor colorNamed:kBackgroundColor];
+  self.view.backgroundColor = IsToolbarGlassPrototypeEnabled()
+                                  ? UIColor.clearColor
+                                  : [UIColor colorNamed:kBackgroundColor];
   self.view.accessibilityIdentifier = _topPosition
                                           ? kPrimaryToolbarViewIdentifier
                                           : kSecondaryToolbarViewIdentifier;
@@ -362,11 +417,25 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
       registerForTraitChanges:
           @[ UITraitVerticalSizeClass.class, UITraitHorizontalSizeClass.class ]
                    withAction:@selector(sizeClassDidChange)];
+  if (IsToolbarGlassPrototypeEnabled()) {
+    [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
+                       withAction:@selector(userInterfaceStyleDidChange)];
+  }
 }
 
 - (void)viewWillLayoutSubviews {
   [super viewWillLayoutSubviews];
   [self updateLayoutConstraints];
+}
+
+- (void)viewDidLayoutSubviews {
+  [super viewDidLayoutSubviews];
+  if (IsToolbarGlassPrototypeEnabled()) {
+    _toolbarBackgroundVisualEffectView.layer.cornerRadius =
+        _toolbarBackgroundVisualEffectView.bounds.size.height / 2.0;
+    _toolbarBackgroundUnderlayView.layer.cornerRadius =
+        _toolbarBackgroundUnderlayView.bounds.size.height / 2.0;
+  }
 }
 
 - (void)viewSafeAreaInsetsDidChange {
@@ -394,6 +463,11 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
 - (void)toolbarViewDidMoveToWindow:(ToolbarView*)view {
   [self updateTabSwitcherGuide];
+  if (IsToolbarGlassPrototypeEnabled()) {
+    if (view.window) {
+      [self createScrollAnimator];
+    }
+  }
 }
 
 #pragma mark - PopupMenuUIUpdating
@@ -416,6 +490,10 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 - (void)setAssistantButtonVisible:(BOOL)visible enabled:(BOOL)enabled {
   _assistantButton.forceHidden = !visible;
   _assistantButton.enabled = enabled;
+  if (self.isViewLoaded) {
+    [self updateButtons:@[ _assistantButton ]
+        forFullscreenProgress:_fullscreenProgress];
+  }
 }
 
 - (void)setCanGoBack:(BOOL)canGoBack {
@@ -456,35 +534,6 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
       }];
 }
 
-- (void)setIsLoading:(BOOL)isLoading {
-  if (_isLoading == isLoading) {
-    return;
-  }
-
-  _isLoading = isLoading;
-  _reloadButton.forceHidden = isLoading;
-  _stopButton.forceHidden = !isLoading;
-
-  if (!_progressBar) {
-    return;
-  }
-
-  if (_isLoading) {
-    [_progressBar setProgress:0 animated:NO];
-  }
-  [self updateProgressBarVisibility];
-}
-
-- (void)setLoadingProgress:(double)progress {
-  if (!_progressBar || progress == _progressBar.progress) {
-    return;
-  }
-
-  BOOL isGoingBackward = progress < _progressBar.progress;
-  [_progressBar setProgress:progress
-                   animated:!_progressBar.hidden && !isGoingBackward];
-}
-
 - (void)setShareEnabled:(BOOL)enabled {
   _shareButton.enabled = enabled;
 }
@@ -497,27 +546,41 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   [self loadViewIfNeeded];
   [self updateToolbarElementsVisibility];
   [self updateTabGroupIndicatorAvailability];
-
-  if (_visible) {
-    [self.layoutGuideCenter referenceView:_toolsMenuButton
-                                underName:kToolsMenuGuide];
-    [self.layoutGuideCenter referenceView:_backButton
-                                underName:kBackButtonGuide];
-    [self.layoutGuideCenter referenceView:_forwardButton
-                                underName:kForwardButtonGuide];
-    [self.layoutGuideCenter referenceView:_shareButton
-                                underName:kShareButtonGuide];
-
-    [self updateTabSwitcherGuide];
-  }
+  [self updateLayoutGuides];
 }
 
-- (void)setNTPVisible:(BOOL)NTPVisible {
-  if (NTPVisible == _NTPVisible) {
-    return;
+- (void)setNTPVisible:(BOOL)NTPVisible
+       isStartSurface:(BOOL)isStartSurface
+            isLoading:(BOOL)isLoading
+      loadingProgress:(double)progress {
+  _isStartSurface = isStartSurface;
+
+  BOOL ntpVisibilityChanged = (NTPVisible != _NTPVisible);
+  BOOL loadingStateChanged = (isLoading != _isLoading);
+
+  if (loadingStateChanged || ntpVisibilityChanged) {
+    if (ntpVisibilityChanged) {
+      _NTPVisible = NTPVisible;
+      [self updateToolbarVisibility];
+    }
+
+    // Loading UI should not be shown on the NTP.
+    BOOL mustHideLoadingUI = !isLoading || NTPVisible;
+    _isLoading = !mustHideLoadingUI;
+    _reloadButton.forceHidden = !mustHideLoadingUI;
+    _stopButton.forceHidden = mustHideLoadingUI;
+
+    if (loadingStateChanged && isLoading) {
+      [_progressBar setProgress:0.0 animated:NO];
+    }
+    [self updateProgressBarVisibility];
   }
-  _NTPVisible = NTPVisible;
-  [self updateToolbarVisibility];
+
+  if (progress != _progressBar.progress) {
+    BOOL isGoingBackward = progress < _progressBar.progress;
+    [_progressBar setProgress:progress
+                     animated:!_progressBar.isHidden && !isGoingBackward];
+  }
 }
 
 - (void)updateTabCount:(NSUInteger)tabCount {
@@ -576,8 +639,13 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
     }
     _locationBarKeyboardCenterXConstraint.active = YES;
   } else {
-    _locationBarTopConstraint.active = NO;
-    _locationBarBottomPaddingConstraint.active = YES;
+    if (!_topPosition) {
+      _locationBarTopConstraint.active = YES;
+      _locationBarBottomPaddingConstraint.active = NO;
+    } else {
+      _locationBarTopConstraint.active = NO;
+      _locationBarBottomPaddingConstraint.active = YES;
+    }
     [self.toolbarHeightDelegate secondaryToolbarRemovedFromKeyboard];
     [GetFirstResponder() resignFirstResponder];
 
@@ -666,6 +734,33 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
 - (void)updateForFullscreenProgress:(CGFloat)progress {
   _fullscreenProgress = progress;
+  if (IsToolbarGlassPrototypeEnabled()) {
+    if (progress <= 0.0) {
+      if (_scrollAnimator &&
+          _scrollAnimator.state != UIViewAnimatingStateInactive) {
+        [_scrollAnimator stopAnimation:YES];
+        [_scrollAnimator
+            finishAnimationAtPosition:UIViewAnimatingPositionCurrent];
+        _scrollAnimator = nil;
+      }
+      [self updateToolbarGlassEffectsToCollapsedState];
+    } else if (progress >= 1.0) {
+      if (_scrollAnimator &&
+          _scrollAnimator.state != UIViewAnimatingStateInactive) {
+        [_scrollAnimator stopAnimation:YES];
+        [_scrollAnimator
+            finishAnimationAtPosition:UIViewAnimatingPositionCurrent];
+        _scrollAnimator = nil;
+      }
+      [self updateToolbarGlassEffectsToExpandedState];
+    } else {
+      if (!_scrollAnimator ||
+          _scrollAnimator.state == UIViewAnimatingStateInactive) {
+        [self createScrollAnimator];
+      }
+      _scrollAnimator.fractionComplete = 1.0 - progress;
+    }
+  }
   CGFloat locationBarExpandedHeight;
   if (ShouldHaveCompactLocationBar(self.traitCollection)) {
     locationBarExpandedHeight = kLocationBarHeight;
@@ -678,10 +773,36 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   _locationBarBackground.layer.cornerRadius = locationBarHeight / 2.0;
   _locationBarContainer.layer.cornerRadius = locationBarHeight / 2.0;
 
-  _locationBarBackground.alpha = progress;
+  if (IsToolbarGlassPrototypeEnabled()) {
+    _toolbarBackgroundVisualEffectView.layer.cornerRadius =
+        (locationBarHeight + 8.0) / 2.0;
+    _toolbarBackgroundUnderlayView.layer.cornerRadius =
+        (locationBarHeight + 8.0) / 2.0;
+    _toolbarBackgroundUnderlayView.alpha = progress;
+    CGFloat fullWidth = _locationBarContainer.bounds.size.width;
+    if (fullWidth > 0.0) {
+      CGFloat textWidth = 0.0;
+      if ([_locationBarViewController
+              respondsToSelector:@selector(locationBarTextWidth)]) {
+        textWidth = [(id<LocationBarTextWidthProvider>)
+                _locationBarViewController locationBarTextWidth];
+      }
+      CGFloat targetWidth = progress * fullWidth +
+                            (1.0 - progress) * MIN(textWidth + 8.0, fullWidth);
+      _locationBarBackgroundWidthConstraint.constant = targetWidth - fullWidth;
+    } else {
+      _locationBarBackgroundWidthConstraint.constant = 0.0;
+    }
+  } else {
+    _locationBarBackground.alpha = progress;
+  }
 
-  _locationBarBottomPaddingConstraint.constant =
-      -[self locationBarBottomPaddingForFullscreenProgress:progress];
+  if (!_topPosition) {
+    _locationBarTopConstraint.constant = progress * kToolbarPadding;
+  } else {
+    _locationBarBottomPaddingConstraint.constant =
+        -[self locationBarBottomPaddingForFullscreenProgress:progress];
+  }
 
   _bannerPromoBackgroundHeightConstraint.constant =
       [self bannerPromoBackgroundHeightForFullscreenProgress:progress];
@@ -778,9 +899,11 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
 // Updates the visibility of both the inner and outer separators.
 - (void)updateSeparatorVisibility {
-  BOOL tabGroupIndicatorVisible =
-      _tabGroupIndicatorView && !_tabGroupIndicatorView.hidden;
-  _innerSeparator.hidden = !(tabGroupIndicatorVisible || [self hasOmnibox]);
+  if (!IsToolbarGlassPrototypeEnabled()) {
+    BOOL tabGroupIndicatorVisible =
+        _tabGroupIndicatorView && !_tabGroupIndicatorView.hidden;
+    _innerSeparator.hidden = !(tabGroupIndicatorVisible || [self hasOmnibox]);
+  }
 
   if (!_topPosition) {
     _outerSeparator.hidden = !_locationIndicatorActive;
@@ -791,8 +914,12 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 - (void)showBannerPromoAnimationBlock {
   _bannerPromoBackgroundHeightConstraint.constant =
       [self bannerPromoBackgroundHeightForFullscreenProgress:1];
-  _locationBarBottomPaddingConstraint.constant =
-      -[self locationBarBottomPaddingForFullscreenProgress:_fullscreenProgress];
+  if (!_topPosition) {
+    _locationBarTopConstraint.constant = _fullscreenProgress * kToolbarPadding;
+  } else {
+    _locationBarBottomPaddingConstraint.constant = -[self
+        locationBarBottomPaddingForFullscreenProgress:_fullscreenProgress];
+  }
   [self.toolbarHeightDelegate toolbarsHeightChanged];
   [self.view.superview layoutIfNeeded];
 }
@@ -814,8 +941,12 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
   _bannerPromoVisible = NO;
 
-  _locationBarBottomPaddingConstraint.constant =
-      -[self locationBarBottomPaddingForFullscreenProgress:_fullscreenProgress];
+  if (!_topPosition) {
+    _locationBarTopConstraint.constant = _fullscreenProgress * kToolbarPadding;
+  } else {
+    _locationBarBottomPaddingConstraint.constant = -[self
+        locationBarBottomPaddingForFullscreenProgress:_fullscreenProgress];
+  }
 
   [self.toolbarHeightDelegate toolbarsHeightChanged];
   [self.view.superview layoutIfNeeded];
@@ -903,12 +1034,13 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
       button.alpha = 0;
       continue;
     }
-    if (progress > 0.99) {
+    if (progress > kFullscreenProgressThreshold) {
       button.alpha = 1;
       button.transform = CGAffineTransformIdentity;
     } else {
       button.alpha = progress;
-      CGFloat scale = progress + (1 - progress) * kButtonMinScale;
+      // Linearly interpolates the scale between kButtonMinScale and 1.0.
+      CGFloat scale = progress + (1.0 - progress) * kButtonMinScale;
       button.transform = CGAffineTransformMakeScale(scale, scale);
     }
   }
@@ -984,6 +1116,37 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
 // Returns a new background for the location bar.
 - (UIView*)createLocationBarBackground {
+  if (IsToolbarGlassPrototypeEnabled()) {
+    UIBlurEffectStyle blurStyle = _incognito
+                                      ? UIBlurEffectStyleSystemThickMaterialDark
+                                      : UIBlurEffectStyleSystemChromeMaterial;
+    UIBlurEffect* blurEffect = [UIBlurEffect effectWithStyle:blurStyle];
+    UIVisualEffectView* locationBarBackground =
+        [[UIVisualEffectView alloc] initWithEffect:blurEffect];
+    locationBarBackground.translatesAutoresizingMaskIntoConstraints = NO;
+    locationBarBackground.layer.cornerRadius = kLocationBarHeight / 2.0;
+    locationBarBackground.clipsToBounds = YES;
+
+    BOOL incognito = _incognito;
+    _locationBarOverlayView = [[UIView alloc] init];
+    _locationBarOverlayView.translatesAutoresizingMaskIntoConstraints = NO;
+    _locationBarOverlayView.userInteractionEnabled = NO;
+    _locationBarOverlayView.backgroundColor = [UIColor
+        colorWithDynamicProvider:^UIColor*(UITraitCollection* traitCollection) {
+          if (incognito ||
+              traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
+            return [UIColor.whiteColor colorWithAlphaComponent:0.08];
+          }
+          return [UIColor.blackColor colorWithAlphaComponent:0.06];
+        }];
+    [locationBarBackground.contentView addSubview:_locationBarOverlayView];
+    AddSameConstraints(locationBarBackground.contentView,
+                       _locationBarOverlayView);
+
+    ConfigureShadowForToolbarElement(locationBarBackground);
+
+    return locationBarBackground;
+  }
   UIView* locationBarBackground = [[UIView alloc] init];
   locationBarBackground.translatesAutoresizingMaskIntoConstraints = NO;
   locationBarBackground.layer.cornerRadius = kLocationBarHeight / 2.0;
@@ -1003,7 +1166,23 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   locationBarContainer.translatesAutoresizingMaskIntoConstraints = NO;
 
   [locationBarContainer addSubview:locationBarBackground];
-  AddSameConstraints(locationBarContainer, locationBarBackground);
+
+  if (IsToolbarGlassPrototypeEnabled()) {
+    locationBarBackground.translatesAutoresizingMaskIntoConstraints = NO;
+    _locationBarBackgroundWidthConstraint = [locationBarBackground.widthAnchor
+        constraintEqualToAnchor:locationBarContainer.widthAnchor];
+    [NSLayoutConstraint activateConstraints:@[
+      [locationBarBackground.centerXAnchor
+          constraintEqualToAnchor:locationBarContainer.centerXAnchor],
+      [locationBarBackground.centerYAnchor
+          constraintEqualToAnchor:locationBarContainer.centerYAnchor],
+      [locationBarBackground.heightAnchor
+          constraintEqualToAnchor:locationBarContainer.heightAnchor],
+      _locationBarBackgroundWidthConstraint,
+    ]];
+  } else {
+    AddSameConstraints(locationBarContainer, locationBarBackground);
+  }
 
   [locationBarContainer
       setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
@@ -1044,9 +1223,36 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   return progressBar;
 }
 
+// Creates a container with a given `progressBar`. This allows a
+// `ToolbarProgressBar` to be shown and hidden without conflicting with its
+// internal visibility logic.
+- (UIView*)createContainerForProgressBar:(ToolbarProgressBar*)progressBar {
+  UIView* progressBarContainer = [[UIView alloc] init];
+  progressBarContainer.translatesAutoresizingMaskIntoConstraints = NO;
+  progressBarContainer.hidden = YES;
+  [progressBarContainer addSubview:progressBar];
+  AddSameConstraints(progressBarContainer, progressBar);
+  return progressBarContainer;
+}
+
 // Creates the views.
 - (void)createView {
   CHECK(self.buttonFactory);
+  if (IsToolbarGlassPrototypeEnabled()) {
+    _toolbarBackgroundVisualEffectView = [[UIVisualEffectView alloc]
+        initWithEffect:[self activeToolbarGlassEffect]];
+    _toolbarBackgroundVisualEffectView
+        .translatesAutoresizingMaskIntoConstraints = NO;
+
+    _toolbarBackgroundUnderlayView = [[UIView alloc] init];
+    _toolbarBackgroundUnderlayView.translatesAutoresizingMaskIntoConstraints =
+        NO;
+    _toolbarBackgroundUnderlayView.backgroundColor =
+        [UIColor.blackColor colorWithAlphaComponent:0.25];
+    _toolbarBackgroundUnderlayView.userInteractionEnabled = NO;
+    _toolbarBackgroundUnderlayView.clipsToBounds = YES;
+  }
+
   _locationBarBackground = [self createLocationBarBackground];
   _locationBarContainer =
       [self createLocationBarContainerWithBackground:_locationBarBackground];
@@ -1056,9 +1262,12 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
     _fakeOmniboxTarget = [self createFakeOmniboxTarget];
   }
   _progressBar = [self createProgressBar];
+  _progressBarContainer = [self createContainerForProgressBar:_progressBar];
   _collapsedToolbarButton = [self createCollapsedToolbarButton];
 
-  _innerSeparator = [self createSeparator];
+  if (!IsToolbarGlassPrototypeEnabled()) {
+    _innerSeparator = [self createSeparator];
+  }
   _outerSeparator = [self createSeparator];
 
   _backButton = [self.buttonFactory makeBackButton];
@@ -1181,6 +1390,12 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 
 // Sets up the hierarchy of the buttons.
 - (void)setUpHierarchy {
+  if (IsToolbarGlassPrototypeEnabled()) {
+    [self.view insertSubview:_toolbarBackgroundUnderlayView atIndex:0];
+    [self.view insertSubview:_toolbarBackgroundVisualEffectView
+                aboveSubview:_toolbarBackgroundUnderlayView];
+  }
+
   _leadingStackView = [self makeStackViewWithButtons:@[
     _navigationButtonsContainer,
     _reloadButton,
@@ -1193,48 +1408,73 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   [self.view addSubview:_leadingStackView];
   [self.view addSubview:_locationBarContainer];
 
+  if (IsToolbarGlassPrototypeEnabled()) {
+    [NSLayoutConstraint activateConstraints:@[
+      [_toolbarBackgroundVisualEffectView.leadingAnchor
+          constraintEqualToAnchor:self.view.leadingAnchor
+                         constant:4.0],
+      [_toolbarBackgroundVisualEffectView.trailingAnchor
+          constraintEqualToAnchor:self.view.trailingAnchor
+                         constant:-4.0],
+      [_toolbarBackgroundVisualEffectView.topAnchor
+          constraintEqualToAnchor:_locationBarContainer.topAnchor
+                         constant:-4.0],
+      [_toolbarBackgroundVisualEffectView.bottomAnchor
+          constraintEqualToAnchor:_locationBarContainer.bottomAnchor
+                         constant:4.0],
+    ]];
+    AddSameConstraints(_toolbarBackgroundVisualEffectView,
+                       _toolbarBackgroundUnderlayView);
+    _toolbarBackgroundVisualEffectView.clipsToBounds = YES;
+  }
+
   if (_fakeOmniboxTarget) {
     [self.view addSubview:_fakeOmniboxTarget];
     AddSameConstraints(_locationBarContainer, _fakeOmniboxTarget);
   }
 
   [self.view addSubview:_trailingStackView];
-  [self.view addSubview:_progressBar];
-  [self.view addSubview:_innerSeparator];
+  [self.view addSubview:_progressBarContainer];
+  if (!IsToolbarGlassPrototypeEnabled()) {
+    [self.view addSubview:_innerSeparator];
+  }
   [self.view addSubview:_collapsedToolbarButton];
   AddSameConstraints(self.view, _collapsedToolbarButton);
 
   NSLayoutConstraint* progressBarEdgeConstraint =
-      _topPosition ? [_progressBar.bottomAnchor
+      _topPosition ? [_progressBarContainer.bottomAnchor
                          constraintEqualToAnchor:self.view.bottomAnchor]
-                   : [_progressBar.topAnchor
+                   : [_progressBarContainer.topAnchor
                          constraintEqualToAnchor:self.view.topAnchor];
 
   [NSLayoutConstraint activateConstraints:@[
-    [_progressBar.leadingAnchor
+    [_progressBarContainer.leadingAnchor
         constraintEqualToAnchor:self.view.leadingAnchor],
-    [_progressBar.trailingAnchor
+    [_progressBarContainer.trailingAnchor
         constraintEqualToAnchor:self.view.trailingAnchor],
-    [_progressBar.heightAnchor constraintEqualToConstant:kProgressBarHeight],
+    [_progressBarContainer.heightAnchor
+        constraintEqualToConstant:kProgressBarHeight],
     progressBarEdgeConstraint
   ]];
 
-  NSLayoutConstraint* innerSeparatorEdgeConstraint =
-      _topPosition ? [_innerSeparator.bottomAnchor
-                         constraintEqualToAnchor:self.view.bottomAnchor]
-                   : [_innerSeparator.topAnchor
-                         constraintEqualToAnchor:self.view.topAnchor];
+  if (!IsToolbarGlassPrototypeEnabled()) {
+    NSLayoutConstraint* innerSeparatorEdgeConstraint =
+        _topPosition ? [_innerSeparator.bottomAnchor
+                           constraintEqualToAnchor:self.view.bottomAnchor]
+                     : [_innerSeparator.topAnchor
+                           constraintEqualToAnchor:self.view.topAnchor];
 
-  [NSLayoutConstraint activateConstraints:@[
-    [_innerSeparator.leadingAnchor
-        constraintEqualToAnchor:self.view.leadingAnchor],
-    [_innerSeparator.trailingAnchor
-        constraintEqualToAnchor:self.view.trailingAnchor],
-    [_innerSeparator.heightAnchor
-        constraintEqualToConstant:ui::AlignValueToUpperPixel(
-                                      kToolbarSeparatorHeight)],
-    innerSeparatorEdgeConstraint
-  ]];
+    [NSLayoutConstraint activateConstraints:@[
+      [_innerSeparator.leadingAnchor
+          constraintEqualToAnchor:self.view.leadingAnchor],
+      [_innerSeparator.trailingAnchor
+          constraintEqualToAnchor:self.view.trailingAnchor],
+      [_innerSeparator.heightAnchor
+          constraintEqualToConstant:ui::AlignValueToUpperPixel(
+                                        kToolbarSeparatorHeight)],
+      innerSeparatorEdgeConstraint
+    ]];
+  }
 
   if (!_topPosition) {
     [self.view addSubview:_outerSeparator];
@@ -1259,10 +1499,18 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   _locationBarBottomPaddingConstraint = [_locationBarContainer.bottomAnchor
       constraintEqualToAnchor:self.view.bottomAnchor
                      constant:-kToolbarPadding];
-  _locationBarBottomPaddingConstraint.active = YES;
 
   _locationBarTopConstraint = [_locationBarContainer.topAnchor
-      constraintEqualToAnchor:self.view.topAnchor];
+      constraintEqualToAnchor:self.view.topAnchor
+                     constant:kToolbarPadding];
+
+  if (!_topPosition) {
+    _locationBarTopConstraint.active = YES;
+    _locationBarBottomPaddingConstraint.active = NO;
+  } else {
+    _locationBarTopConstraint.active = NO;
+    _locationBarBottomPaddingConstraint.active = YES;
+  }
 
   [NSLayoutConstraint activateConstraints:@[
     [_leadingStackView.centerYAnchor
@@ -1451,23 +1699,34 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   if (_NTPVisible) {
     base::RecordAction(
         base::UserMetricsAction("MobileToolbarShowStackViewOnNTP"));
+    RecordHomeAction(IOSHomeActionType::kTabSwitcher, _isStartSurface);
   }
   base::RecordAction(base::UserMetricsAction("MobileToolbarShowStackView"));
 
   [self.sceneHandler displayTabGridInMode:TabGridOpeningMode::kDefault];
 }
 
+// Returns whether the toolbar should be hidden. The toolbar is typically hidden
+// on the regular NTP when scrolled to the top, unless a tab strip is visible.
+- (BOOL)shouldHideToolbar {
+  BOOL alwaysShowToolbar = CanShowTabStrip(self) && _topPosition;
+  if (alwaysShowToolbar) {
+    return NO;
+  }
+  return _NTPVisible && !_incognito && !CanShowTabStrip(self) &&
+         _NTPScrollProgress == 0.0;
+}
+
 // Updates the visibility of the toolbar.
 - (void)updateToolbarVisibility {
-  BOOL hideToolbar;
+  BOOL hideToolbar = [self shouldHideToolbar];
+
   BOOL alwaysShowToolbar = CanShowTabStrip(self) && _topPosition;
   if (alwaysShowToolbar) {
     self.view.alpha = 1.0;
-    hideToolbar = NO;
-  } else {
-    hideToolbar = _NTPVisible && !_incognito && !CanShowTabStrip(self) &&
-                  _NTPScrollProgress == 0.0;
   }
+
+  [self updateLayoutGuides];
 
   BOOL visibilityChanged = hideToolbar != self.view.isHidden;
 
@@ -1535,19 +1794,16 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   _leadingStackView.hidden = !_visible;
   _locationBarContainer.hidden = !_visible;
   _trailingStackView.hidden = !_visible;
+  _progressBarContainer.hidden = !_visible || CanShowTabStrip(self);
   [self updateSeparatorVisibility];
   [self.toolbarHeightDelegate toolbarsHeightChanged];
 }
 
 // Starts or stops the loading progress bar.
 - (void)updateProgressBarVisibility {
-  CHECK(_progressBar);
-
-  if (![self hasOmnibox]) {
-    _progressBar.hidden = YES;
+  if (!_progressBar) {
     return;
   }
-
   [self.view layoutIfNeeded];
 
   // Cancel any pending task to hide the progress bar.
@@ -1556,15 +1812,14 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
   __weak __typeof(self) weakSelf = self;
 
   // Start and unhide the progress bar.
-  if (_isLoading && !_NTPVisible && !CanShowTabStrip(self) &&
-      (_progressBar.isHidden || _progressBar.alpha < 1.0)) {
+  if (_isLoading && (_progressBar.isHidden || _progressBar.alpha < 1.0)) {
     [_progressBar setProgress:0 animated:NO];
     [_progressBar setHidden:NO
                    animated:YES
                  completion:^(BOOL) {
                    [weakSelf updateProgressBarVisibility];
                  }];
-  } else if (!_isLoading && !_progressBar.hidden) {
+  } else if (!_isLoading && !_progressBar.isHidden) {
     // Stop and hide the progress bar.
     __weak ToolbarProgressBar* progressBar = _progressBar;
     [_progressBar setProgress:1 animated:YES];
@@ -1587,6 +1842,7 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
 - (void)sizeClassDidChange {
   [self updateForFullscreenProgress:_fullscreenProgress];
   [self updateLayoutConstraints];
+  [self updateToolbarElementsVisibility];
   [self updateToolbarVisibility];
   [self updateTabGroupIndicatorAvailability];
   [self updateTabSwitcherGuide];
@@ -1595,6 +1851,55 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
     _bannerPromoBackgroundHeightConstraint.constant = [self
         bannerPromoBackgroundHeightForFullscreenProgress:_fullscreenProgress];
   }
+}
+
+// Called when the user interface style changes.
+- (void)userInterfaceStyleDidChange {
+  if (IsToolbarGlassPrototypeEnabled()) {
+    [self updateToolbarBackgroundUnderlayVisibility];
+  }
+}
+
+// Updates visibility of the 25% black underlay based on incognito or dark mode.
+- (void)updateToolbarBackgroundUnderlayVisibility {
+  if (!IsToolbarGlassPrototypeEnabled() || !_toolbarBackgroundUnderlayView) {
+    return;
+  }
+  BOOL isDarkStyle =
+      self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+  BOOL shouldShowUnderlay = _incognito || isDarkStyle;
+  _toolbarBackgroundUnderlayView.hidden = !shouldShowUnderlay;
+}
+
+// Safely updates a layout guide by either referencing `view` or unreferencing
+// it if `hide` is YES and the guide is currently owned by `view`.
+- (void)updateGuide:(GuideName*)guide withView:(UIView*)view hide:(BOOL)hide {
+  if (hide) {
+    if ([self.layoutGuideCenter referencedViewUnderName:guide] == view) {
+      [self.layoutGuideCenter referenceView:nil underName:guide];
+    }
+  } else {
+    [self.layoutGuideCenter referenceView:view underName:guide];
+  }
+}
+
+// Updates the layout guides to point to the buttons in this toolbar.
+// This should be called when this toolbar becomes the active visible toolbar.
+- (void)updateLayoutGuides {
+  if (!_visible) {
+    return;
+  }
+
+  BOOL hideToolbar = [self shouldHideToolbar];
+
+  [self updateGuide:kToolsMenuGuide withView:_toolsMenuButton hide:hideToolbar];
+  [self updateGuide:kBackButtonGuide withView:_backButton hide:hideToolbar];
+  [self updateGuide:kForwardButtonGuide
+           withView:_forwardButton
+               hide:hideToolbar];
+  [self updateGuide:kShareButtonGuide withView:_shareButton hide:hideToolbar];
+
+  [self updateTabSwitcherGuide];
 }
 
 // Conditionally registers the Tab Switcher layout guide.
@@ -1607,6 +1912,136 @@ const base::TimeDelta kProgressBarEndAnimationDuration =
     [self.layoutGuideCenter referenceView:_tabGridButton
                                 underName:kTabSwitcherGuide];
   }
+}
+
+// Returns the toolbar buttons that have their own individual backgrounds (not
+// conjoined).
+- (NSArray<ToolbarButton*>*)individualToolbarButtons {
+  CHECK(IsToolbarGlassPrototypeEnabled());
+  NSMutableArray<ToolbarButton*>* buttons = [[NSMutableArray alloc] init];
+  if (_reloadButton) {
+    [buttons addObject:_reloadButton];
+  }
+  if (_stopButton) {
+    [buttons addObject:_stopButton];
+  }
+  if (_shareButton) {
+    [buttons addObject:_shareButton];
+  }
+  if (_assistantButton) {
+    [buttons addObject:_assistantButton];
+  }
+  if (_tabGridButton) {
+    [buttons addObject:_tabGridButton];
+  }
+  if (_toolsMenuButton) {
+    [buttons addObject:_toolsMenuButton];
+  }
+  return buttons;
+}
+
+// Returns the conjoined buttons background blur view.
+- (UIVisualEffectView*)conjoinedButtonsBackgroundBlurView {
+  CHECK(IsToolbarGlassPrototypeEnabled());
+  for (UIView* subview in _navigationButtonsContainer.subviews) {
+    if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+      return (UIVisualEffectView*)subview;
+    }
+  }
+  return nil;
+}
+
+#pragma mark - Toolbar Glass Prototype Helpers
+
+// Returns the active toolbar glass effect.
+- (UIVisualEffect*)activeToolbarGlassEffect {
+  CHECK(IsToolbarGlassPrototypeEnabled());
+  if (@available(iOS 26.0, *)) {
+    UIGlassEffect* glass =
+        [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+    if (_incognito) {
+      glass.tintColor = [UIColor.blackColor colorWithAlphaComponent:0.28];
+    } else {
+      glass.tintColor = [UIColor colorWithDynamicProvider:^UIColor*(
+                                     UITraitCollection* traitCollection) {
+        if (traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
+          return [UIColor.blackColor colorWithAlphaComponent:0.03];
+        } else {
+          return UIColor.clearColor;
+        }
+      }];
+    }
+    return glass;
+  }
+  return [UIBlurEffect effectWithStyle:_incognito
+                                           ? UIBlurEffectStyleSystemMaterialDark
+                                           : UIBlurEffectStyleSystemMaterial];
+}
+
+// Returns the active button glass blur effect.
+- (UIBlurEffect*)activeButtonGlassEffect {
+  CHECK(IsToolbarGlassPrototypeEnabled());
+  return [UIBlurEffect
+      effectWithStyle:_incognito ? UIBlurEffectStyleSystemUltraThinMaterialDark
+                                 : UIBlurEffectStyleSystemUltraThinMaterial];
+}
+
+// Updates the glass effects to their fully expanded (uncollapsed) state.
+- (void)updateToolbarGlassEffectsToExpandedState {
+  if (!IsToolbarGlassPrototypeEnabled()) {
+    return;
+  }
+  _toolbarBackgroundVisualEffectView.effect = [self activeToolbarGlassEffect];
+  _toolbarBackgroundUnderlayView.alpha = 1.0;
+  UIBlurEffect* buttonEffect = [self activeButtonGlassEffect];
+  for (ToolbarButton* button in [self individualToolbarButtons]) {
+    button.backgroundBlurView.effect = buttonEffect;
+  }
+  UIVisualEffectView* conjoinedBgView =
+      [self conjoinedButtonsBackgroundBlurView];
+  if (conjoinedBgView) {
+    conjoinedBgView.effect = buttonEffect;
+  }
+}
+
+// Updates the glass effects to their fully collapsed (scrolled) state.
+- (void)updateToolbarGlassEffectsToCollapsedState {
+  if (!IsToolbarGlassPrototypeEnabled()) {
+    return;
+  }
+  _toolbarBackgroundVisualEffectView.effect = nil;
+  _toolbarBackgroundUnderlayView.alpha = 0.0;
+  for (ToolbarButton* button in [self individualToolbarButtons]) {
+    button.backgroundBlurView.effect = nil;
+  }
+  UIVisualEffectView* conjoinedBgView =
+      [self conjoinedButtonsBackgroundBlurView];
+  if (conjoinedBgView) {
+    conjoinedBgView.effect = nil;
+  }
+}
+
+// Creates the scroll animator.
+- (void)createScrollAnimator {
+  if (!IsToolbarGlassPrototypeEnabled()) {
+    return;
+  }
+  if (_scrollAnimator &&
+      _scrollAnimator.state != UIViewAnimatingStateInactive) {
+    [_scrollAnimator stopAnimation:YES];
+  }
+
+  [self updateToolbarGlassEffectsToExpandedState];
+
+  __weak ToolbarViewController* weakSelf = self;
+  _scrollAnimator = [[UIViewPropertyAnimator alloc]
+      initWithDuration:1.0
+                 curve:UIViewAnimationCurveLinear
+            animations:^{
+              [weakSelf updateToolbarGlassEffectsToCollapsedState];
+            }];
+  [_scrollAnimator pauseAnimation];
+  _scrollAnimator.fractionComplete = 1.0 - _fullscreenProgress;
 }
 
 @end

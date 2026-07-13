@@ -29,12 +29,12 @@
 #include "chrome/browser/page_load_metrics/observers/lcp_critical_path_predictor_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/loading_predictor_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/multi_tab_loading_page_load_metrics_observer.h"
+#include "chrome/browser/page_load_metrics/observers/navigation_initiator_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/new_tab_page_initiated_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/new_tab_page_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/omnibox_suggestion_used_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/optimization_guide_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/page_anchors_metrics_observer.h"
-#include "chrome/browser/page_load_metrics/observers/prefetch_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/protocol_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/scheme_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/security_state_page_load_metrics_observer.h"
@@ -180,14 +180,6 @@ void PageLoadMetricsEmbedder::RegisterObservers(
     tracker->AddObserver(std::make_unique<NonTabPageLoadMetricsObserver>(
         std::string(GetNonTabWebUIName(web_contents()->GetBrowserContext(),
                                        navigation_handle->GetURL()))));
-    if (waap::IsForInitialWebUI(navigation_handle->GetURL())) {
-      // For initial WebUIs, record PageLoad UKMs.
-      std::unique_ptr<page_load_metrics::PageLoadMetricsObserver> ukm_observer =
-          UkmPageLoadMetricsObserver::CreateIfNeeded();
-      if (ukm_observer) {
-        tracker->AddObserver(std::move(ukm_observer));
-      }
-    }
     if (navigation_handle->GetURL().host() ==
         chrome::kChromeUIOmniboxPopupHost) {
       tracker->AddObserver(std::make_unique<TopChromeWebUIMetricsObserver>(
@@ -225,7 +217,6 @@ void PageLoadMetricsEmbedder::RegisterObservers(
     tracker->AddObserver(std::make_unique<ForegroundDurationUKMObserver>());
     tracker->AddObserver(
         std::make_unique<DocumentWritePageLoadMetricsObserver>());
-    tracker->AddObserver(std::make_unique<PrefetchPageLoadMetricsObserver>());
     tracker->AddObserver(
         std::make_unique<MultiTabLoadingPageLoadMetricsObserver>());
     tracker->AddObserver(
@@ -235,6 +226,8 @@ void PageLoadMetricsEmbedder::RegisterObservers(
     tracker->AddObserver(
         std::make_unique<HttpsEngagementPageLoadMetricsObserver>(
             web_contents()->GetBrowserContext()));
+    tracker->AddObserver(
+        std::make_unique<NavigationInitiatorPageLoadMetricsObserver>());
     tracker->AddObserver(std::make_unique<ProtocolPageLoadMetricsObserver>());
 
     bool is_in_foreground =

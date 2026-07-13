@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <sstream>
+#include <utility>
 
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
@@ -11,7 +12,6 @@
 #include "base/test/values_test_util.h"
 #include "base/types/expected.h"
 #include "base/values.h"
-#include "testing/gmock/include/gmock/gmock.h"
 #include "chrome/browser/background/glic/glic_background_mode_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/glic/glic_pref_names.h"
@@ -42,9 +42,9 @@
 #include "chrome/browser/ui/views/tabs/tab_strip_action_container.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/optimization_guide/core/feature_registry/feature_registration.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_types.h"
@@ -54,6 +54,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "testing/gmock/include/gmock/gmock.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
@@ -69,7 +70,7 @@
 using glic::prefs::GlicActuationOnWebPolicyState;
 using glic::prefs::kGlicActuationOnWeb;
 using glic::prefs::SettingsPolicyState;
-using ::prefs::kGeminiSettings;
+using optimization_guide::prefs::kGeminiSettings;
 
 using policy::PolicyTest;
 
@@ -80,7 +81,7 @@ class GlicButtonInterface;
 namespace {
 
 int ToInt(GlicActuationOnWebPolicyState state) {
-  return static_cast<int>(state);
+  return std::to_underlying(state);
 }
 
 // An observer of the GlicInstanceCoordinator's panel state. Fires the given
@@ -270,7 +271,7 @@ class GlicPolicyTest : public PolicyTest {
                              .Clone();
     policies.Set(kGeminiSettings, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
                  POLICY_SOURCE_ENTERPRISE_DEFAULT,
-                 base::Value(static_cast<int>(value)), nullptr);
+                 base::Value(std::to_underlying(value)), nullptr);
     provider.UpdateChromePolicy(policies);
   }
 
@@ -323,9 +324,9 @@ class GlicPolicyTest : public PolicyTest {
   raw_ptr<Profile> profile_2_;
 
   static constexpr int kEnabledValue =
-      static_cast<int>(SettingsPolicyState::kEnabled);
+      std::to_underlying(SettingsPolicyState::kEnabled);
   static constexpr int kDisabledValue =
-      static_cast<int>(SettingsPolicyState::kDisabled);
+      std::to_underlying(SettingsPolicyState::kDisabled);
 
  private:
 #if BUILDFLAG(IS_CHROMEOS)
@@ -372,7 +373,7 @@ IN_PROC_BROWSER_TEST_F(GlicPolicyTest, PrefDisabledByPolicy) {
 // Ensure that when policy disables Glic, a browser window doesn't show the Glic
 // button.
 IN_PROC_BROWSER_TEST_F(GlicPolicyTest, PolicyAffectsGlicButtonInNewWindows) {
-  ASSERT_EQ(browser()->profile(), profile_1_);
+  ASSERT_EQ(browser()->GetProfile(), profile_1_);
   ASSERT_NE(profile_1_, profile_2_);
 
   // Disable the policy in the default profile.
@@ -406,7 +407,7 @@ IN_PROC_BROWSER_TEST_F(GlicPolicyTest, PolicyAffectsGlicButtonInNewWindows) {
 // Ensure that when policy disables Glic, a browser window doesn't show the Glic
 // button.
 IN_PROC_BROWSER_TEST_F(GlicPolicyTest, GlicButtonInExistingWindows) {
-  ASSERT_EQ(browser()->profile(), profile_1_);
+  ASSERT_EQ(browser()->GetProfile(), profile_1_);
   ASSERT_NE(profile_1_, profile_2_);
 
   // Create two windows in each profile.
@@ -454,7 +455,7 @@ IN_PROC_BROWSER_TEST_F(GlicPolicyTest, GlicButtonInExistingWindows) {
 // Ensure that background mode is entered if and only if a profile with the
 // policy enabled is loaded.
 IN_PROC_BROWSER_TEST_F(GlicPolicyTest, PolicyDisablesBackgroundMode) {
-  ASSERT_EQ(browser()->profile(), profile_1_);
+  ASSERT_EQ(browser()->GetProfile(), profile_1_);
   ASSERT_NE(profile_1_, profile_2_);
 
   Browser* new_window_profile_2 = CreateBrowser(profile_2_);
@@ -526,7 +527,7 @@ IN_PROC_BROWSER_TEST_F(GlicPolicyTest, PolicyDisablesWebUi) {
   // 2. Disable the policy.
   SetGlicPolicy(policy_for_profile_1(), SettingsPolicyState::kDisabled);
   ASSERT_EQ(kDisabledValue,
-            browser()->profile()->GetPrefs()->GetInteger(kGeminiSettings));
+            browser()->GetProfile()->GetPrefs()->GetInteger(kGeminiSettings));
 
   // Verify it shows the disabled page.
   ASSERT_TRUE(base::test::RunUntil([&]() {
@@ -563,92 +564,6 @@ IN_PROC_BROWSER_TEST_F(GlicPolicyTest, PolicyDisablesWebUi) {
   }));
 }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
-
-enum class GeminiSettingsState { kUnset, kEnabled, kDisabled };
-
-class GeminiEnterpriseSettingsPolicyTest
-    : public GlicPolicyTest,
-      public testing::WithParamInterface<
-          std::tuple<GeminiSettingsState, bool, bool>> {
- public:
-  GeminiEnterpriseSettingsPolicyTest() = default;
-  ~GeminiEnterpriseSettingsPolicyTest() override = default;
-
-  void SetPolicies(GeminiSettingsState gemini_settings_state,
-                   bool set_enterprise_settings) {
-    using policy::POLICY_LEVEL_MANDATORY;
-    using policy::POLICY_SCOPE_USER;
-    using policy::POLICY_SOURCE_ENTERPRISE_DEFAULT;
-    using policy::PolicyMap;
-
-    PolicyMap policies = policy_for_profile_1()
-                             .policies()
-                             .Get(policy::PolicyNamespace(
-                                 policy::POLICY_DOMAIN_CHROME, std::string()))
-                             .Clone();
-
-    if (gemini_settings_state != GeminiSettingsState::kUnset) {
-      policies.Set(
-          policy::key::kGeminiSettings, POLICY_LEVEL_MANDATORY,
-          POLICY_SCOPE_USER, POLICY_SOURCE_ENTERPRISE_DEFAULT,
-          base::Value(static_cast<int>(
-              gemini_settings_state == GeminiSettingsState::kEnabled
-                  ? SettingsPolicyState::kEnabled
-                  : SettingsPolicyState::kDisabled)),
-          nullptr);
-    }
-
-    if (set_enterprise_settings) {
-      policies.Set(policy::key::kGeminiEnterpriseSettings,
-                   POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
-                   POLICY_SOURCE_ENTERPRISE_DEFAULT,
-                   base::Value(base::DictValue()
-                                   .Set("project_id", "test-project")
-                                   .Set("app_id", "test-engine")
-                                   .Set("location", "global")),
-                   nullptr);
-    }
-
-    policy_for_profile_1().UpdateChromePolicy(policies);
-  }
-};
-
-IN_PROC_BROWSER_TEST_P(GeminiEnterpriseSettingsPolicyTest,
-                       PrefStateMatchesExpectations) {
-  GeminiSettingsState gemini_settings_state = std::get<0>(GetParam());
-  bool gemini_enterprise_settings_set = std::get<1>(GetParam());
-  bool expected_enterprise_settings_pref_set = std::get<2>(GetParam());
-
-  SetPolicies(gemini_settings_state, gemini_enterprise_settings_set);
-
-  const base::DictValue& pref_value = profile_1_->GetPrefs()->GetDict(
-      glic::prefs::kGlicGeminiEnterpriseSettings);
-
-  if (expected_enterprise_settings_pref_set) {
-    EXPECT_THAT(pref_value, base::test::IsJson(R"({
-                  "project_id": "test-project",
-                  "app_id": "test-engine",
-                  "location": "global"
-                })"));
-  } else {
-    EXPECT_TRUE(pref_value.empty());
-  }
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    ,
-    GeminiEnterpriseSettingsPolicyTest,
-    testing::Values(
-        std::make_tuple(GeminiSettingsState::kUnset, false, false),
-        std::make_tuple(GeminiSettingsState::kUnset, true, true),
-        std::make_tuple(GeminiSettingsState::kEnabled, false, false),
-        std::make_tuple(GeminiSettingsState::kEnabled, true, true),
-        std::make_tuple(GeminiSettingsState::kDisabled, false, false),
-        std::make_tuple(GeminiSettingsState::kDisabled, true, true)));
-
-#endif
 
 // Same as GlicPolicyTest but starts Chrome with the Glic policy disabled.
 class GlicPolicyDisabledTest : public GlicPolicyTest {

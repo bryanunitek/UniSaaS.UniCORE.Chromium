@@ -23,10 +23,12 @@
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/tribool.h"
 #include "components/subscription_eligibility/subscription_eligibility_service.h"
 #include "components/sync_device_info/device_info.h"
 #include "content/public/browser/web_contents.h"
 
+class AccountCapabilities;
 class Profile;
 class ProfileAttributesStorage;
 
@@ -86,7 +88,7 @@ class GlicGlobalEnabling {
   ~GlicGlobalEnabling();
   bool IsEnabledByGlobalCriteria();
   bool IsSystemRequirementMet() const;
-  bool IsOsVersionSupported() const;
+  static bool IsOsVersionSupported();
   bool IsLocaleEnabled() const { return locale_enablement_.value_or(true); }
   bool IsCountryEnabled() const { return country_enablement_.value_or(true); }
 
@@ -137,6 +139,21 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // will not change at runtime.
   static bool IsEnabledByGlobalCriteria();
 
+  // Unified helper methods for checking enterprise account and device/browser
+  // management state.
+  static bool IsBrowserManaged(Profile* profile);
+  static bool IsDeviceManaged();
+  static bool IsAccountDataProtected(Profile* profile);
+  static signin::Tribool IsAccountManaged(Profile* profile);
+  static bool IsEnterpriseAccount(Profile* profile);
+
+  // Returns whether the account capability permits using Glic features that are
+  // available only to adult users.
+  static bool CanUseAdultFeatures(
+      const AccountCapabilities& capabilities);
+
+  // Returns whether the OS version is supported.
+  static bool IsOsVersionSupported();
   // Checks whether this client is likely a dogfooder, taking the ignore dogfood
   // feature into account.
   static bool IsLikelyDogfoodClient();
@@ -167,6 +184,10 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // Code inside should use instance method IsAllowed() instead.
   static bool IsEnabledForProfile(Profile* profile);
 
+  // Returns true if the user was previously determined to be ineligible for
+  // Glic.
+  static bool WasPreviouslyNotAllowed(Profile* profile);
+
   // Returns true if the profile has completed the FRE.
   static bool HasConsentedForProfile(Profile* profile);
 
@@ -186,6 +207,10 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
 
   // Same as IsReadyForProfile, but returns a more detailed state.
   static mojom::ProfileReadyState GetProfileReadyState(Profile* profile);
+
+  // If Glic has recovered to a ready state since the last check, logs the
+  // previous unhealthy state as a recovery outcome on user interaction.
+  void MaybeRecordRecoveryOnInteraction();
 
   // Whether the profile is in the Glic tiered rollout population.
   static bool IsEligibleForGlicTieredRollout(Profile* profile);
@@ -209,7 +234,8 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   static bool IsAutoOpenForPdfEnabled(Profile* profile);
 
   // Whether the tab web contents contextual menu item is enabled.
-  static bool IsContextualMenuItemEnabled(Profile* profile);
+  static bool IsContextualMenuItemEnabled(Profile* profile,
+                                          const std::u16string& selection_text);
 
   // Whether the selection prompt is enabled.
   static bool IsSelectionPromptEnabledForProfile(Profile* profile);
@@ -288,6 +314,23 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
       kMaxValue = kOsVersionNotSupported,
     };
     // LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicFeatureDisabledReason)
+
+    // LINT.IfChange(GlicAnchoredDespiteEligibilityReason)
+    enum class AnchoredDespiteEligibilityReason {
+      kFeatureFlagDisabled = 0,
+      kCountryDisabled = 1,
+      kLocaleDisabled = 2,
+      kSystemRequirementNotMet = 3,
+      kOsVersionNotSupported = 4,
+      kPrimaryAccountNotCapable = 5,
+      kDisallowedByChromePolicy = 6,
+      kDisallowedByRemoteAdmin = 7,
+      kDisallowedByRemoteOther = 8,
+      kNotRegularProfile = 9,
+      kNotRolledOut = 10,
+      kMaxValue = kNotRolledOut,
+    };
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicAnchoredDespiteEligibilityReason)
 
     enum class DisabledReason {
       kFeatureDisabled = 0,
@@ -498,6 +541,8 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
   // IdentityManagerObserver:
   void OnPrimaryAccountChanged(
       const signin::PrimaryAccountChangeEvent& event_details) override;
+  void OnIdentityManagerShutdown(
+      signin::IdentityManager* identity_manager) override;
 
   // subscription_eligibility::SubscriptionEligibilityService::Observer:
   void OnAiSubscriptionTierUpdated(int32_t new_subscription_tier) override;
@@ -521,6 +566,8 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
 
   void UpdateEnabledStatus();
   void UpdateConsentStatus();
+
+  void MaybeNotifyProfileReadyStateChanged();
 
 #if BUILDFLAG(IS_CHROMEOS)
   static bool IsChromeOSProfileEligible(Profile* profile);
@@ -565,6 +612,7 @@ class GlicEnabling final : public signin::IdentityManager::Observer,
       subscription_eligibility_service_observation_{this};
   syncer::DeviceInfo::GlicExperimentalTriggeringState
       last_experimental_triggering_state_;
+  mojom::ProfileReadyState last_profile_ready_state_;
 };
 
 }  // namespace glic

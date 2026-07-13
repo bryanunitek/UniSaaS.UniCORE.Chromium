@@ -50,8 +50,12 @@ void IOSWebAuthnCredentialsDelegate::SelectPasskey(
       PasskeyTabHelper::FromWebState(web_state_.get());
   CHECK(passkey_tab_helper);
 
-  passkey_tab_helper->StartPasskeyAssertion(passkey_request_id_,
-                                            std::move(selected_credential_id));
+  // Check if this passkey has been marked as user verified and consume the
+  // verification status by removing it from the set.
+  bool did_complete_uv = verified_backend_ids_.erase(backend_id) > 0;
+
+  passkey_tab_helper->StartPasskeyAssertion(
+      passkey_request_id_, std::move(selected_credential_id), did_complete_uv);
 }
 
 base::expected<const std::vector<password_manager::PasskeyCredential>*,
@@ -122,6 +126,28 @@ void IOSWebAuthnCredentialsDelegate::NotifyClientsOfPasskeyAvailability() {
   for (auto& callback : callbacks) {
     std::move(callback).Run();
   }
+}
+
+bool IOSWebAuthnCredentialsDelegate::CanReusePreviousSigninAuth() const {
+  if (!web_state_ || passkey_request_id_.empty()) {
+    return false;
+  }
+  PasskeyTabHelper* passkey_tab_helper =
+      PasskeyTabHelper::FromWebState(web_state_.get());
+  if (!passkey_tab_helper) {
+    return false;
+  }
+  std::optional<bool> should_perform_user_verification =
+      passkey_tab_helper->ShouldPerformUserVerification(passkey_request_id_);
+  if (should_perform_user_verification.has_value()) {
+    return !*should_perform_user_verification;
+  }
+  return false;
+}
+
+void IOSWebAuthnCredentialsDelegate::MarkPasskeyAsUserVerified(
+    const std::string& backend_id) {
+  verified_backend_ids_.insert(backend_id);
 }
 
 }  // namespace webauthn

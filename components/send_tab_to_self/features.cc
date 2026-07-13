@@ -45,11 +45,23 @@ BASE_FEATURE(kSendTabToSelfPostSendToast, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSendTabToSelfExtraEntryPoints, base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kSendTabToSelfEnhancedDesktopUIv2,
+             "SendTabToSelfEnhancedDesktopUIv2",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 #if BUILDFLAG(IS_ANDROID)
 BASE_FEATURE(kSendTabToSelfGesture, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+BASE_FEATURE(kSendTabToSelfEnhancedBottomsheet,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+
 #if BUILDFLAG(IS_IOS)
+
+BASE_FEATURE(kSendTabToSelfIOSShareSheetDeviceList,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kIOSTabReminders, base::FEATURE_DISABLED_BY_DEFAULT);
 

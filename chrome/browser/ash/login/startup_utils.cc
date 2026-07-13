@@ -29,11 +29,9 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_display_host_common.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/oobe_config/oobe_configuration_client.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
-#include "components/metrics/metrics_reporting_level.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -110,9 +108,6 @@ void StartupUtils::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(ash::prefs::kEnrollmentRecoveryRequired, false);
   registry->RegisterStringPref(ash::prefs::kInitialLocale, "en-US");
   registry->RegisterBooleanPref(prefs::kOobeGuestMetricsEnabled, false);
-  registry->RegisterIntegerPref(
-      prefs::kOobeGuestMetricsReportingLevel,
-      static_cast<int>(metrics::MetricsReportingLevel::kNone));
   registry->RegisterBooleanPref(prefs::kOobeCriticalUpdateCompleted, false);
   registry->RegisterBooleanPref(prefs::kOobeIsConsumerSegment, false);
   registry->RegisterBooleanPref(prefs::kOobeConsumerUpdateCompleted, false);
@@ -140,6 +135,8 @@ void StartupUtils::RegisterPrefs(PrefRegistrySimple* registry) {
       constants::kDefaultAuthenticationFlowAutoReloadInterval);
 
   registry->RegisterBooleanPref(prefs::kAutoEnrollmentCheckExited, false);
+  registry->RegisterIntegerPref(prefs::kDeviceOnlinePasswordMismatchBehavior,
+                                0);
 }
 
 // static
@@ -255,7 +252,9 @@ bool StartupUtils::IsDeviceRegistered(PrefService& local_state) {
   if (value > 0) {
     // Recreate flag file in case it was lost.
     base::ThreadPool::PostTask(
-        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+        FROM_HERE,
+        {base::TaskPriority::USER_VISIBLE, base::MayBlock(),
+         base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
         base::BindOnce(&CreateOobeCompleteFlagFile));
     return true;
   } else if (value == 0) {
@@ -296,11 +295,15 @@ void StartupUtils::MarkDeviceRegistered(PrefService& local_state,
 
   if (done_callback.is_null()) {
     base::ThreadPool::PostTask(
-        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+        FROM_HERE,
+        {base::TaskPriority::USER_VISIBLE, base::MayBlock(),
+         base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
         base::BindOnce(&CreateOobeCompleteFlagFile));
   } else {
     base::ThreadPool::PostTaskAndReply(
-        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+        FROM_HERE,
+        {base::TaskPriority::USER_VISIBLE, base::MayBlock(),
+         base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
         base::BindOnce(&CreateOobeCompleteFlagFile), std::move(done_callback));
   }
 }

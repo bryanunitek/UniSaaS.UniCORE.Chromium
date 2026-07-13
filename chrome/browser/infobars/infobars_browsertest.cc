@@ -13,8 +13,10 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
 #include "chrome/browser/devtools/devtools_infobar_delegate.h"
 #include "chrome/browser/extensions/api/debugger/extension_dev_tools_infobar_delegate.h"
@@ -22,6 +24,8 @@
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/theme_installed_infobar_delegate.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/infobars/test_support/infobar_observer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
@@ -42,6 +46,7 @@
 #include "chrome/browser/ui/test/test_infobar.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
+#include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -49,6 +54,7 @@
 #include "components/crx_file/crx_verifier.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
+#include "components/infobars/core/infobar_delegate.h"
 #include "content/public/common/buildflags.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/crx_installer.h"
@@ -156,7 +162,11 @@ IN_PROC_BROWSER_TEST_F(InfoBarsTest, TestInfoBarsCloseOnNewTheme) {
 
 class InfoBarUiTest : public TestInfoBar {
  public:
-  InfoBarUiTest() = default;
+  InfoBarUiTest() {
+    feature_list_.InitAndEnableFeatureWithParameters(
+        infobars::kCentralizedInfoBarFramework,
+        {{"Migrated", "collected_cookies,page_info"}});
+  }
 
   InfoBarUiTest(const InfoBarUiTest&) = delete;
   InfoBarUiTest& operator=(const InfoBarUiTest&) = delete;
@@ -168,6 +178,7 @@ class InfoBarUiTest : public TestInfoBar {
  private:
   using IBD = infobars::InfoBarDelegate;
 
+  base::test::ScopedFeatureList feature_list_;
   MockTabSharingUI mock_tab_sharing_ui_views_;
 };
 
@@ -267,7 +278,13 @@ void InfoBarUiTest::ShowUi(const std::string& name) {
       break;
 
     case IBD::COLLECTED_COOKIES_INFOBAR_DELEGATE:
-      CollectedCookiesInfoBarDelegate::Create(GetInfoBarManager());
+      if (infobars::IsInfoBarMigrated(
+              infobars::InfoBarDelegate::COLLECTED_COOKIES_INFOBAR_DELEGATE)) {
+        PageSpecificSiteDataDialogController::ShowCollectedCookiesInfoBar(
+            GetWebContents());
+      } else {
+        CollectedCookiesInfoBarDelegate::Create(GetInfoBarManager());
+      }
       break;
 
     case IBD::INSTALLATION_ERROR_INFOBAR_DELEGATE: {
@@ -311,7 +328,18 @@ void InfoBarUiTest::ShowUi(const std::string& name) {
       break;
 
     case IBD::PAGE_INFO_INFOBAR_DELEGATE:
-      PageInfoInfoBarDelegate::Create(GetInfoBarManager());
+      if (infobars::IsInfoBarMigrated(
+              infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE)) {
+        auto* browser_infobar_manager =
+            infobars::BrowserInfoBarManager::From(g_browser_process);
+        if (browser_infobar_manager) {
+          browser_infobar_manager->Show(
+              GetWebContents(),
+              infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE);
+        }
+      } else {
+        PageInfoInfoBarDelegate::Create(GetInfoBarManager());
+      }
       break;
 
     case IBD::TRANSLATE_INFOBAR_DELEGATE_NON_AURA: {

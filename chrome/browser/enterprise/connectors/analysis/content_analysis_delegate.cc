@@ -25,8 +25,6 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/connectors/analysis/clipboard_analysis_request.h"
-#include "chrome/browser/enterprise/connectors/analysis/clipboard_request_handler.h"
 #include "chrome/browser/enterprise/connectors/analysis/content_analysis_dialog_controller.h"
 #include "chrome/browser/enterprise/connectors/analysis/files_request_handler.h"
 #include "chrome/browser/enterprise/connectors/analysis/page_print_analysis_request.h"
@@ -34,6 +32,7 @@
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
 #include "chrome/browser/enterprise/connectors/referrer_cache_utils.h"
+#include "chrome/browser/enterprise/connectors/reporting/reporting_event_router_factory.h"
 #include "chrome/browser/file_util_service.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/profiles/profile.h"
@@ -49,6 +48,8 @@
 #include "components/enterprise/common/proto/connectors.pb.h"
 #include "components/enterprise/connectors/core/analysis_settings.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/clipboard_analysis_request.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/clipboard_request_handler.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/deep_scanning_utils.h"
 #include "components/enterprise/connectors/core/common.h"
 #include "components/enterprise/connectors/core/features.h"
@@ -64,6 +65,7 @@
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/url_matcher/url_matcher.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "crypto/secure_hash.h"
 #include "crypto/sha2.h"
 #include "net/base/mime_util.h"
@@ -323,6 +325,12 @@ std::u16string ContentAnalysisDelegate::GetBypassJustificationLabel() const {
     case DeepScanAccessPoint::PRINT:
       id = IDS_DEEP_SCANNING_DIALOG_PRINT_BYPASS_JUSTIFICATION_LABEL;
       break;
+    // TODO(b/325455508): Add specific copy bypass justification label.
+    case DeepScanAccessPoint::COPY:
+      id = IDS_DEEP_SCANNING_DIALOG_PASTE_BYPASS_JUSTIFICATION_LABEL;
+      break;
+    case DeepScanAccessPoint::NETWORK_REQUEST:
+      NOTREACHED();
   }
   return l10n_util::GetStringUTF16(id);
 }
@@ -382,7 +390,7 @@ void ContentAnalysisDelegate::CreateForWebContents(
                             web_contents, std::move(data), std::move(callback),
                             access_point))
                       : testing_factory->Run(web_contents, std::move(data),
-                                             std::move(callback));
+                                             std::move(callback), access_point);
 
   delegate->creation_time_ = base::TimeTicks::Now();
   UploadDataStatus upload_data_status = delegate->UploadData();
@@ -391,12 +399,16 @@ void ContentAnalysisDelegate::CreateForWebContents(
   // 1. work is ongoing in the background and that the user must wait for a
   // verdict.
   // 2. work is done and fail-closed conditions are met.
+  // For COPY trigger operations, we don't show a dialog. Instead, we communicate
+  // with the user via the content of the clipboard and using toasts. UI toast
+  // elements are handled separately since the copy trigger is the only DLP rule
+  // showing toasts in the context of Chrome Enterprise Premium (CEP).
   bool show_in_progress_ui =
       upload_data_status == UploadDataStatus::kInProgress && wait_for_verdict &&
-      (*UIEnabledStorage());
+      (*UIEnabledStorage()) && access_point != DeepScanAccessPoint::COPY;
   bool show_fail_closed_ui =
       delegate->IsFailClosed(upload_data_status, should_allow_by_default) &&
-      (*UIEnabledStorage());
+      (*UIEnabledStorage()) && access_point != DeepScanAccessPoint::COPY;
 
   DVLOG(1) << __func__ << ": show_fail_closed_ui=" << show_fail_closed_ui;
 
@@ -608,6 +620,14 @@ bool ContentAnalysisDelegate::ShowFinalResultInDialog() {
     return false;
   }
 
+  if (access_point_ == DeepScanAccessPoint::ACTOR && web_contents_ &&
+      final_result_ != FinalContentAnalysisResult::SUCCESS) {
+    // TODO(crbug.com/473047343): Add browsertests to validate surfacing works.
+    if (web_contents_->GetDelegate()) {
+      web_contents_->GetDelegate()->ActivateContents(web_contents_.get());
+    }
+  }
+
   dialog_->ShowResult(final_result_);
   return true;
 }
@@ -729,6 +749,13 @@ void ContentAnalysisDelegate::PrepareTextRequest() {
                                    /*min=*/1,
                                    /*max=*/51 * 1024 * 1024,
                                    /*buckets=*/50);
+    if (access_point_ == DeepScanAccessPoint::ACTOR) {
+      base::UmaHistogramCustomCounts(
+          "Enterprise.OnBulkDataEntry.Actor.DataSize", full_text.size(),
+          /*min=*/1,
+          /*max=*/51 * 1024 * 1024,
+          /*buckets=*/50);
+    }
   }
 
   if (text_request_complete_) {
@@ -739,12 +766,14 @@ void ContentAnalysisDelegate::PrepareTextRequest() {
     std::fill(result_.text_results.begin(), result_.text_results.end(), true);
   } else {
     text_request_handler_ = ClipboardRequestHandler::Create(
-        this, GetBinaryUploadService(), profile_, url_,
+        this, GetBinaryUploadService(),
+        ReportingEventRouterFactory::GetForBrowserContext(profile_), url_,
         ClipboardRequestHandler::Type::kText, access_point_,
         data_.clipboard_source, data_.source_content_area_email,
         GetContentTransferMethod(), std::move(full_text),
         base::BindOnce(&ContentAnalysisDelegate::TextRequestCallback,
-                       weak_ptr_factory_.GetWeakPtr()));
+                       weak_ptr_factory_.GetWeakPtr()),
+        base::BindRepeating(&GetBrowserPolicyConnector));
 
     text_request_handler_->UploadData();
   }
@@ -765,6 +794,13 @@ void ContentAnalysisDelegate::PrepareImageRequest() {
                                    /*min=*/1,
                                    /*max=*/51 * 1024 * 1024,
                                    /*buckets=*/50);
+    if (access_point_ == DeepScanAccessPoint::ACTOR) {
+      base::UmaHistogramCustomCounts(
+          "Enterprise.OnBulkDataEntry.Actor.DataSize", data_.image.size(),
+          /*min=*/1,
+          /*max=*/51 * 1024 * 1024,
+          /*buckets=*/50);
+    }
   }
 
   if (image_request_complete_) {
@@ -775,12 +811,14 @@ void ContentAnalysisDelegate::PrepareImageRequest() {
     result_.image_result = true;
   } else {
     image_request_handler_ = ClipboardRequestHandler::Create(
-        this, GetBinaryUploadService(), profile_, url_,
+        this, GetBinaryUploadService(),
+        ReportingEventRouterFactory::GetForBrowserContext(profile_), url_,
         ClipboardRequestHandler::Type::kImage, access_point_,
         data_.clipboard_source, data_.source_content_area_email,
         GetContentTransferMethod(), data_.image,
         base::BindOnce(&ContentAnalysisDelegate::ImageRequestCallback,
-                       weak_ptr_factory_.GetWeakPtr()));
+                       weak_ptr_factory_.GetWeakPtr()),
+        base::BindRepeating(&GetBrowserPolicyConnector));
 
     image_request_handler_->UploadData();
   }
@@ -962,6 +1000,8 @@ std::string ContentAnalysisDelegate::GetContentTransferMethod() const {
     case enterprise_connectors::ContentAnalysisRequest::SAVE_AS_DOWNLOAD:
       return "";
 
+    case enterprise_connectors::ContentAnalysisRequest::CLIPBOARD_COPY:
+      return kContentTransferMethodClipboardCopy;
     case enterprise_connectors::ContentAnalysisRequest::CLIPBOARD_PASTE:
       if (!data_.paths.empty()) {
         return kContentTransferMethodFilePaste;

@@ -48,6 +48,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/install_flag.h"
 #include "extensions/browser/install_prefs_helper.h"
+#include "extensions/browser/manifest_v2_handler.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/browser/user_script_manager.h"
 #include "extensions/common/api/types.h"
@@ -2255,11 +2256,7 @@ void ExtensionPrefs::RegisterProfilePrefs(
                                 0);
   registry->RegisterListPref(pref_names::kExtensionInstallTypeBlocklist);
   registry->RegisterBooleanPref(
-      kMV2DeprecationWarningAcknowledgedGloballyPref.name, false);
-  registry->RegisterBooleanPref(
-      kMV2DeprecationDisabledAcknowledgedGloballyPref.name, false);
-  registry->RegisterBooleanPref(
-      kMV2DeprecationUnsupportedAcknowledgedGloballyPref.name, false);
+      ManifestV2Handler::kMV2UnsupportedAcknowledgedGloballyPref.name, false);
   registry->RegisterStringPref(pref_names::kGlobalShortcutsUuid, std::string());
 
   registry->RegisterBooleanPref(
@@ -2676,6 +2673,7 @@ void ExtensionPrefs::MigrateObsoleteExtensionPrefs() {
       "mv2_deprecation_disabled_ack",
       "mv2_deprecation_user_re_enabled",
       "mv2_deprecation_unsupported_disabled_dialog_ack",
+      "mv2_deprecation_did_disable",
   };
 
   for (auto key_value : extensions_dictionary) {

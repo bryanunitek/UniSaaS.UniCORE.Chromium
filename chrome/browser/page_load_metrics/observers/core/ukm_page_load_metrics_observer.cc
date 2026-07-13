@@ -28,7 +28,6 @@
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/waap/waap_utils.h"
 #include "chrome/common/pref_names.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/common/features.h"
@@ -218,16 +217,6 @@ UkmPageLoadMetricsObserver::~UkmPageLoadMetricsObserver() = default;
 const char* UkmPageLoadMetricsObserver::GetObserverName() const {
   static constexpr std::string_view kName = "UkmPageLoadMetricsObserver";
   return kName.data();
-}
-
-page_load_metrics::PageLoadMetricsObserver::ObservePolicy
-UkmPageLoadMetricsObserver::ShouldObserveScheme(const GURL& url) const {
-#if !BUILDFLAG(IS_ANDROID)
-  if (waap::IsForInitialWebUI(url)) {
-    return CONTINUE_OBSERVING;
-  }
-#endif
-  return page_load_metrics::PageLoadMetricsObserver::ShouldObserveScheme(url);
 }
 
 UkmPageLoadMetricsObserver::ObservePolicy UkmPageLoadMetricsObserver::OnStart(
@@ -542,8 +531,9 @@ void UkmPageLoadMetricsObserver::OnResourceDataUseObserved(
       continue;
     if (blink::IsSupportedJavascriptMimeType(resource->mime_type)) {
       js_decoded_bytes_ += resource->decoded_body_length;
-      if (resource->decoded_body_length > js_max_decoded_bytes_)
+      if (resource->decoded_body_length > js_max_decoded_bytes_) {
         js_max_decoded_bytes_ = resource->decoded_body_length;
+      }
     }
     if (resource->cache_type !=
         page_load_metrics::mojom::CacheType::kNotCached) {

@@ -1027,9 +1027,9 @@ String RepeatString(const String& string, unsigned count) {
 
 template <typename Strategy>
 static Element* TableElementJustBeforeAlgorithm(
-    const VisiblePositionTemplate<Strategy>& visible_position) {
+    const PositionTemplate<Strategy>& position) {
   const PositionTemplate<Strategy> upstream(
-      MostBackwardCaretPosition(visible_position.DeepEquivalent()));
+      MostBackwardCaretPosition(position));
   if (IsDisplayInsideTable(upstream.AnchorNode()) &&
       upstream.AtLastEditingPositionForNode())
     return To<Element>(upstream.AnchorNode());
@@ -1037,14 +1037,21 @@ static Element* TableElementJustBeforeAlgorithm(
   return nullptr;
 }
 
+Element* TableElementJustBefore(const Position& position) {
+  return TableElementJustBeforeAlgorithm<EditingStrategy>(position);
+}
+
+Element* TableElementJustBefore(const PositionInFlatTree& position) {
+  return TableElementJustBeforeAlgorithm<EditingInFlatTreeStrategy>(position);
+}
+
 Element* TableElementJustBefore(const VisiblePosition& visible_position) {
-  return TableElementJustBeforeAlgorithm<EditingStrategy>(visible_position);
+  return TableElementJustBefore(visible_position.DeepEquivalent());
 }
 
 Element* TableElementJustBefore(
     const VisiblePositionInFlatTree& visible_position) {
-  return TableElementJustBeforeAlgorithm<EditingInFlatTreeStrategy>(
-      visible_position);
+  return TableElementJustBefore(visible_position.DeepEquivalent());
 }
 
 Element* EnclosingTableCell(const Position& p) {
@@ -1054,14 +1061,17 @@ Element* EnclosingTableCell(const PositionInFlatTree& p) {
   return To<Element>(EnclosingNodeOfType(p, IsTableCell));
 }
 
-Element* TableElementJustAfter(const VisiblePosition& visible_position) {
-  Position downstream(
-      MostForwardCaretPosition(visible_position.DeepEquivalent()));
+Element* TableElementJustAfter(const Position& position) {
+  Position downstream(MostForwardCaretPosition(position));
   if (IsDisplayInsideTable(downstream.AnchorNode()) &&
       downstream.AtFirstEditingPositionForNode())
     return To<Element>(downstream.AnchorNode());
 
   return nullptr;
+}
+
+Element* TableElementJustAfter(const VisiblePosition& visible_position) {
+  return TableElementJustAfter(visible_position.DeepEquivalent());
 }
 
 // Returns the position at the beginning of a node
@@ -1084,7 +1094,7 @@ Position PositionAfterNode(const Node& node) {
   return Position::InParentAfterNode(node);
 }
 
-bool IsHTMLListElement(const Node* n) {
+bool IsHtmlListElement(const Node* n) {
   return (n && (IsA<HTMLUListElement>(*n) || IsA<HTMLOListElement>(*n) ||
                 IsA<HTMLDListElement>(*n)));
 }
@@ -1105,7 +1115,7 @@ bool IsListElementTag(const Node* n) {
                n->HasTagName(html_names::kDlTag));
 }
 
-bool IsPresentationalHTMLElement(const Node* node) {
+bool IsPresentationalHtmlElement(const Node* node) {
   const auto* element = DynamicTo<HTMLElement>(node);
   if (!element)
     return false;
@@ -1255,7 +1265,7 @@ HTMLElement* CreateDefaultParagraphElement(Document& document) {
   NOTREACHED();
 }
 
-bool IsTabHTMLSpanElement(const Node* node) {
+bool IsTabSpanElement(const Node* node) {
   const auto* span = DynamicTo<HTMLSpanElement>(node);
   if (!span) {
     return false;
@@ -1275,13 +1285,13 @@ bool IsTabHTMLSpanElement(const Node* node) {
   return style && style->WhiteSpace() == EWhiteSpace::kPre;
 }
 
-bool IsTabHTMLSpanElementTextNode(const Node* node) {
+bool IsTabSpanElementTextNode(const Node* node) {
   return node && node->IsTextNode() && node->parentNode() &&
-         IsTabHTMLSpanElement(node->parentNode());
+         IsTabSpanElement(node->parentNode());
 }
 
 HTMLSpanElement* TabSpanElement(const Node* node) {
-  return IsTabHTMLSpanElementTextNode(node)
+  return IsTabSpanElementTextNode(node)
              ? To<HTMLSpanElement>(node->parentNode())
              : nullptr;
 }
@@ -1498,7 +1508,7 @@ Position ComputePositionForNodeRemoval(const Position& position,
   NOTREACHED() << "We should handle all PositionAnchorType";
 }
 
-bool IsMailHTMLBlockquoteElement(const Node* node) {
+bool IsMailHtmlBlockquoteElement(const Node* node) {
   const auto* element = DynamicTo<HTMLElement>(*node);
   if (!element)
     return false;
@@ -1620,7 +1630,7 @@ bool AreSameRangesAlgorithm(Node* node,
   DCHECK(node);
   const EphemeralRange range =
       CreateVisibleSelection(
-          SelectionInDOMTree::Builder().SelectAllChildren(*node).Build())
+          SelectionInDomTree::Builder().SelectAllChildren(*node).Build())
           .ToNormalizedEphemeralRange();
   return ToPositionInDomTree(start_position) == range.StartPosition() &&
          ToPositionInDomTree(end_position) == range.EndPosition();
@@ -1651,7 +1661,7 @@ bool IsRenderedAsNonInlineTableImageOrHR(const Node* node) {
          layout_object->IsHR();
 }
 
-bool IsNonTableCellHTMLBlockElement(const Node* node) {
+bool IsNonTableCellHtmlBlockElement(const Node* node) {
   const auto* element = DynamicTo<HTMLElement>(node);
   if (!element)
     return false;

@@ -23,6 +23,7 @@
 #import "components/strings/grit/components_strings.h"
 #import "components/sync/base/features.h"
 #import "components/sync/service/sync_prefs.h"
+#import "components/webauthn/ios/features.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/autofill/manual_fill/public/manual_fill_constants.h"
 #import "ios/chrome/browser/autofill/manual_fill/test/manual_fill_matchers.h"
@@ -296,12 +297,6 @@ void SlowlyTypeText(NSString* text) {
 
 @implementation FormInputAccessoryEGTest
 
-// Returns whether the two-bubble feature should be enabled for the current
-// test. `NO` is returned to verify all tests pass when the two-bubble feature
-// is disabled.
-- (BOOL)shouldEnableTwoBubbleFeature {
-  return NO;
-}
 
 - (void)setUp {
   [super setUp];
@@ -345,8 +340,6 @@ void SlowlyTypeText(NSString* text) {
                         overrideParam:(std::string_view)overrideParam {
   config.features_enabled.push_back(
       autofill::features::kAutofillAiWithDataSchema);
-  config.features_enabled.push_back(
-      autofill::features::kAutofillAiCreateEntityDataManager);
   config.features_enabled.push_back(
       autofill::features::debug::kAutofillAiForceOptIn);
 
@@ -400,8 +393,6 @@ void SlowlyTypeText(NSString* text) {
   }
 
   if ([self isRunningTest:@selector(testAccountNameEmailIPH)]) {
-    config.features_enabled.push_back(
-        autofill::features::kAutofillEnableSupportForNameAndEmail);
     config.iph_feature_enabled =
         feature_engagement::kIPHAutofillAccountNameEmailSuggestionFeature.name;
   }
@@ -411,11 +402,12 @@ void SlowlyTypeText(NSString* text) {
         autofill::features::kAutofillAcrossIframesIos);
   }
 
-  if ([self shouldEnableTwoBubbleFeature]) {
-    config.features_enabled.push_back(kIOSKeyboardAccessoryTwoBubble);
-  } else {
-    config.features_disabled.push_back(kIOSKeyboardAccessoryTwoBubble);
+  if ([self isRunningTest:@selector
+            (testPasswordSuggestionsSubtext_ConditionalPasskeyLoginEnabled)]) {
+    config.features_enabled.push_back(kIOSPasskeyShim);
+    config.features_enabled.push_back(kIOSPasskeyConditionalLoginWithShim);
   }
+
 
   return config;
 }
@@ -1353,21 +1345,42 @@ id<GREYMatcher> PaymentsBottomSheetUseKeyboardButton() {
   [self verifyFieldWithIdHasBeenFilled:kFormVehicleVIN value:@""];
 }
 
-@end
+// Tests that password suggestions shown on the Keyboard Accessory get their
+// subtext overridden to "Password" when Conditional Passkey Login is enabled.
+- (void)testPasswordSuggestionsSubtext_ConditionalPasskeyLoginEnabled {
+  // Disable the credential bottom sheet.
+  [CredentialSuggestionBottomSheetAppInterface disableBottomSheet];
 
-// Reruns all the tests in this file but with the two-bubble feature enabled by
-// default.
-@interface FormInputAccessoryTwoBubbleTestCase : FormInputAccessoryEGTest
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
+                                    ReauthenticationResult::kSuccess];
 
-@end
+  NSString* username = kExampleUsername;
+  NSString* password = kExamplePassword;
+  [PasswordManagerAppInterface
+      storeCredentialWithUsername:username
+                         password:password
+                              URL:net::NSURLWithGURL([self loginPageURL])];
+  [self loadLoginPage];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::WebViewMatcher()]
+      performAction:chrome_test_util::TapWebElementWithId(kFormPassword)];
 
-@implementation FormInputAccessoryTwoBubbleTestCase
+  // The suggestion chip's accessibility label should mention "user, Password"
+  // instead of "user, localhost" (or signon realm).
+  NSString* passwordSubtext = l10n_util::GetNSString(IDS_IOS_PASSWORD_SUBTEXT);
+  NSString* expectedAccessibilityLabel =
+      [NSString stringWithFormat:@"%@, %@", username, passwordSubtext];
+  id<GREYMatcher> userChip = grey_allOf(
+      grey_accessibilityLabel(expectedAccessibilityLabel),
+      grey_ancestor(
+          grey_accessibilityID(kFormInputAccessoryViewAccessibilityID)),
+      nil);
 
-// Returns whether the two-bubble feature should be enabled for the current
-// test. It returns `YES` to rerun tests defined in
-// `FormInputAccessoryEGTest`.
-- (BOOL)shouldEnableTwoBubbleFeature {
-  return YES;
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:userChip];
+
+  [[EarlGrey selectElementWithMatcher:userChip] performAction:grey_tap()];
+
+  [self verifyFieldsHaveBeenFilledWithUsername:username password:password];
 }
 
 @end
+

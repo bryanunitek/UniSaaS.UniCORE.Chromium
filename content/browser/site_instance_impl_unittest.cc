@@ -21,13 +21,13 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/unguessable_token.h"
 #include "content/browser/browsing_instance.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/isolated_origin_util.h"
 #include "content/browser/origin_agent_cluster_isolation_state.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/url_info.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -105,9 +105,9 @@ const base::UnguessableToken kBrowserContextId =
 class SiteInstanceTestBrowserClient : public TestContentBrowserClient {
  public:
   bool IsSuitableHost(RenderProcessHost* process_host,
-                      const GURL& site_url) override {
+                      const SecurityPrincipal& security_principal) override {
     return (privileged_process_id_ == process_host->GetDeprecatedID()) ==
-           site_url.SchemeIs(kPrivilegedScheme);
+           security_principal.SchemeIs(kPrivilegedScheme);
   }
 
   void set_privileged_process_id(int process_id) {

@@ -486,6 +486,16 @@ _BANNED_IOS_OBJC_FUNCTIONS = (
             'ios/web_view',
         ),
     ),
+    BanRule(
+        r'/\bUIDevice\b(.*?)\buserInterfaceIdiom\b',
+        ('UIDevice.currentDevice.userInterfaceIdiom should not be used.',
+         'Use GetDeviceFormFactor() instead.'),
+        True,
+        excluded_paths=(
+            r'^ui/base/device_form_factor_ios\.mm$',
+            r'^ios/third_party/',
+        ),
+    ),
 )
 
 _BANNED_IOS_EGTEST_FUNCTIONS: Sequence[BanRule] = (BanRule(
@@ -496,6 +506,21 @@ _BANNED_IOS_EGTEST_FUNCTIONS: Sequence[BanRule] = (BanRule(
 ), )
 
 _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
+    BanRule(
+        r'/\b(TimeTicks::UnixEpoch|SetSharedUnixEpoch)\b',
+        (
+            'base::TimeTicks::UnixEpoch() and base::TimeTicks::SetSharedUnixEpoch()',
+            'are deprecated and being removed (crbug.com/355423207). TimeTicks can',
+            'be suspended while a process is suspended, so it has no stable relation',
+            'to wall-clock time. Use base::Time instead.',
+        ),
+        True,
+        excluded_paths=(
+            r'base/time/time\.(h|cc)',
+            r'base/allocator/partition_allocator/.*/time/time\.(h|cc)',
+            _THIRD_PARTY_EXCEPT_BLINK,
+        ),
+    ),
     BanRule(
         '%#0',
         (
@@ -981,11 +1006,14 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
 
             # Needed to implement Dawn wire interfaces.
             r'gpu/command_buffer/client/dawn_client_memory_transfer_service\.cc',
+            r'gpu/command_buffer/client/dawn_client_memory_transfer_service\.h',
             r'gpu/command_buffer/service/dawn_service_memory_transfer_service\.cc',
+            r'gpu/command_buffer/service/dawn_service_memory_transfer_service\.h',
 
-            # Needed to implement Dawn caching interfaces.
+            # Needed to implement and use Dawn caching interfaces.
             r'gpu/command_buffer/service/dawn_caching_interface\.cc',
             r'gpu/command_buffer/service/dawn_caching_interface\.h',
+            r'gpu/command_buffer/service/dawn_context_provider\.cc',
             r'gpu/command_buffer/service/gpu_persistent_cache\.cc',
             r'gpu/command_buffer/service/gpu_persistent_cache\.h',
 
@@ -1801,6 +1829,14 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
         (),
     ),
     BanRule(
+        'CComBSTR',
+        ('New code should use base::ScopedBstr from base/win/scoped_bstr.h as ',
+         'a replacement for CComBSTR from ATL. See http://crbug.com/5027 for ',
+         'more details.'),
+        False,
+        (),
+    ),
+    BanRule(
         'CComPtr',
         ('New code should use Microsoft::WRL::ComPtr from wrl/client.h as a ',
          'replacement for CComPtr from ATL. See http://crbug.com/5027 for more ',
@@ -1858,25 +1894,38 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
         ),
     ),
     BanRule(
-        r'/\bperfetto::Track::Global',
+        r'/\bTRACE_(COPY_)?COUNTER(_ID)?[12]\b',
         (
-            'Creating new global tracks is discouraged and should be reserved ',
-            'for high level, user visible state. Consider using scoped tracks ',
-            'instead, see ',
-            'https://chromium.googlesource.com/chromium/src.git/+/main/docs/trace_events.md#named-tracks',
+            'Please use TRACE_COUNTER macro with perfetto::CounterTrack ',
+            'instead of legacy TRACE_COUNTER1/2 macros which are not well ',
+            'supported in perfetto.',
         ),
-        False,
-        (
-            r'^base/trace_event/.*',
-            r'^base/tracing/.*',
-        ),
+        True,
+        (),
     ),
     BanRule(
-        r'/\bperfetto::Track::FromPointer',
+        r'/\bperfetto::Track(\(|\{|::(Global|FromPointer|ThreadScoped)\b)',
         (
-            'Creating tracks from pointer is discouraged because it risks aliasing when the address ',
-            'is reused. Consider using NamedTrack instead, see ',
-            'https://chromium.googlesource.com/chromium/src.git/+/main/docs/trace_events.md#named-tracks',
+            'Creating tracks directly with perfetto::Track is discouraged. ',
+            'Using unnamed tracks or tracks based on raw pointers (like ',
+            'Track::FromPointer) risks track name collisions, name aliasing ',
+            '(when addresses are reused), or missing names in the trace due ',
+            'to descriptor loss. Consider using NamedTrack instead to ensure ',
+            'the track has a stable, explicit name, or a named subclass like ',
+            'CounterTrack. ',
+            'See https://chromium.googlesource.com/chromium/src.git/+/main/docs/trace_events.md#named-tracks',
+        ),
+        False,
+        (),
+    ),
+    BanRule(
+        r'/\bperfetto::DynamicString\b',
+        (
+            'Using perfetto::DynamicString is discouraged because they are ',
+            'stripped/erased in field traces for privacy reasons, resulting ',
+            'in unnamed tracks or events. Prefer perfetto::StaticString if ',
+            'possible. ',
+            'See https://chromium.googlesource.com/chromium/src.git/+/main/docs/trace_events.md#static-strings',
         ),
         False,
         (),
@@ -1919,8 +1968,9 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
     ),
     BanRule(
         r'base::Feature k',
-        ('Please use BASE_DECLARE_FEATURE() or BASE_FEATURE() instead of ',
-         'directly declaring/defining features.'),
+        ('Please use the BASE_DECLARE_FEATURE() macro to declare features and ',
+         'the BASE_FEATURE() or BASE_RUNTIME_MUTABLE_FEATURE() macros to ',
+         'define features, rather than declaring/defining them directly.'),
         True,
         [
             # Implements BASE_DECLARE_FEATURE().
@@ -2483,7 +2533,7 @@ _BANNED_GN_PATTERNS: Sequence[BanRule] = (BanRule(
     ),
     treat_as_error=False,
     surface_as_gerrit_lint=True,
-    excluded_paths=(r'^ui/webui/resources/', ),
+    excluded_paths=(r'^ui/webui/resources/', r'^chrome/test/data/webui/'),
 ), )
 
 _IPC_ENUM_TRAITS_DEPRECATED = (
@@ -2591,6 +2641,8 @@ _GENERIC_PYDEPS_FILES = [
     'build/android/resource_sizes.pydeps',
     'build/android/test_runner.pydeps',
     'build/android/test_wrapper/logdog_wrapper.pydeps',
+    'build/fuchsia/starview/run_cuttlefish.pydeps',
+    'build/fuchsia/starview/run_cuttlefish_test.pydeps',
     'build/fuchsia/test/component_storage_test.pydeps',
     'build/protoc_java.pydeps',
     'chrome/test/chromedriver/log_replay/client_replay_unittest.pydeps',
@@ -2631,6 +2683,7 @@ _GENERIC_PYDEPS_FILES = [
     'tools/flags/generate_expired_list.pydeps',
     'tools/grit/grit_info.pydeps',
     'tools/grit/grit.pydeps',
+    'tools/grit/preprocess_if_expr.pydeps',
     "tools/metrics/histograms/generate_allowlist_from_histograms_file.pydeps",
     'tools/perf/process_perf_results.pydeps',
     'tools/pgo/generate_profile.pydeps',
@@ -3004,6 +3057,45 @@ def CheckNoDISABLETypoInTests(input_api, output_api):
         output_api.PresubmitPromptWarning(
             'Attempt to disable a test with DISABLE_ instead of DISABLED_?\n' +
             '\n'.join(problems))
+    ]
+
+
+def CheckNoOzonePlatformMacrosInTests(input_api, output_api):
+    """Warns if SUPPORTS_OZONE_WAYLAND or SUPPORTS_OZONE_X11 is used in tests.
+
+    These are compile-time macros and do not reflect the runtime environment.
+    Tests should use runtime checks instead.
+    """
+    def FilterFile(affected_file):
+        res = input_api.FilterSourceFile(
+            affected_file,
+            files_to_check=_TEST_CODE_EXCLUDED_PATHS,
+            files_to_skip=_EXCLUDED_PATHS)
+        return res
+
+    problems = []
+    ozone_macro_pattern = input_api.re.compile(
+        r'\bBUILDFLAG\(SUPPORTS_OZONE_(WAYLAND|X11)\)')
+
+    for f in input_api.AffectedSourceFiles(FilterFile):
+        for line_num, line in f.ChangedContents():
+            if ozone_macro_pattern.search(line):
+                problems.append(
+                    f'{f.LocalPath()}:{line_num}: {line.strip()}')
+
+    if not problems:
+        return []
+
+    return [
+        output_api.PresubmitPromptWarning(
+            'Use of SUPPORTS_OZONE_WAYLAND or SUPPORTS_OZONE_X11 in '
+            'test files:\n'
+            'These macros are compile-time configurations and do not '
+            'check if the\n'
+            'test is running on Wayland or X11 at runtime. Please '
+            'use runtime checks\n'
+            'instead (e.g., checking the ozone platform).',
+            problems)
     ]
 
 
@@ -8172,9 +8264,12 @@ def CheckNoBrowserStarInUnittests(input_api, output_api):
 
 
 def CheckBaseFeatureMacro(input_api, output_api):
-    """Checks for correct usage of the BASE_FEATURE macro."""
+    """Checks for correct usage of the BASE_FEATURE macros.
+
+    Matches both BASE_FEATURE and BASE_RUNTIME_MUTABLE_FEATURE.
+    """
     pattern = input_api.re.compile(
-        r'\bBASE_FEATURE\s*\(\s*([^,]+)\s*,\s*([^,)]+)')
+        r'\bBASE_(?:RUNTIME_MUTABLE_)?FEATURE\s*\(\s*([^,]+)\s*,\s*([^,)]+)')
     warnings = []
 
     for f in input_api.AffectedFiles():
@@ -8210,7 +8305,8 @@ def CheckBaseFeatureMacro(input_api, output_api):
 
             if param2.startswith('"') and param2.endswith('"'):
                 warnings.append(
-                    '    %s:%d: The 3-argument BASE_FEATURE macro with a '
+                    '    %s:%d: Use of the 3-argument BASE_FEATURE and '
+                    'BASE_RUNTIME_MUTABLE_FEATURE macros with a '
                     'string literal is discouraged. Use the 2-argument '
                     'version instead.' % (f.LocalPath(), start_line))
 

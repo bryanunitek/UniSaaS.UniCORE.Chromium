@@ -276,8 +276,6 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
   void PostHandleMSG(UINT message, WPARAM w_param, LPARAM l_param) override;
   bool HandleScrollEvent(ui::ScrollEvent* event) override;
   bool HandleGestureEvent(ui::GestureEvent* event) override;
-  void HandleWindowSizeChanging() override;
-  void HandleWindowSizeUnchanged() override;
   void HandleWindowScaleFactorChanged(float window_scale_factor) override;
   void HandleHeadlessWindowBoundsChanged(const gfx::Rect& bounds) override;
   HBRUSH GetBackgroundPaintBrush() override;
@@ -304,6 +302,11 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
 
   // Call Windows API to update the window display affinity.
   void UpdateDisplayAffinity();
+
+  // Returns true if screen capture exclusion is allowed on this device or
+  // session. By default, exclusion is bypassed (returns false) in remote
+  // sessions.
+  bool IsCaptureExclusionAllowed() const;
 
   // Designates a Mica DWM_SYSTEMBACKDROP to the window if it does not have
   // a redirection bitmap.
@@ -359,6 +362,9 @@ class VIEWS_EXPORT DesktopWindowTreeHostWin
 
   // True if the window should be excluded from screen capture.
   bool exclude_from_capture_ = false;
+
+  // Overrides the remote session detection for testing.
+  std::optional<bool> remote_session_for_testing_;
 
   // Visibility of the cursor. On Windows we can have multiple root windows and
   // the implementation of ::ShowCursor() is based on a counter, so making this

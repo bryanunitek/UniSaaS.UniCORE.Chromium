@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/check_deref.h"
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -84,13 +85,13 @@ void TestBrowserAutofillManagerWithTestCCAM::Reset() {
 
 void TestBrowserAutofillManagerWithTestCCAM::FillOrPreviewForm(
     mojom::ActionPersistence action_persistence,
-    const FormData& form,
+    const FormGlobalId& form_id,
     const FieldGlobalId& field_id,
     const FillingPayload& filling_payload,
     AutofillTriggerSource trigger_source,
     const base::flat_set<FieldGlobalId>& blocked_fields) {
   last_trigger_field_id_ = field_id;
-  TestBrowserAutofillManager::FillOrPreviewForm(action_persistence, form,
+  TestBrowserAutofillManager::FillOrPreviewForm(action_persistence, form_id,
                                                 field_id, filling_payload,
                                                 trigger_source, blocked_fields);
 }

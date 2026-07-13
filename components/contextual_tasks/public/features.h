@@ -14,6 +14,7 @@
 namespace contextual_tasks {
 
 BASE_DECLARE_FEATURE(kContextualTasks);
+BASE_DECLARE_FEATURE(kContextualTasksEphemeralBrandedEntryPoint);
 BASE_DECLARE_FEATURE(kContextualTasksExtraOauthScopes);
 BASE_DECLARE_FEATURE(kEnableContextualTasksPinButtonInToolbar);
 BASE_DECLARE_FEATURE(kContextualTasksContext);
@@ -71,6 +72,9 @@ BASE_DECLARE_FEATURE(kEnergyEffectInNextbox);
 // Fixes the composebox jump.
 BASE_DECLARE_FEATURE(kContextualTasksComposeboxJumpFix);
 
+// Switches the Contextual Tasks composebox to the forked embedder element.
+BASE_DECLARE_FEATURE(kContextualTasksComposeboxFork);
+
 // Enables the use of a rounded clip-path for the composebox.
 BASE_DECLARE_FEATURE(kContextualTasksRoundedClipPath);
 
@@ -113,11 +117,49 @@ BASE_DECLARE_FEATURE(kAimTriggeredThreadLinks);
 // Enables window tracking for Contextual Tasks.
 BASE_DECLARE_FEATURE(kContextualTasksWindowTracking);
 
+// Enables upload chunking for Contextual Tasks.
+BASE_DECLARE_FEATURE(kContextualTasksUploadChunking);
+
+// Enables composebox embedded in AIM main frame, new auth, and
+// new side panel and ghost loader for contextual tasks.
+BASE_DECLARE_FEATURE(kContextualTasksRearchitecture);
+
+// Enables the side panel changes as part of the rearchitecture.
+BASE_DECLARE_FEATURE(kContextualTasksSidePanelRearchitecture);
+
+// Enables sticky conversation UI that follows the user around.
+BASE_DECLARE_FEATURE(kContextualTasksEnableStickyConversation);
+
+BASE_DECLARE_FEATURE(kContextualTasksEnableSpatialModelToolbarLayout);
+
+enum class OverflowMenuItems {
+  kAllItems,
+  kAllWithoutNewThread,
+};
+
+extern const base::FeatureParam<OverflowMenuItems>
+    kContextualTasksSpatialModelToolbarLayoutOverflowItems;
+
 bool GetIsContextualTasksPdfCitationsEnabled();
 
 bool GetIsContextualTasksLazyFetchClusterInfoEnabled();
 
 bool GetIsContextualTasksWindowTrackingEnabled();
+
+bool GetIsContextualTasksUploadChunkingEnabled();
+
+bool GetContextualTasksSpatialModelToolbarLayoutEnabled();
+
+bool GetContextualTasksSpatialModelToolbarLayoutNewThreadInOverflow();
+
+bool IsStickyConversationEnabled();
+
+// Test utility for overriding conditions for sticky conversation.
+class ScopedStickyConversationEnabledForTesting {
+ public:
+  explicit ScopedStickyConversationEnabledForTesting(bool enabled);
+  ~ScopedStickyConversationEnabledForTesting();
+};
 
 // Enum denoting which entry point can show when enabled.
 enum class EntryPointOption {
@@ -216,6 +258,10 @@ extern const base::FeatureParam<std::string>
 // The maximum size of a file that can be attached to a Nextbox.
 extern const base::FeatureParam<int> kContextualTasksNextboxMaxFileSize;
 
+// The number of sessions after onboarding before triggering the pinning IPH.
+extern const base::FeatureParam<int>
+    kContextualTasksNumSessionsBeforeRequestPinPromo;
+
 // The user agent suffix to use for requests from the contextual tasks UI.
 extern const base::FeatureParam<std::string> kContextualTasksUserAgentSuffix;
 
@@ -241,6 +287,14 @@ extern int GetContextualTasksShowOnboardingTooltipSessionImpressionCap();
 // The maximum number of times the onboarding tooltip can be dismissed by the
 // user before it no longer shows up.
 extern int GetContextualTasksOnboardingTooltipDismissedCap();
+
+// The maximum number of times the lens search tooltip can be dismissed by the
+// user before it no longer shows up.
+extern int GetContextualTasksLensSearchTooltipDismissedCap();
+
+// The maximum number of times the lens search tooltip can be shown to the user
+// in a single session before it no longer shows up.
+extern int GetContextualTasksLensSearchTooltipSessionImpressionCap();
 
 // The delay in milliseconds before the onboarding tooltip is considered shown.
 extern int GetContextualTasksOnboardingTooltipImpressionDelay();
@@ -376,6 +430,10 @@ extern bool IsRoundedClipPathEnabled();
 // Returns whether the pin button in toolbar is enabled.
 extern bool IsContextualTasksPinButtonInToolbarEnabled();
 
+// Returns the number of sessions after onboarding before triggering the pinning
+// IPH.
+extern int GetContextualTasksNumSessionsBeforeRequestPinPromo();
+
 // Returns whether the webpage APC comparison is enabled.
 extern bool GetIsWebpageApcComparisonEnabled();
 
@@ -398,6 +456,18 @@ extern const char
     kContextualTasksOverrideShowBottomSheetOnLargeScreenDescription[];
 extern const char kContextualTasksCookiePrefetchName[];
 extern const char kContextualTasksCookiePrefetchDescription[];
+extern const char kEnableContextualTasksPinButtonInToolbarName[];
+extern const char kEnableContextualTasksPinButtonInToolbarDescription[];
+extern const char kContextualTasksHideMenuOnAiPageName[];
+extern const char kContextualTasksHideMenuOnAiPageDescription[];
+extern const char kContextualTasksEnableSpatialModelToolbarLayoutName[];
+extern const char kContextualTasksEnableSpatialModelToolbarLayoutDescription[];
+extern const char kContextualTasksRearchitectureName[];
+extern const char kContextualTasksRearchitectureDescription[];
+extern const char kContextualTasksEphemeralBrandedEntryPointName[];
+extern const char kContextualTasksEphemeralBrandedEntryPointDescription[];
+extern const char kContextualTasksSidePanelRearchitectureName[];
+extern const char kContextualTasksSidePanelRearchitectureDescription[];
 
 }  // namespace flag_descriptions
 

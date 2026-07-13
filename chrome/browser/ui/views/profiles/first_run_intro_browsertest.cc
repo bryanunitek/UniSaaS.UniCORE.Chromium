@@ -143,7 +143,7 @@ class FirstRunIntroPixelTest
         policy::EnterpriseManagementAuthority::NONE);
 
     profile_picker_view_ = new ProfileManagementStepTestView(
-        ProfilePicker::Params::ForFirstRun(browser()->profile()->GetPath(),
+        ProfilePicker::Params::ForFirstRun(browser()->GetProfile()->GetPath(),
                                            base::DoNothing()),
         ProfileManagementFlowController::Step::kIntro,
         /*step_controller_factory=*/
@@ -163,6 +163,13 @@ class FirstRunIntroPixelTest
     if (GetParam().use_longer_strings) {
       EXPECT_EQ(true, content::EvalJs(profile_picker_view_->GetPickerContents(),
                                       GetMakeCardDescriptionLongerJsString()));
+    }
+    if (GetParam().use_refresh) {
+      // Explicitly wait for the animations to load to avoid flakiness.
+      CHECK_EQ(
+          content::EvalJs(profile_picker_view_->GetPickerContents(),
+                          GetWaitForAnimationsScript("sign-in-promo-refresh")),
+          true);
     }
   }
 

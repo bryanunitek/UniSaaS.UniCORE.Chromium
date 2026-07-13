@@ -162,7 +162,7 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
       performAction:grey_tap()];
 
   // Wait for the browsing data management screen to disappear, and the
-  // enteprise onboarding screen to appear again.
+  // enterprise onboarding screen to appear again.
   WaitForEnterpriseOnboardingScreen();
 
   // We are still signed out before accepting enterprise management.
@@ -260,7 +260,7 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
       performAction:grey_tap()];
 
   // Wait for the browsing data management screen to disappear, and the
-  // enteprise onboarding screen to appear again.
+  // enterprise onboarding screen to appear again.
   WaitForEnterpriseOnboardingScreen();
 
   // We are still signed out before accepting enterprise management.
@@ -1082,6 +1082,37 @@ id<GREYMatcher> ManagedProfileCreationDataMigrationDisabledSubtitleMatcher() {
       performAction:grey_tap()];
 
   [SigninEarlGrey verifySignedInWithFakeIdentity:managedIdentity];
+}
+
+// Tests that the Managed Profile Creation screen does not show the "More"
+// button on iPad because the content fits the screen.
+- (void)testManagedProfileCreationScrollNotNeededOnIPad {
+  if (![ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_SKIPPED(@"Skipped for iPhone.");
+  }
+  // Setup: There's 1 managed account. No account is signed in.
+  FakeSystemIdentity* const managedIdentity =
+      [FakeSystemIdentity fakeManagedIdentity];
+  [SigninEarlGrey addFakeIdentity:managedIdentity];
+
+  // Switch to the managed account, and sign in.
+  TapIdentityDisc();
+  [[EarlGrey selectElementWithMatcher:ContinueButtonWithIdentityMatcher(
+                                          managedIdentity)]
+      performAction:grey_tap()];
+
+  // Wait for enterprise onboarding screen.
+  WaitForEnterpriseOnboardingScreen();
+
+  // On iPad, content fits without scrolling so the button shows "Continue".
+  NSString* continueString =
+      l10n_util::GetNSString(IDS_IOS_ENTERPRISE_PROFILE_CREATION_CONTINUE);
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(
+                                   chrome_test_util::ButtonStackPrimaryButton(),
+                                   grey_accessibilityLabel(continueString),
+                                   nil)]
+      assertWithMatcher:grey_sufficientlyVisible()];
 }
 
 @end

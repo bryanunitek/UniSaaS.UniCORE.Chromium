@@ -151,9 +151,19 @@ UIImage* DefaultIconForType(FormSuggestion* suggestion,
         return nil;
       }
 
+      const bool isPersonalContext =
+          entity->record_type() ==
+          autofill::EntityInstance::RecordType::kPersonalContext;
+
       return autofill::DefaultIconForAutofillAiEntityType(
-          entity->type().name(), kSymbolPointSize, /*tint_color=*/nil);
+          entity->type().name(), isPersonalContext, kSymbolPointSize,
+          /*tint_color=*/nil);
     }
+    case autofill::SuggestionType::kAutocompleteAtMemoryButton:
+      return SymbolWithPalette(
+          CustomSymbolWithPointSize(kMagnifyingglassSparkSymbol,
+                                    kSymbolActionPointSize),
+          @[ [UIColor colorNamed:kTextPrimaryColor] ]);
     case autofill::SuggestionType::kAutocompleteEntry:
     default:
       return nil;

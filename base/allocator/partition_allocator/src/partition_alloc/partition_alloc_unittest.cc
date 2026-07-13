@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+
 #include "partition_alloc/bucket_lookup.h"
 #include "partition_alloc/slot_start.h"
-#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#if !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 #include <algorithm>
 #include <cstddef>
@@ -196,7 +198,7 @@ bool ClearAddressSpaceLimit() {
 #endif
 }
 
-const size_t kTestSizes[] = {
+const auto kTestSizes = std::to_array<size_t>({
     1,
     17,
     100,
@@ -205,7 +207,7 @@ const size_t kTestSizes[] = {
     partition_alloc::PartitionRoot::GetDirectMapSlotSize(100),
     1 << 20,
     1 << 21,
-};
+});
 constexpr size_t kTestSizesCount = std::size(kTestSizes);
 // A lambda function for unit tests to try Free, FreeWithSize, and
 // FreeWithSizeAndAlignment. It always takes a size_t argument, but ignores it
@@ -4106,6 +4108,12 @@ TEST_P(PartitionAllocTest, IntendedLeak) {
   void* ptr_to_keep_slot_span = root->Alloc(kTestAllocSize, type_name);
   void* ptr = root->Alloc(kTestAllocSize, type_name);
 
+  // Fill the memory region with any different value from kTypeId or
+  // kFreedBytes to see what code zaps the memory region. E.g. kFreedBytes means
+  // DebugMemset() with EXPENSIVE_DCHECKS_ARE_ON.
+  constexpr const uint8_t kAnyDummyValue = 0x12u;
+  PA_UNSAFE_TODO(memset(ptr, kAnyDummyValue, kTestAllocSize));
+
   // Remember `total_intended_leak_bytes` of the custom root.
   SimplePartitionStatsDumper dumper;
   root->DumpStats("CustomTestRoot", true, false, &dumper);
@@ -4113,11 +4121,21 @@ TEST_P(PartitionAllocTest, IntendedLeak) {
 
   auto* slot_span =
       SlotSpan::FromSlotStart(SlotStart::Unchecked(ptr).Untag(), root.get());
-  root->Free<FreeFlags::kIntendedLeak>(ptr);
+
+  constexpr const uint64_t kTypeId = 0xDEADBEAFu;
+  root->Free<FreeFlags::kIntendedLeak | FreeFlags::kWithTypeIdHint>(
+      ptr, {.type_id = kTypeId});
 
   // Leaked objects will be never found in the freelist of the `slot_span`.
   EXPECT_NE(SlotStart::Unchecked(ptr).Untag().value(),
             UntagPtr(slot_span->get_freelist_head()));
+
+  // The `ptr` must be zapped.
+  uint64_t value_after_intended_leaked = *reinterpret_cast<uint64_t*>(ptr);
+  EXPECT_EQ(value_after_intended_leaked & kIntendedLeakQuarantineMask,
+            kIntendedLeakQuarantineMarker);
+  EXPECT_EQ((value_after_intended_leaked & ~kIntendedLeakQuarantineMask) >> 8u,
+            kTypeId);
 
   // Compare `total_intended_leak_bytes` between before and after
   // `Free<kIntendedLeak>`.
@@ -4367,8 +4385,8 @@ TEST_P(PartitionAllocTest, OverrideHooks) {
       memset(overridden_allocation, kOverriddenChar, kOverriddenSize));
 
   PartitionAllocHooks::SetOverrideHooks(
-      [](void** out, AllocFlags flags, size_t size,
-         const char* type_name) -> bool {
+      [](void** out, AllocFlags flags, size_t size, const char* type_name,
+         std::optional<size_t> alignment) -> bool {
         if (size == kOverriddenSize && type_name == kOverriddenType) {
           *out = overridden_allocation;
           return true;
@@ -5119,6 +5137,32 @@ TEST_P(PartitionAllocTest, BackupRefPtrGuardRegion) {
   }
 }
 #endif  // !PA_BUILDFLAG(HAS_64_BIT_POINTERS)
+
+#if PA_USE_DEATH_TESTS()
+TEST_P(PartitionAllocDeathTest, AcquireAfterQuarantined) {
+  if (!UseBRPPool()) {
+    return;
+  }
+
+  // Allocate memory. The object will be held by allocator and its refcount is
+  // equal to zero.
+  uint64_t* ptr = static_cast<uint64_t*>(
+      allocator.root()->Alloc(64 - ExtraAllocSize(allocator), type_name));
+  auto* in_slot_metadata =
+      allocator.root()->InSlotMetadataPointerFromObjectForTesting(ptr);
+  EXPECT_TRUE(in_slot_metadata->IsAliveWithNoKnownRefs());
+
+  // Make the object in-freelist or MO-quarantined.
+  allocator.root()->Free(ptr);
+  EXPECT_FALSE(in_slot_metadata->IsAlive());
+  EXPECT_FALSE(in_slot_metadata->HasNonZeroRefsForTesting());
+
+  // Because of PA_CHECK, expect Acquire() always crash if death test is
+  // supported.
+  EXPECT_DEATH(in_slot_metadata->Acquire(), "");
+}
+#endif  // PA_USE_DEATH_TESTS()
+
 #endif  // PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
 
 #if PA_BUILDFLAG(ENABLE_DANGLING_RAW_PTR_CHECKS)
@@ -5527,6 +5571,29 @@ TEST_P(PartitionAllocDeathTest, ReleaseUnderflowDanglingPtr) {
 }
 
 #endif  //! PA_BUILDFLAG(OFFICIAL) || PA_BUILDFLAG(IS_DEBUG)
+
+TEST_P(PartitionAllocDeathTest, AcquireUnprotectedAfterQuarantined) {
+  if (!UseBRPPool()) {
+    return;
+  }
+
+  // Allocate memory. The object will be held by allocator and its refcount is
+  // equal to zero.
+  uint64_t* ptr = static_cast<uint64_t*>(
+      allocator.root()->Alloc(64 - ExtraAllocSize(allocator), type_name));
+  auto* in_slot_metadata =
+      allocator.root()->InSlotMetadataPointerFromObjectForTesting(ptr);
+  EXPECT_TRUE(in_slot_metadata->IsAliveWithNoKnownRefs());
+
+  // Make the object in-freelist or MO-quarantined.
+  allocator.root()->Free(ptr);
+  EXPECT_FALSE(in_slot_metadata->IsAlive());
+  EXPECT_FALSE(in_slot_metadata->HasNonZeroRefsForTesting());
+
+  // Because of PA_CHECK, expect AcquireFromProtectedPtr() always crash
+  // if death test is supported.
+  EXPECT_DEATH(in_slot_metadata->AcquireFromUnprotectedPtr(), "");
+}
 #endif  // PA_USE_DEATH_TESTS()
 #endif  // PA_BUILDFLAG(ENABLE_DANGLING_RAW_PTR_CHECKS)
 
@@ -6565,4 +6632,4 @@ TEST_P(PartitionAllocTest, MultipleThreadCachePerThread) {
 }
 }  // namespace partition_alloc::internal
 
-#endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#endif  // !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)

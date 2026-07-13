@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "content/browser/accessibility/web_contents_accessibility_android.h"
 
 #include <algorithm>
@@ -46,6 +45,7 @@
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_range.h"
+#include "ui/accessibility/ax_role_properties.h"
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/platform/ax_android_constants.h"
 #include "ui/accessibility/platform/browser_accessibility.h"
@@ -541,22 +541,46 @@ ScopedJavaLocalRef<jobject> ToJavaStringRangesMap(
       ranges_count);
 }
 
-// If `node` is or is under an editable, returns the highest editable parent,
-// otherwise returns null.
-ui::AXNode* GetRootEditable(ui::AXNode* node) {
+// Returns the selection context boundary node (editable text field or collapsed
+// control widget), or nullptr if the node is in the main document.
+//
+// RATIONALE:
+// This function resolves the enclosing selection context container. Chromium
+// has the following selection restrictions:
+// 1. Text Fields (Editable Regions / Root Editables): A selection is allowed to
+//    start and end inside the same editable text field, but cannot span from
+//    one editable field to another, or cross in/out of an editable field
+//    boundary. Thus, we return the root editable node (IsAtomicTextField() or
+//    kNonAtomicTextFieldRoot) representing the local text editing scope.
+// 2. Collapsed Widgets: DOM selections (SelectionInDomTree) cannot cross
+//    user-agent shadow root boundaries (e.g. outside into a collapsed dropdown
+//    option element). These collapsed controls (exposed via
+//    HasState(ax::mojom::State::kCollapsed)) act as selection boundaries. Thus,
+//    we return the containing control widget node to block selections crossing
+//    control boundary edges. Selection into layouted non-collapsed controls
+//    (like visible listboxes) is valid and does not cross shadow boundaries.
+// If selection endpoints do not share the exact same selection context node,
+// the select request should be rejected early in the browser process.
+ui::AXNode* GetSelectionContext(ui::AXNode* node) {
   while (node) {
     if (node->data().IsAtomicTextField() ||
         node->data().GetBoolAttribute(
             ax::mojom::BoolAttribute::kNonAtomicTextFieldRoot)) {
       return node;
     }
+    if (ui::IsControl(node->GetRole())) {
+      if (node->HasState(ax::mojom::State::kCollapsed)) {
+        return node;
+      }
+    }
     node = node->parent();
   }
-  return node;
+  return nullptr;
 }
 
-// Selection is not valid if it is cross documents, or its start and end have
-// different root editable nodes.
+// Selection is not valid if it crosses document boundaries, or if its start and
+// end positions belong to different selection contexts (e.g. crossing widget
+// boundaries or different editable inputs).
 // These restrictions are primarily validated in `blink::AXSelection::IsValid()`
 // for atomic text fields and in `blink::AssertUserSelection` in general, and
 // are based on the behavior in `blink::SelectionAdjuster` class.
@@ -574,11 +598,22 @@ bool IsSelectionValid(
     return true;
   }
 
-  ui::AXNode* start_root_editable =
-      GetRootEditable(start_position->GetAnchor());
-  ui::AXNode* end_root_editable = GetRootEditable(end_position->GetAnchor());
+  // Ensure that both endpoints belong to the exact same selection context
+  // (e.g., both are in the main document, or both are inside the same text
+  // input or select widget).
+  return GetSelectionContext(start_position->GetAnchor()) ==
+         GetSelectionContext(end_position->GetAnchor());
+}
 
-  return start_root_editable == end_root_editable;
+std::optional<ExtendedSelectionOffsetType> AsExtendedSelectionOffsetType(
+    int32_t offset_type) {
+  if (offset_type ==
+          static_cast<int32_t>(ExtendedSelectionOffsetType::OFFSET_TYPE_TEXT) ||
+      offset_type == static_cast<int32_t>(
+                         ExtendedSelectionOffsetType::OFFSET_TYPE_CHILD)) {
+    return static_cast<ExtendedSelectionOffsetType>(offset_type);
+  }
+  return std::nullopt;
 }
 
 }  // anonymous namespace
@@ -1335,42 +1370,6 @@ int32_t WebContentsAccessibilityAndroid::GetRootId(JNIEnv* env) {
   return ui::kAXAndroidInvalidViewId;
 }
 
-// TODO(crbug.com/485227837): Remove experiment's methods
-size_t WebContentsAccessibilityAndroid::GetAccessibilityTreeSizeForExperiment(
-    JNIEnv* env) {
-  BrowserAccessibilityManagerAndroid* root_manager =
-      GetRootBrowserAccessibilityManager();
-  if (!root_manager) {
-    return 0;
-  }
-
-  size_t count = 0;
-  std::vector<ui::BrowserAccessibilityManager*> managers_to_process;
-  managers_to_process.push_back(root_manager);
-
-  while (!managers_to_process.empty()) {
-    ui::BrowserAccessibilityManager* manager = managers_to_process.back();
-    managers_to_process.pop_back();
-
-    if (!manager->ax_tree()) {
-      continue;
-    }
-
-    count += manager->ax_tree()->size();
-
-    for (const ui::AXTreeID& child_tree_id :
-         manager->ax_tree()->GetAllChildTreeIds()) {
-      ui::BrowserAccessibilityManager* child_manager =
-          ui::BrowserAccessibilityManager::FromID(child_tree_id);
-      if (child_manager) {
-        managers_to_process.push_back(child_manager);
-      }
-    }
-  }
-
-  return count;
-}
-
 bool WebContentsAccessibilityAndroid::IsNodeValid(JNIEnv* env,
                                                   int32_t unique_id) {
   return GetAXFromUniqueID(unique_id) != nullptr;
@@ -1924,13 +1923,34 @@ void WebContentsAccessibilityAndroid::PopulateAccessibilityNodeInfoSelection(
 
   if (selection.has_value()) {
     Java_AccessibilityNodeInfoBuilder_setAccessibilityNodeInfoExtendedSelectionAttrs(
-        env, obj, info, selection->anchor_object->GetUniqueId(),
-        selection->anchor_offset, selection->focus_object->GetUniqueId(),
-        selection->focus_offset);
+        env, obj, info, selection->anchor.node->GetUniqueId(),
+        selection->anchor.offset,
+        static_cast<int32_t>(selection->anchor.offset_type),
+        selection->focus.node->GetUniqueId(), selection->focus.offset,
+        static_cast<int32_t>(selection->focus.offset_type));
     return;
   }
   Java_AccessibilityNodeInfoBuilder_clearAccessibilityNodeInfoExtendedSelectionAttrs(
       env, obj, info);
+}
+
+void WebContentsAccessibilityAndroid::
+    PopulateAccessibilityNodeInfoMathAttributes(
+        JNIEnv* env,
+        const JavaRef<jobject>& info,
+        const ScopedJavaLocalRef<jobject>& obj,
+        BrowserAccessibilityAndroid* node) {
+  CHECK(!obj.is_null());
+
+  const std::string& math_tag = node->GetMathTag();
+  if (math_tag.empty()) {
+    return;
+  }
+
+  Java_AccessibilityNodeInfoBuilder_setAccessibilityNodeInfoMathAttributes(
+      env, obj, info, base::android::ConvertUTF8ToJavaString(env, math_tag),
+      base::android::ConvertUTF8ToJavaString(env, node->GetMathIntent()),
+      base::android::ConvertUTF8ToJavaString(env, node->GetMathArg()));
 }
 
 ScopedJavaLocalRef<jintArray>
@@ -1949,11 +1969,15 @@ WebContentsAccessibilityAndroid::GetExtendedSelection(JNIEnv* env,
     return nullptr;
   }
 
-  const int anchor_unique_id = selection->anchor_object->GetUniqueId();
-  const int focus_unique_id = selection->focus_object->GetUniqueId();
+  const int anchor_unique_id = selection->anchor.node->GetUniqueId();
+  const int focus_unique_id = selection->focus.node->GetUniqueId();
 
-  int selection_data[] = {anchor_unique_id, selection->anchor_offset,
-                          focus_unique_id, selection->focus_offset};
+  int selection_data[] = {anchor_unique_id,
+                          selection->anchor.offset,
+                          static_cast<int>(selection->anchor.offset_type),
+                          focus_unique_id,
+                          selection->focus.offset,
+                          static_cast<int>(selection->focus.offset_type)};
   return ToJavaIntArray(env, selection_data);
 }
 
@@ -1999,6 +2023,9 @@ bool WebContentsAccessibilityAndroid::PopulateAccessibilityNodeInfo(
   PopulateAccessibilityNodeInfoRangeInfo(env, info, obj, node);
   PopulateAccessibilityNodeInfoPaneTitle(env, info, obj, node);
   PopulateAccessibilityNodeInfoSelection(env, info, obj, node);
+  if (features::IsAccessibilityAndroidMathEnabled()) {
+    PopulateAccessibilityNodeInfoMathAttributes(env, info, obj, node);
+  }
   UpdateAccessibilityNodeInfoBoundsRect(env, obj, info, unique_id, node);
 
   return true;
@@ -2179,10 +2206,24 @@ bool WebContentsAccessibilityAndroid::SetExtendedSelection(
     int32_t id,
     int32_t start_node_id,
     int32_t start_node_offset,
+    int32_t start_offset_type,
     int32_t end_node_id,
-    int32_t end_node_offset) {
+    int32_t end_node_offset,
+    int32_t end_offset_type) {
   CHECK(
       base::FeatureList::IsEnabled(features::kAccessibilityExtendedSelection));
+
+  std::optional<ExtendedSelectionOffsetType> start_offset_enum =
+      AsExtendedSelectionOffsetType(start_offset_type);
+  if (!start_offset_enum) {
+    return false;
+  }
+
+  std::optional<ExtendedSelectionOffsetType> end_offset_enum =
+      AsExtendedSelectionOffsetType(end_offset_type);
+  if (!end_offset_enum) {
+    return false;
+  }
 
   BrowserAccessibilityAndroid* node = GetAXFromUniqueID(id);
   if (!node) {
@@ -2201,15 +2242,15 @@ bool WebContentsAccessibilityAndroid::SetExtendedSelection(
     return false;
   }
   ui::BrowserAccessibility::AXPosition start_position =
-      root_manager->ConvertAndroidSelectionPositionToChrome(start_node,
-                                                            start_node_offset);
+      root_manager->ConvertAndroidSelectionPositionToChrome(
+          start_node, start_node_offset, *start_offset_enum);
   if (start_position->IsNullPosition()) {
     return false;
   }
 
   ui::BrowserAccessibility::AXPosition end_position =
-      root_manager->ConvertAndroidSelectionPositionToChrome(end_node,
-                                                            end_node_offset);
+      root_manager->ConvertAndroidSelectionPositionToChrome(
+          end_node, end_node_offset, *end_offset_enum);
   if (end_position->IsNullPosition()) {
     return false;
   }

@@ -716,12 +716,7 @@ class FakeCreditCardServer : public CreditCardSaveManager::ObserverForTest {
 }
 
 + (BOOL)savePassportEntity {
-  autofill::AutofillClient& client =
-      autofill::FakeCreditCardServer::GetAutofillClient();
-
-  autofill::EntityDataManager* entityDataManager =
-      client.GetEntityDataManager();
-
+  autofill::EntityDataManager* entityDataManager = [self entityDataManager];
   if (!entityDataManager) {
     return NO;
   }
@@ -752,12 +747,7 @@ class FakeCreditCardServer : public CreditCardSaveManager::ObserverForTest {
 }
 
 + (BOOL)saveVehicleEntity {
-  autofill::AutofillClient& client =
-      autofill::FakeCreditCardServer::GetAutofillClient();
-
-  autofill::EntityDataManager* entityDataManager =
-      client.GetEntityDataManager();
-
+  autofill::EntityDataManager* entityDataManager = [self entityDataManager];
   if (!entityDataManager) {
     return NO;
   }
@@ -802,6 +792,53 @@ class FakeCreditCardServer : public CreditCardSaveManager::ObserverForTest {
 + (autofill::EntityDataManager*)entityDataManager {
   return autofill::FakeCreditCardServer::GetAutofillClient()
       .GetEntityDataManager();
+}
+
+namespace {
+
+autofill::AutofillDriverIOS* GetMainFrameAutofillDriver() {
+  web::WebState* web_state = chrome_test_util::GetCurrentWebState();
+  if (!web_state) {
+    return nullptr;
+  }
+  web::WebFramesManager* frames_manager =
+      autofill::AutofillJavaScriptFeature::GetInstance()->GetWebFramesManager(
+          web_state);
+  if (!frames_manager) {
+    return nullptr;
+  }
+  web::WebFrame* main_frame = frames_manager->GetMainWebFrame();
+  if (!main_frame) {
+    return nullptr;
+  }
+  return autofill::AutofillDriverIOS::FromWebStateAndWebFrame(web_state,
+                                                              main_frame);
+}
+
+}  // namespace
+
++ (BOOL)isFormCachedInMainFrame {
+  autofill::AutofillDriverIOS* driver = GetMainFrameAutofillDriver();
+  if (!driver) {
+    return NO;
+  }
+  return !autofill::test_api(driver->GetAutofillManager())
+              .form_structures()
+              .empty();
+}
+
++ (BOOL)waitForFormToBeCachedInMainFrame {
+  if (![self isFormCachedInMainFrame]) {
+    if (autofill::AutofillDriverIOS* driver = GetMainFrameAutofillDriver()) {
+      driver->ScanForms(/*immediately=*/true);
+    }
+  }
+
+  ConditionBlock condition = ^BOOL {
+    return [self isFormCachedInMainFrame];
+  };
+  return base::test::ios::WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForPageLoadTimeout, condition);
 }
 
 @end

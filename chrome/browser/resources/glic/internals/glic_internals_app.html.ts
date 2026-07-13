@@ -79,6 +79,83 @@ export function getHtml(this: GlicInternalsAppElement) {
                 this.data_.enablement.actuationEligibility)}
           </td>
         </tr>
+        <tr>
+          <td>Glic Api actuation eligibility</td>
+          <td>
+            ${this.getActuationEligibilityString_(
+                this.data_.enablement.glicApiActuationEligibility)}
+          </td>
+        </tr>
+        <tr>
+          <td>Experimental triggering state</td>
+          <td>
+            ${this.getExperimentalTriggeringStateString_(
+                this.data_.enablement.glicExperimentalTriggeringState)}
+          </td>
+        </tr>
+      </table>` :
+      html`<h3 id="loadingMsg">Loading...</h3>`}
+    <h2>Tiered Rollout / User Tier</h2>
+    ${this.data_?.tieredRolloutInfo ? html`
+      <table>
+        <tr>
+          <th>Property</th>
+          <th>Value</th>
+        </tr>
+        <tr>
+          <td>AI Subscription Tier</td>
+          <td>${this.data_.tieredRolloutInfo.aiSubscriptionTier === null ?
+              'N/A (No Service or Not Logged In)' :
+              this.data_.tieredRolloutInfo.aiSubscriptionTier}</td>
+        </tr>
+        <tr>
+          <td>Preference Sync Status (Server Fetch)</td>
+          <td>${this.data_.tieredRolloutInfo.preferenceSyncStatus}</td>
+        </tr>
+        <tr>
+          <td>Is Eligible for Tiered Rollout V1 (C++)</td>
+          <td class="status-${
+              this.data_.tieredRolloutInfo.isEligibleForTieredRolloutV1}">
+            ${
+              this.data_.tieredRolloutInfo.isEligibleForTieredRolloutV1 ? '✅' :
+                                                                          '🚫'}
+          </td>
+        </tr>
+        <tr>
+          <td>Is Eligible for Tiered Rollout V2 (C++)</td>
+          <td class="status-${
+              this.data_.tieredRolloutInfo.isEligibleForTieredRolloutV2}">
+            ${
+              this.data_.tieredRolloutInfo.isEligibleForTieredRolloutV2 ? '✅' :
+                                                                          '🚫'}
+          </td>
+        </tr>
+        <tr>
+          <td>Is Eligible Overall (C++)</td>
+          <td class="status-${
+              this.data_.tieredRolloutInfo.isEligibleOverall}">
+            ${
+              this.data_.tieredRolloutInfo.isEligibleOverall ? '✅' :
+                                                               '🚫'}
+          </td>
+        </tr>
+        <tr>
+          <td>Rollout Eligibility Pref (kGlicRolloutEligibility)</td>
+          <td class="status-${
+              this.data_.tieredRolloutInfo.glicRolloutEligibilityPref}">
+            ${
+              this.data_.tieredRolloutInfo.glicRolloutEligibilityPref ? '✅' :
+                                                                        '🚫'}
+          </td>
+        </tr>
+        <tr>
+          <td>Eligible Tiers for V2 Rollout (Param)</td>
+          <td>
+            ${
+              this.data_.tieredRolloutInfo.tieredRolloutV2EligibleTiers ||
+              'None'}
+          </td>
+        </tr>
       </table>` :
       html`<h3 id="loadingMsg">Loading...</h3>`}
     <h2>Configuration</h2>
@@ -92,10 +169,26 @@ export function getHtml(this: GlicInternalsAppElement) {
           <td>Guest URL</td>
           <td>${this.data_.config.guestUrl}</td>
         </tr>
+      </table>` :
+      html`<h3 id="loadingMsg">Loading...</h3>`}
+    <h2>Glic UI / Client Debug Information</h2>
+    <div style="margin-bottom: 12px; font-weight: bold; color: var(--google-red-700, #c5221f);">
+      ⚠️ Note: These settings are not dynamically observed. Please refresh the page to get the latest settings.
+    </div>
+    ${this.data_?.debugInfo ? html`
+      <table>
         <tr>
-          <td>FRE guest URL</td>
-          <td>${this.data_.config.freGuestUrl}</td>
+          <th>Setting / Flag</th>
+          <th>Value</th>
         </tr>
+        ${this.getDebugSettingsData_().map(item => html`
+          <tr>
+            <td>${item.label}</td>
+            <td class="status-${item.value}">
+              ${typeof item.value === 'boolean' ? (item.value ? '✅' : '🚫') : item.value}
+            </td>
+          </tr>
+        `)}
       </table>` :
       html`<h3 id="loadingMsg">Loading...</h3>`}
       </div>
@@ -120,26 +213,31 @@ export function getHtml(this: GlicInternalsAppElement) {
               @input="${this.onInvokePromptInput_}">
           </input>
           <div style="display: flex; gap: 16px; align-items: center;">
-            <label>
+            <label style="flex: 1;">
               <input type="checkbox" .checked="${this.invokeAutoSubmit_}"
                   @change="${this.onInvokeAutoSubmitChange_}">
               Auto Submit
             </label>
-            <label>
+            <label style="flex: 1;">
               <input type="checkbox" .checked="${this.invokeWaitForPanelOpen_}"
                   @change="${this.onInvokeWaitForPanelOpenChange_}">
               Wait for Panel Open
             </label>
           </div>
-          ${this.invokeAutoSubmit_ ? html`
-            <div style="display: flex; gap: 16px; align-items: center;">
-              <label>
+          <div style="display: flex; gap: 16px; align-items: center;">
+            ${this.invokeAutoSubmit_ ? html`
+              <label style="flex: 1;">
                 <input type="checkbox" .checked="${this.invokeShowPanel_}"
                     @change="${this.onInvokeShowPanelChange_}">
                 Show Panel
               </label>
-            </div>
-          ` : html``}
+            ` : html`<div style="flex: 1;"></div>`}
+            <label style="flex: 1;">
+              <input type="checkbox" .checked="${this.invokeNewConversation_}"
+                  @change="${this.onInvokeNewConversationChange_}">
+              New Conversation
+            </label>
+          </div>
           <label for="invokeInvocationSourceSelect">Invocation Source</label>
           <select id="invokeInvocationSourceSelect"
               .value="${this.invokeInvocationSource_.toString()}"
@@ -175,6 +273,16 @@ export function getHtml(this: GlicInternalsAppElement) {
             <option value="2">TrustFirstClick</option>
             <option value="3">TrustFirstInline</option>
           </select>
+          <label for="invokeFreCompletionWaitModeSelect">
+            Wait for FRE Completion Mode
+          </label>
+          <select id="invokeFreCompletionWaitModeSelect"
+              .value="${this.invokeFreCompletionWaitMode_.toString()}"
+              @change="${this.onInvokeFreCompletionWaitModeChange_}">
+            ${this.freCompletionWaitModeEnumValues_.map(item => html`
+              <option value="${item.value}">${item.name}</option>
+            `)}
+          </select>
           <label for="invokeFeatureModeSelect">Feature Mode</label>
           <select id="invokeFeatureModeSelect"
               .value="${this.invokeFeatureMode_.toString()}"
@@ -183,16 +291,14 @@ export function getHtml(this: GlicInternalsAppElement) {
               <option value="${item.value}">${item.name}</option>
             `)}
           </select>
-          ${this.invokeFeatureMode_ === 2 ? html`
-            <label for="invokeActuationTargetSelect">Actuation Target</label>
-            <select id="invokeActuationTargetSelect"
-                .value="${this.invokeActuationTarget_.toString()}"
-                @change="${this.onInvokeActuationTargetChange_}">
-              ${this.actuationTargetEnumValues_.map(item => html`
-                <option value="${item.value}">${item.name}</option>
-              `)}
-            </select>
-          ` : html``}
+          <label for="invokeActuationTargetSelect">Actuation Target</label>
+          <select id="invokeActuationTargetSelect"
+              .value="${this.invokeActuationTarget_.toString()}"
+              @change="${this.onInvokeActuationTargetChange_}">
+            ${this.actuationTargetEnumValues_.map(item => html`
+              <option value="${item.value}">${item.name}</option>
+            `)}
+          </select>
 
           <div style="display: flex; gap: 16px; align-items: center;">
             <label>

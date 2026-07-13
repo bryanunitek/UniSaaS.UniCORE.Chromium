@@ -41,6 +41,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_html_document.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_node.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_observable_array_css_style_sheet.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_css_pseudo_element.h"
 #include "third_party/blink/renderer/core/css/css_computed_style_declaration.h"
 #include "third_party/blink/renderer/core/css/css_container_rule.h"
 #include "third_party/blink/renderer/core/css/css_property_name.h"
@@ -62,6 +63,7 @@
 #include "third_party/blink/renderer/core/dom/node_lists_node_data.h"
 #include "third_party/blink/renderer/core/dom/processing_instruction.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
+#include "third_party/blink/renderer/core/dom/css_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/static_node_list.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -306,6 +308,8 @@ protocol::DOM::PseudoType InspectorDOMAgent::ProtocolPseudoElementType(
       return protocol::DOM::PseudoTypeEnum::PermissionIcon;
     case kPseudoIdPickerSelect:
       return protocol::DOM::PseudoTypeEnum::Picker;
+    case kPseudoIdSelectListbox:
+      return protocol::DOM::PseudoTypeEnum::SelectListbox;
     case kPseudoIdViewTransition:
       return protocol::DOM::PseudoTypeEnum::ViewTransition;
     case kPseudoIdViewTransitionGroup:
@@ -320,6 +324,8 @@ protocol::DOM::PseudoType InspectorDOMAgent::ProtocolPseudoElementType(
       return protocol::DOM::PseudoTypeEnum::ViewTransitionOld;
     case kPseudoIdOverscrollAreaParent:
       return protocol::DOM::PseudoTypeEnum::OverscrollAreaParent;
+    case kPseudoIdOverscrollBackdrop:
+      return protocol::DOM::PseudoTypeEnum::OverscrollBackdrop;
     case kPseudoIdSkeleton:
       return protocol::DOM::PseudoTypeEnum::Skeleton;
     case kAfterLastInternalPseudoId:
@@ -442,6 +448,21 @@ PseudoId InspectorDOMAgent::ProtocolPseudoTypeToPseudoId(
   if (type == protocol::DOM::PseudoTypeEnum::Picker) {
     return kPseudoIdPickerSelect;
   }
+  if (type == protocol::DOM::PseudoTypeEnum::SelectListbox) {
+    return kPseudoIdSelectListbox;
+  }
+  if (type == protocol::DOM::PseudoTypeEnum::ExpandIcon) {
+    return kPseudoIdExpandIcon;
+  }
+  if (type == protocol::DOM::PseudoTypeEnum::PickerIcon) {
+    return kPseudoIdPickerIcon;
+  }
+  if (type == protocol::DOM::PseudoTypeEnum::InterestButton) {
+    return kPseudoIdInterestButton;
+  }
+  if (type == protocol::DOM::PseudoTypeEnum::OverscrollBackdrop) {
+    return kPseudoIdOverscrollBackdrop;
+  }
   NOTREACHED();
 }
 
@@ -488,18 +509,33 @@ void InspectorDOMAgent::RemoveDOMListener(DOMListener* listener) {
 }
 
 void InspectorDOMAgent::NotifyDidAddDocument(Document* document) {
-  for (DOMListener* listener : dom_listeners_)
+  ForEachDOMListener([document](const Member<DOMListener>& listener) {
     listener->DidAddDocument(document);
+  });
 }
 
 void InspectorDOMAgent::NotifyWillRemoveDOMNode(Node* node) {
-  for (DOMListener* listener : dom_listeners_)
+  ForEachDOMListener([node](const Member<DOMListener>& listener) {
     listener->WillRemoveDOMNode(node);
+  });
 }
 
 void InspectorDOMAgent::NotifyDidModifyDOMAttr(Element* element) {
-  for (DOMListener* listener : dom_listeners_)
+  ForEachDOMListener([element](const Member<DOMListener>& listener) {
     listener->DidModifyDOMAttr(element);
+  });
+}
+
+void InspectorDOMAgent::ForEachDOMListener(
+    base::FunctionRef<void(const Member<DOMListener>&)> callback) {
+  // Notifying listeners may pause in debugger and thus cause all kinds of
+  // side effects, including adding/removing listeners, so make a copy.
+  HeapHashSet<Member<DOMListener>> copy(dom_listeners_);
+  for (const Member<DOMListener>& listener : copy) {
+    if (dom_listeners_.Contains(listener)) {
+      callback(listener);
+    }
+  }
 }
 
 void InspectorDOMAgent::SetDocument(Document* doc) {
@@ -1289,7 +1325,7 @@ protocol::Response InspectorDOMAgent::getOuterHTML(
           ? ShadowRootInclusion::Behavior::kIncludeAllShadowRootsForInspector
           : ShadowRootInclusion::Behavior::kOnlyProvidedShadowRoots};
   *outer_html =
-      CreateMarkup(node, kIncludeNode, kDoNotResolveURLs, shadow_roots);
+      CreateMarkup(node, kIncludeNode, ResolveUrls::kNone, shadow_roots);
   return protocol::Response::Success();
 }
 
@@ -1623,6 +1659,12 @@ protocol::Response InspectorDOMAgent::NodeForRemoteObjectId(
         ToCoreString(std::move(error)).Utf8());
   }
   node = V8Node::ToWrappable(isolate_, value);
+  if (!node) {
+    if (CSSPseudoElement* css_pseudo =
+            V8CSSPseudoElement::ToWrappable(isolate_, value)) {
+      node = css_pseudo->GetPseudoElement();
+    }
+  }
   if (!node) {
     return protocol::Response::ServerError(
         "Object id doesn't reference a Node");
@@ -2053,10 +2095,10 @@ protocol::Response InspectorDOMAgent::getAnchorElement(
         AtomicString(anchor_specifier.value()),
         &querying_object->GetDocument()));
   } else {
-    const StylePositionAnchor& position_anchor =
-        box->StyleRef().PositionAnchor();
+    const DefaultAnchorData default_anchor_data =
+        box->StyleRef().GetDefaultAnchorData();
     using Type = StylePositionAnchor::Type;
-    switch (position_anchor.GetType()) {
+    switch (default_anchor_data.GetType()) {
       case Type::kNone:
         target_object = nullptr;
         break;
@@ -2064,8 +2106,10 @@ protocol::Response InspectorDOMAgent::getAnchorElement(
         target_object = box->AcceptableImplicitAnchor();
         break;
       case Type::kName:
-        target_object = box->FindTargetAnchor(position_anchor.GetName());
+        target_object = box->FindTargetAnchor(default_anchor_data.GetName());
         break;
+      case Type::kNormal:
+        NOTREACHED();
     }
   }
 

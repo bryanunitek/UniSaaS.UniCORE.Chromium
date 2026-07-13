@@ -11,6 +11,7 @@ import 'chrome://resources/cr_elements/cr_page_selector/cr_page_selector.js';
 import 'chrome://resources/cr_elements/cr_tabs/cr_tabs.js';
 import './history_embeddings_promo.js';
 // <if expr="not is_chromeos">
+import './history_cross_device_signin_promo.js';
 import './history_sync_promo.js';
 // </if>
 import './history_list.js';
@@ -26,10 +27,11 @@ import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_com
 import {HelpBubbleMixinLit} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin_lit.js';
 import {HistoryResultType} from 'chrome://resources/cr_components/history/constants.js';
 import type {ForeignSessionPageCallbackRouter} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
+import {browserProxyFactory as foreignSessionBrowserProxyFactory} from 'chrome://resources/cr_components/history/foreign_sessions.mojom-webui.js';
 import type {PageCallbackRouter, QueryResult, QueryState} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
-import {HistoryEmbeddingsBrowserProxyImpl} from 'chrome://resources/cr_components/history_embeddings/browser_proxy.js';
 import type {Suggestion} from 'chrome://resources/cr_components/history_embeddings/filter_chips.js';
 import type {HistoryEmbeddingsMoreActionsClickEvent} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.js';
+import {browserProxyFactory as historyEmbeddingsBrowserProxyFactory} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.mojom-webui.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrDrawerElement} from 'chrome://resources/cr_elements/cr_drawer/cr_drawer.js';
 import type {CrLazyRenderLitElement} from 'chrome://resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
@@ -48,7 +50,6 @@ import {getHtml} from './app.html.js';
 import {BrowserProxyImpl} from './browser_proxy.js';
 import {HistoryPageViewHistogram, HistorySignInState, SyncState} from './constants.js';
 import type {ForeignSession, HistoryIdentityState} from './externs.js';
-import {ForeignSessionBrowserProxyImpl} from './foreign_session_browser_proxy.js';
 import type {HistoryListElement} from './history_list.js';
 import type {HistoryToolbarElement} from './history_toolbar.js';
 import {convertDateToQueryValue} from './query_manager.js';
@@ -137,6 +138,7 @@ export class HistoryAppElement extends HistoryAppElementBase {
       // <if expr="not is_chromeos">
       unoPhase2FollowUpEnabled_: {type: Boolean},
       shouldShowHistorySyncPromo_: {type: Boolean},
+      shouldShowHistoryCrossDeviceSigninPromo_: {type: Boolean},
       // </if>
       contentPage_: {type: String},
       tabsContentPage_: {type: String},
@@ -192,6 +194,7 @@ export class HistoryAppElement extends HistoryAppElementBase {
   protected accessor unoPhase2FollowUpEnabled_: boolean =
       loadTimeData.getBoolean('unoPhase2FollowUp');
   protected accessor shouldShowHistorySyncPromo_: boolean = false;
+  protected accessor shouldShowHistoryCrossDeviceSigninPromo_: boolean = false;
   // </if>
   protected accessor hasDrawer_: boolean = false;
   protected accessor historyClustersEnabled_: boolean =
@@ -261,7 +264,7 @@ export class HistoryAppElement extends HistoryAppElementBase {
     super();
     this.callbackRouter_ = BrowserProxyImpl.getInstance().callbackRouter;
     this.foreignSessionCallbackRouter_ =
-        ForeignSessionBrowserProxyImpl.getInstance().callbackRouter;
+        foreignSessionBrowserProxyFactory.getInstance().callbackRouter;
   }
 
   override connectedCallback() {
@@ -292,7 +295,7 @@ export class HistoryAppElement extends HistoryAppElementBase {
             (sessionList: ForeignSession[]) =>
                 this.setForeignSessions_(sessionList));
     this.shadowRoot.querySelector('history-query-manager')!.initialize();
-    ForeignSessionBrowserProxyImpl.getInstance()
+    foreignSessionBrowserProxyFactory.getInstance()
         .handler.getForeignSessions()
         .then(({sessions}) => this.setForeignSessions_(sessions));
     BrowserProxyImpl.getInstance().getInitialIdentityState().then(
@@ -396,7 +399,8 @@ export class HistoryAppElement extends HistoryAppElementBase {
       //    to show the help bubble comes immediately after registering the
       //    anchor.
       setTimeout(() => {
-        HistoryEmbeddingsBrowserProxyImpl.getInstance().maybeShowFeaturePromo();
+        historyEmbeddingsBrowserProxyFactory.getInstance()
+            .handler.maybeShowFeaturePromo();
       }, 1000);
     }
   }
@@ -808,6 +812,11 @@ export class HistoryAppElement extends HistoryAppElementBase {
   private handleShouldShowHistoryPageHistorySyncPromoChanged_(
       shouldShowHistorySyncPromo: boolean) {
     this.shouldShowHistorySyncPromo_ = shouldShowHistorySyncPromo;
+  }
+
+  protected onShouldShowHistoryCrossDeviceSigninPromo_(
+      e: CustomEvent<{shouldShow: boolean}>) {
+    this.shouldShowHistoryCrossDeviceSigninPromo_ = e.detail.shouldShow;
   }
   // </if>
 

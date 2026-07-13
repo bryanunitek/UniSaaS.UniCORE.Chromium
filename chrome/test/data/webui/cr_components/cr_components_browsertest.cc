@@ -7,6 +7,8 @@
 #include "components/contextual_tasks/public/features.h"
 #include "components/lens/lens_features.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/file_system_chooser_test_helpers.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/browser_features.h"
@@ -16,11 +18,12 @@
 
 typedef WebUIMochaBrowserTest CrComponentsTest;
 
-#if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(CrComponentsTest, ColorChangeListener) {
+  set_test_loader_host(chrome::kChromeUIExtensionsHost);
   RunTest("cr_components/color_change_listener_test.js", "mocha.run()");
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(CrComponentsTest, CustomizeColorSchemeMode) {
   set_test_loader_host(chrome::kChromeUICustomizeChromeSidePanelHost);
   RunTest("cr_components/customize_color_scheme_mode_test.js", "mocha.run()");
@@ -124,6 +127,11 @@ IN_PROC_BROWSER_TEST_F(CrComponentsSearchboxTest, SearchboxDropdownTest) {
 IN_PROC_BROWSER_TEST_F(CrComponentsSearchboxTest, SearchboxIconTest) {
   set_test_loader_host(chrome::kChromeUINewTabPageHost);
   RunTest("cr_components/searchbox/searchbox_icon_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrComponentsSearchboxTest, SearchboxMixinTest) {
+  set_test_loader_host(chrome::kChromeUINewTabPageHost);
+  RunTest("cr_components/searchbox/searchbox_mixin_test.js", "mocha.run()");
 }
 
 class CrComponentsHistoryClustersTest : public WebUIMochaBrowserTest {
@@ -313,6 +321,10 @@ IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest,
           "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, RecordingWave) {
+  RunTest("cr_components/composebox/recording_wave_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, LensSearch) {
   RunTest("cr_components/composebox/composebox_lens_search_test.js",
           "mocha.run()");
@@ -323,10 +335,26 @@ IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, RecentTabChip) {
 }
 #endif
 
-// TODO(crbug.com/508867284): Flaky on Win/Linux/Chrome OS.
-IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest,
-                       DISABLED_ComposeboxVoiceSearch) {
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxVoiceSearch) {
   RunTest("cr_components/composebox/composebox_voice_search_test.js",
+          "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest,
+                       ComposeboxVoiceSearchMetrics) {
+  RunTest("cr_components/composebox/composebox_voice_search_metrics_test.js",
+          "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest,
+                       ComposeboxVoiceSearchRecognition) {
+  RunTest(
+      "cr_components/composebox/composebox_voice_search_recognition_test.js",
+      "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxVoiceSearchFlags) {
+  RunTest("cr_components/composebox/composebox_voice_search_flags_test.js",
           "mocha.run()");
 }
 
@@ -335,8 +363,37 @@ IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxDragAndDrop) {
           "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxErrorScrim) {
+  RunTest("cr_components/composebox/error_scrim_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxFileCarousel) {
   RunTest("cr_components/composebox/file_carousel_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxFileThumbnail) {
+  RunTest("cr_components/composebox/file_thumbnail_test.js", "mocha.run()");
+}
+
+class CrComponentsComposeboxFileInputsTest : public CrComponentsComposeboxTest {
+ public:
+  void SetUpOnMainThread() override {
+    CrComponentsComposeboxTest::SetUpOnMainThread();
+    ui::SelectFileDialog::SetFactory(
+        std::make_unique<content::FakeSelectFileDialogFactory>(
+            std::vector<base::FilePath>{}));
+  }
+
+  void TearDownOnMainThread() override {
+    ui::SelectFileDialog::SetFactory(nullptr);
+    CrComponentsComposeboxTest::TearDownOnMainThread();
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxFileInputsTest,
+                       ComposeboxFileInputs) {
+  RunTest("cr_components/composebox/composebox_file_inputs_test.js",
+          "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxInput) {
@@ -354,4 +411,8 @@ IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxMatch) {
 
 IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, Composebox) {
   RunTest("cr_components/composebox/composebox_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrComponentsComposeboxTest, ComposeboxMixin) {
+  RunTest("cr_components/composebox/composebox_mixin_test.js", "mocha.run()");
 }

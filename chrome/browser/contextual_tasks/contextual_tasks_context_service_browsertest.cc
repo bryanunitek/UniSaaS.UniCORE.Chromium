@@ -11,7 +11,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/test_future.h"
+#include "base/test/test_simple_task_runner.h"
 #include "base/threading/thread_restrictions.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_context_model_handler.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_context_service_factory.h"
@@ -220,7 +222,7 @@ class ContextualTasksContextServiceTest : public InProcessBrowserTest {
         "chrome/test/data/optimization_guide");
     ASSERT_TRUE(embedded_test_server()->Start());
 
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->SetModelQualityLogsUploaderServiceForTesting(
             std::make_unique<
                 optimization_guide::TestModelQualityLogsUploaderService>(
@@ -278,7 +280,7 @@ class ContextualTasksContextServiceTest : public InProcessBrowserTest {
 
   ContextualTasksContextService* service() {
     return ContextualTasksContextServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   FakeEmbedder& embedder() { return embedder_; }
@@ -289,39 +291,41 @@ class ContextualTasksContextServiceTest : public InProcessBrowserTest {
 
   void UpdateModel(
       optimization_guide::proto::OptimizationTarget optimization_target,
-      const optimization_guide::ModelInfo& model_info) {
+      const optimization_guide::ModelInfo& model_info,
+      scoped_refptr<base::SequencedTaskRunner> background_task_runner =
+          base::SequencedTaskRunner::GetCurrentDefault()) {
     service()->model_handler_ =
         std::make_unique<ContextualTasksContextModelHandler>(
             OptimizationGuideKeyedServiceFactory::GetForProfile(
-                browser()->profile()),
-            base::SequencedTaskRunner::GetCurrentDefault());
+                browser()->GetProfile()),
+            background_task_runner);
     service()->model_handler_->OnModelUpdated(optimization_target, model_info);
   }
 
   MockPageEmbeddingsService* page_embeddings_service() {
     return static_cast<MockPageEmbeddingsService*>(
         page_content_annotations::PageEmbeddingsServiceFactory::GetForProfile(
-            browser()->profile()));
+            browser()->GetProfile()));
   }
 
   MockPageContentExtractionService* page_content_extraction_service() {
     return static_cast<MockPageContentExtractionService*>(
         page_content_annotations::PageContentExtractionServiceFactory::
-            GetForProfile(browser()->profile()));
+            GetForProfile(browser()->GetProfile()));
   }
 
   optimization_guide::TestModelQualityLogsUploaderService* logs_uploader() {
     return static_cast<
         optimization_guide::TestModelQualityLogsUploaderService*>(
         OptimizationGuideKeyedServiceFactory::GetForProfile(
-            browser()->profile())
+            browser()->GetProfile())
             ->GetModelQualityLogsUploaderService());
   }
 
   page_content_annotations::PageContentAnnotationsService*
   page_content_annotations_service() {
     return PageContentAnnotationsServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void OverrideVisibilityScoresForTesting(
@@ -388,6 +392,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, EmptyQuery) {
       "ContextualTasks.Context.ContextCalculationLatency", 0);
   histogram_tester.ExpectTotalCount(
       "ContextualTasks.Context.ContextDeterminationStatus", 0);
+  histogram_tester.ExpectTotalCount(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", 0);
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, NoEmbedder) {
@@ -408,6 +414,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, NoEmbedder) {
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.ContextDeterminationStatus",
       ContextDeterminationStatus::kEmbedderNotAvailable, 1);
+  histogram_tester.ExpectTotalCount(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", 0);
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, EmbedderFailed) {
@@ -432,6 +440,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, EmbedderFailed) {
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.ContextDeterminationStatus",
       ContextDeterminationStatus::kQueryEmbeddingFailed, 1);
+  histogram_tester.ExpectTotalCount(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", 0);
 }
 
 class ContextualTasksContextServicePreviousTabSignalTest
@@ -516,6 +526,9 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServicePreviousTabSignalTest,
   // query. Its title embedding ({1,0,0}) matches query embedding ({1,0,0}).
   // So similarity should be 1.0.
   EXPECT_EQ(uploaded_quality_log.query_active_tab_title_similarity(), 1.0f);
+
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", true, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
@@ -539,6 +552,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.ContextDeterminationStatus",
       ContextDeterminationStatus::kSuccess, 1);
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", false, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, Success) {
@@ -583,6 +598,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, Success) {
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.ContextDeterminationStatus",
       ContextDeterminationStatus::kSuccess, 1);
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", true, 1);
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.ExplicitTabsCount", 1, 1);
   histogram_tester.ExpectUniqueSample("ContextualTasks.Context.TabOverlapCount",
@@ -824,7 +841,7 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, FiltersForWindow) {
   // Create a new browser window.
   BrowserWindowInterface* new_browser =
       CreateBrowserWindow(BrowserWindowCreateParams(
-          *browser()->profile(), /*from_user_gesture=*/false));
+          *browser()->GetProfile(), /*from_user_gesture=*/false));
   ASSERT_TRUE(new_browser);
 
   {
@@ -1024,13 +1041,15 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
     ASSERT_TRUE(base::PathExists(model_file_path));
   }
 
+  auto model_executor_task_runner =
+      base::MakeRefCounted<base::TestSimpleTaskRunner>();
   auto model_info = optimization_guide::TestModelInfoBuilder()
                         .SetModelFilePath(model_file_path)
                         .SetModelMetadata(any_metadata)
                         .Build();
   UpdateModel(optimization_guide::proto::
                   OPTIMIZATION_TARGET_CONTEXTUAL_TASKS_TAB_RELEVANCE,
-              *model_info);
+              *model_info, model_executor_task_runner);
 
   NavigateToValidURL();
 
@@ -1050,9 +1069,10 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
   TabSelectionOptions options;
   options.tab_selection_mode = mojom::TabSelectionMode::kStaticSignalsMlModel;
   options.min_model_score = 0.5f;
-  // Set request timeout to 1ms so that during asynchronous model execution,
-  // the timeout task is guaranteed to run first.
-  options.tab_selection_timeout = base::Milliseconds(1);
+  // Set request timeout to 100ms so that the test finishes quickly after the
+  // timeout tasks runs. Since the model executor task runner is paused,
+  // model execution will not proceed and this request is guaranteed to time out.
+  options.tab_selection_timeout = base::Milliseconds(100);
 
   service()->GetRelevantTabsForQuery(options, "summarize the test page now",
                                      /*explicit_urls=*/{},
@@ -1060,6 +1080,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
 
   // The request should time out and return no relevant tabs.
   EXPECT_TRUE(future.Get().empty());
+
+  model_executor_task_runner->RunPendingTasks();
 
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.ContextDeterminationStatus",
@@ -1336,6 +1358,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
 
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.RelevantTabsCount", 1, 1);
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", true, 1);
 
   // Metrics comparing with explicit tabs not recorded when there are no tabs
   // chosen by the user.
@@ -1386,6 +1410,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
 
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.RelevantTabsCount", 1, 1);
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", true, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -1426,6 +1452,8 @@ IN_PROC_BROWSER_TEST_F(
 
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.RelevantTabsCount", 0, 1);
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", true, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
@@ -1457,6 +1485,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
       "ContextualTasks.Context.MatchingWordsCount", 2, 1);
   histogram_tester.ExpectUniqueSample(
       "ContextualTasks.Context.RelevantTabsCount", 1, 1);
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", false, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
@@ -1496,6 +1526,9 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
   service()->GetRelevantTabsForQuery(options, "some text", /*explicit_urls=*/{},
                                      future.GetCallback());
   EXPECT_EQ(0u, future.Get().size());
+
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", true, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, SkipsNonHttp) {
@@ -1518,6 +1551,8 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, SkipsNonHttp) {
                                     0);
   histogram_tester.ExpectTotalCount(
       "ContextualTasks.Context.ContextCalculationLatency", 0);
+  histogram_tester.ExpectTotalCount(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", 0);
 }
 
 IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest,
@@ -1898,6 +1933,9 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceTest, SuccessWithMlModel) {
   // Expect 2 tabs because both tabs have the same URL and deduplication is
   // disabled.
   EXPECT_EQ(2u, future.Get().size());
+
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", true, 2);
 }
 
 class ContextualTasksContextServiceDeduplicateTest
@@ -1955,6 +1993,9 @@ IN_PROC_BROWSER_TEST_F(ContextualTasksContextServiceDeduplicateTest,
   auto tabs = future.Get();
   EXPECT_EQ(2u, tabs.size());
 
+  histogram_tester.ExpectUniqueSample(
+      "ContextualTasks.Context.CandidateTabHasEmbeddings", true, 3);
+
   std::vector<GURL> urls;
   for (const auto& tab : tabs) {
     if (tab) {
@@ -1982,6 +2023,7 @@ class ContextualTasksContextServiceSmartTabSharingTest
               {"ContextualTasksContextTabSelectionScoreThreshold", "0.8"},
               {"ContextualTasksContextContentVisibilityThreshold", "0.8"}}},
             {kContextualTasksContextLogging, {}},
+            {kContextualTasksForceEntryPointEligibility, {}},
         },
         /*disabled_features=*/{});
   }

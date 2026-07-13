@@ -14,6 +14,7 @@
 #include "content/browser/devtools/devtools_agent_host_impl.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/devtools/network_service_devtools_observer.h"
+#include "content/browser/devtools/render_frame_devtools_agent_host.h"
 #include "content/browser/file_system/file_system_url_loader_factory.h"
 #include "content/browser/loader/browser_initiated_resource_request.h"
 #include "content/browser/loader/file_url_loader_factory.h"
@@ -262,9 +263,8 @@ void WorkerScriptFetcher::CreateAndStart(
     const base::UnguessableToken& devtools_worker_token,
     bool require_cross_site_request_for_cookies,
     net::StorageAccessApiStatus storage_access_api_status,
-    const std::optional<base::UnguessableToken>& worker_network_restrictions_id,
-    const std::optional<base::UnguessableToken>&
-        creator_network_restrictions_id,
+    const base::UnguessableToken& worker_network_restrictions_id,
+    const base::UnguessableToken& creator_network_restrictions_id,
     std::optional<PolicyContainerPolicies> creator_policies,
     CompletionCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -434,9 +434,8 @@ void WorkerScriptFetcher::CreateScriptLoader(
     DevToolsAgentHostImpl* devtools_agent_host,
     const base::UnguessableToken& devtools_worker_token,
     bool require_cross_site_request_for_cookies,
-    const std::optional<base::UnguessableToken>& worker_network_restrictions_id,
-    const std::optional<base::UnguessableToken>&
-        creator_network_restrictions_id,
+    const base::UnguessableToken& worker_network_restrictions_id,
+    const base::UnguessableToken& creator_network_restrictions_id,
     std::optional<PolicyContainerPolicies> creator_policies,
     WorkerScriptFetcher::CompletionCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -483,8 +482,13 @@ void WorkerScriptFetcher::CreateScriptLoader(
                   content::GlobalRenderFrameHostId(
                       creator_render_frame_host->GetProcess()->GetID(),
                       creator_render_frame_host->GetRoutingID()));
+    }
+
+    auto* frame_devtools_host =
+        RenderFrameDevToolsAgentHost::GetFor(&ancestor_render_frame_host);
+    if (frame_devtools_host) {
       devtools_observer = NetworkServiceDevToolsObserver::MakeSelfOwned(
-          creator_render_frame_host->GetDevToolsFrameToken().ToString());
+          frame_devtools_host->GetId());
     }
 
     const url::Origin& request_initiator = *resource_request->request_initiator;
@@ -565,12 +569,12 @@ void WorkerScriptFetcher::CreateScriptLoader(
           nullptr /* navigation_ui_data */, frame_tree_node_id,
           /*navigation_id=*/std::nullopt);
 
-  if (worker_network_restrictions_id && creator_policies) {
+  if (!worker_network_restrictions_id.is_empty() && creator_policies) {
     if (auto throttle = NetworkRestrictionsWorkerThrottle::Create(
             static_cast<StoragePartitionImpl*>(
                 factory_process->GetStoragePartition())
                 ->GetWeakPtr(),
-            *worker_network_restrictions_id, creator_policies->Clone(),
+            worker_network_restrictions_id, creator_policies->Clone(),
             ancestor_render_frame_host.GetWeakPtr(),
             /*is_service_worker=*/false)) {
       throttles.push_back(std::move(throttle));

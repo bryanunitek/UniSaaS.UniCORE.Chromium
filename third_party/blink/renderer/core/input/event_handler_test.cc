@@ -128,6 +128,7 @@ WebPointerEvent CreateMinimalTouchPointerEvent(WebInputEvent::Type type,
                            WebPointerProperties::Button::kLeft, position,
                            position),
       1, 1);
+  event.SetTimeStamp(base::TimeTicks::Now());
   event.SetFrameScale(1);
   return event;
 }
@@ -237,7 +238,7 @@ void EventHandlerTest::SetHtmlInnerHTML(const char* html_content) {
 ShadowRoot* EventHandlerTest::SetShadowContent(const char* shadow_content,
                                                const char* host) {
   ShadowRoot* shadow_root =
-      EditingTestBase::CreateShadowRootForElementWithIDAndSetInnerHTML(
+      EditingTestBase::CreateShadowRootForElementWithIdAndSetInnerHtml(
           GetDocument(), host, shadow_content);
   return shadow_root;
 }
@@ -914,7 +915,7 @@ TEST_F(EventHandlerTest, sendContextMenuEventWithHover) {
   GetDocument().body()->AppendChild(script);
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kTest);
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .Collapse(Position(GetDocument().body(), 0))
           .Build(),
       SetSelectionOptions());

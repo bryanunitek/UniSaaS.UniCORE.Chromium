@@ -45,9 +45,11 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/views/drive_picker_host/drive_picker_result_handler.mojom.h"
+#include "components/contextual_search/footprints/public/drive_disclaimer_controller.h"
 #endif
 
 class Profile;
+class ContextualSearchboxTabFaviconHelper;
 class SkBitmap;
 class DrivePickerHostController;
 
@@ -118,8 +120,9 @@ class ContextualSearchboxHandler
       mojo::PendingRemote<searchbox::mojom::Page> pending_page,
       Profile* profile,
       content::WebContents* web_contents,
-      std::unique_ptr<OmniboxController> controller,
+      std::unique_ptr<OmniboxClient> client,
       GetSessionHandleCallback get_session_callback);
+
   ~ContextualSearchboxHandler() override;
 
   // searchbox::mojom::PageHandler:
@@ -134,6 +137,7 @@ class ContextualSearchboxHandler
   void OnDriveUploadClicked(OnDriveUploadClickedCallback callback) override;
   void DeleteContext(const base::UnguessableToken& file_token,
                      bool from_automatic_chip) override;
+  void DeleteTabContext(int32_t tab_id) override;
   void DeleteContextFromBrowser(const base::UnguessableToken& file_token,
                                 bool from_automatic_chip);
   void ClearFiles(bool should_block_auto_suggested_tabs) override;
@@ -147,6 +151,8 @@ class ContextualSearchboxHandler
                    bool is_voice_search) override;
   void GetRecentTabs(GetRecentTabsCallback callback) override;
   void GetTabPreview(int32_t tab_id, GetTabPreviewCallback callback) override;
+  void WaitForTabFaviconLoad(int32_t tab_id,
+                             WaitForTabFaviconLoadCallback callback) override;
   void GetInputState(GetInputStateCallback callback) override;
   void OpenAutocompleteMatch(uint8_t line,
                              const GURL& url,
@@ -155,15 +161,23 @@ class ContextualSearchboxHandler
                              bool alt_key,
                              bool ctrl_key,
                              bool meta_key,
-                             bool shift_key) override;
+                             bool shift_key,
+                             bool via_keyboard) override;
   void SetSmartComposeStats(
       searchbox::mojom::SmartComposeStatsPtr smart_compose_stats) override;
-  void ShouldShowDriveDisclaimer(
-      ShouldShowDriveDisclaimerCallback callback) override;
+  void GetDriveDisclaimerStatus(
+      GetDriveDisclaimerStatusCallback callback) override;
   void OnDriveDisclaimerAccepted() override;
-  void QueryAutocomplete(const std::u16string& input,
+  void QueryAutocomplete(int32_t query_id,
+                         const std::u16string& input,
                          bool prevent_inline_autocomplete,
                          uint32_t cursor_position) override;
+  void QueryAutocompleteWithSuggestInventory(
+      int32_t query_id,
+      const std::u16string& input,
+      bool prevent_inline_autocomplete,
+      uint32_t cursor_position,
+      omnibox::SuggestInventory suggest_inventory) override;
 
 #if !BUILDFLAG(IS_ANDROID)
   // drive_picker_host::mojom::DrivePickerResultHandler:
@@ -176,10 +190,12 @@ class ContextualSearchboxHandler
   // Returns true if smart tab sharing is active for the current query.
   virtual bool IsSmartTabSharingActive() const;
 
-  virtual void SetSmartTabSharingActive(bool active);
-  virtual void GetSmartTabSharingActive(
-      composebox::mojom::PageHandler::GetSmartTabSharingActiveCallback
-          callback);
+#if !BUILDFLAG(IS_ANDROID)
+  void SetSmartTabSharingActive(bool active) override;
+  void GetSmartTabSharingActive(
+      searchbox::mojom::PageHandler::GetSmartTabSharingActiveCallback callback)
+      override;
+#endif
 
   // Returns the list of selected tab IDs that should be transferred.
   virtual std::vector<int32_t> GetSelectedTabIds() const;
@@ -256,6 +272,10 @@ class ContextualSearchboxHandler
  protected:
   // SearchboxHandler:
   omnibox::InputState GetInputState() const override;
+  // Returns the current input state, re-initializing the underlying model if
+  // its weak pointer was invalidated after window startup. Use this instead of
+  // `GetInputState() const` when calling from non-const C++ operations.
+  omnibox::InputState GetValidInputState();
   std::string GetPreviousQuery() override;
 
   virtual void OpenUrl(GURL url, const WindowOpenDisposition disposition);
@@ -282,8 +302,12 @@ class ContextualSearchboxHandler
                            ResetInputStateModel);
   FRIEND_TEST_ALL_PREFIXES(ContextualSearchboxHandlerTest,
                            SubmitQuery_DelayUpload);
+  FRIEND_TEST_ALL_PREFIXES(ContextualSearchboxHandlerTest,
+                           SubmitQuery_TabAttachmentCount);
   FRIEND_TEST_ALL_PREFIXES(ContextualSearchboxHandlerTestTabsTest,
                            AddTabContext_DelayUpload);
+  FRIEND_TEST_ALL_PREFIXES(ContextualSearchboxHandlerTestTabsTest,
+                           AddTabContext_RecentTab);
   FRIEND_TEST_ALL_PREFIXES(ContextualSearchboxHandlerTestTabsTest,
                            DeleteContext_DelayUpload);
   FRIEND_TEST_ALL_PREFIXES(ContextualSearchboxHandlerTest,
@@ -331,6 +355,13 @@ class ContextualSearchboxHandler
 
   virtual void InitializeInputStateModel();
 
+  // Returns true if the user/profile is eligible for tab sharing (cobrowse)
+  // in contextual search. Defaults to true. Subclasses (such as the side panel
+  // composebox) may override this to enforce profile-level eligibility or to
+  // return a cached value captured at initialization to prevent jarring UI
+  // state changes mid-session.
+  virtual bool IsContextualSearchTabSharingEligible() const;
+
   base::WeakPtr<contextual_search::InputStateModel>
   GetOrCreateInputStateModel();
 
@@ -368,7 +399,7 @@ class ContextualSearchboxHandler
       std::map<std::string, std::string> additional_params,
       std::vector<base::WeakPtr<content::WebContents>> relevant_tabs);
 
-  std::optional<base::Uuid> GetTaskId();
+  std::optional<base::Uuid> GetTaskId() const;
 
   std::optional<std::pair<base::UnguessableToken,
                           std::unique_ptr<lens::ContextualInputData>>>
@@ -377,6 +408,11 @@ class ContextualSearchboxHandler
   std::unique_ptr<contextual_tasks::DesktopQueryContextualizerDelegate>
       desktop_delegate_;
   std::unique_ptr<contextual_tasks::QueryContextualizer> query_contextualizer_;
+
+  class ActiveTabNavigationObserver;
+  std::unique_ptr<ActiveTabNavigationObserver> active_tab_nav_observer_;
+
+  void OnActiveTabNavigated();
 
   raw_ptr<contextual_tasks::ContextualTasksContextService>
       contextual_tasks_context_service_;
@@ -393,6 +429,8 @@ class ContextualSearchboxHandler
 
   base::ScopedObservation<TabListInterface, TabListInterfaceObserver>
       tab_list_observation_{this};
+
+  std::unique_ptr<ContextualSearchboxTabFaviconHelper> tab_favicon_helper_;
 
  protected:
   std::optional<bool> smart_tab_sharing_active_for_thread_;
@@ -416,11 +454,17 @@ class ContextualSearchboxHandler
 
 #if !BUILDFLAG(IS_ANDROID)
   void OnDrivePickerDisconnected();
+  void OnDriveDisclaimerChecked(
+      drive_picker::DriveDisclaimerController::DisclaimerStatus status);
+  drive_picker::DriveDisclaimerController* GetDriveDisclaimerController();
 
   mojo::Receiver<drive_picker_host::mojom::DrivePickerResultHandler>
       drive_picker_result_handler_receiver_{this};
 
   std::unique_ptr<DrivePickerHostController> drive_picker_controller_;
+
+  std::unique_ptr<drive_picker::DriveDisclaimerController>
+      drive_disclaimer_controller_;
 #endif
 
   OnDriveUploadClickedCallback drive_upload_click_callback_;

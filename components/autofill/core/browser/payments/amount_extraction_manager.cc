@@ -91,6 +91,15 @@ AmountExtractionManager::MaybeParseAmountToMonetaryMicroUnits(
 AiAmountExtractionResult::ResultType
 AmountExtractionManager::ValidateAmountExtractionResponse(
     const optimization_guide::proto::AmountExtractionResponse& response) {
+  // If the inference response explicitly indicates that the amount extraction
+  // was unsuccessful, return `kAmountMissing` immediately. This prevents
+  // checking other fields like `currency`, which might be populated with empty
+  // or fallback values and cause incorrect error dialogs (e.g. unsupported
+  // currency errors).
+  if (response.has_is_successful() && !response.is_successful()) {
+    return base::unexpected(AiAmountExtractionResult::Error::kAmountMissing);
+  }
+
   std::optional<AiAmountExtractionResult::Error> error;
 
   // Lower priority check: currency. If checkout amount is missing or invalid,
@@ -127,8 +136,7 @@ AmountExtractionManager::GetEligibleFeatures(
     const std::vector<Suggestion>& suggestions,
     FillingProduct filling_product,
     FieldType field_type) const {
-  if (payments::ShouldShowBnplSuggestions(autofill_manager_->client(),
-                                          field_type) &&
+  if (ShouldShowBnplSuggestions(autofill_manager_->client(), field_type) &&
       filling_product == FillingProduct::kCreditCard &&
       base::FeatureList::IsEnabled(
           features::kAutofillEnablePayNowPayLaterTabs)) {
@@ -187,8 +195,7 @@ AmountExtractionManager::GetEligibleFeatures(
   // Run after all other feature eligibilities are checked to only check feature
   // flag for eligible users.
   if (!eligible_features.empty() &&
-      base::FeatureList::IsEnabled(
-          ::autofill::features::kAutofillEnableAmountExtraction)) {
+      base::FeatureList::IsEnabled(features::kAutofillEnableAmountExtraction)) {
     return eligible_features;
   }
 
@@ -300,7 +307,7 @@ void AmountExtractionManager::OnCheckoutAmountReceived(
   if constexpr (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
                 BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)) {
     if (base::FeatureList::IsEnabled(
-            ::autofill::features::kAutofillEnableAmountExtractionTesting)) {
+            features::kAutofillEnableAmountExtractionTesting)) {
       VLOG(3) << "The result of amount extraction on domain "
               << autofill_manager_->client()
                      .GetLastCommittedPrimaryMainFrameOrigin()
@@ -356,7 +363,7 @@ void AmountExtractionManager::OnTimeoutReached() {
   weak_ptr_factory_.InvalidateWeakPtrs();
 
   if (base::FeatureList::IsEnabled(
-          ::autofill::features::kAutofillEnableAiBasedAmountExtraction)) {
+          features::kAutofillEnableAiBasedAmountExtraction)) {
     AiAmountExtractionResult::ResultType result =
         base::unexpected(AiAmountExtractionResult::Error::kTimeout);
     if (BnplManager* bnpl_manager =
@@ -388,7 +395,7 @@ void AmountExtractionManager::OnTimeoutReached() {
   if constexpr (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
                 BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)) {
     if (base::FeatureList::IsEnabled(
-            ::autofill::features::kAutofillEnableAmountExtractionTesting)) {
+            features::kAutofillEnableAmountExtractionTesting)) {
       VLOG(3) << "The amount extraction on domain "
               << autofill_manager_->client()
                      .GetLastCommittedPrimaryMainFrameOrigin()

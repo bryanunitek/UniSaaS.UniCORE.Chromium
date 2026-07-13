@@ -187,6 +187,7 @@ class ReadAnythingAppController
                      const std::string& content) override;
   void OnReadabilityDistillationStateChanged(
       read_anything::mojom::ReadAnythingDistillationState new_state) override;
+  void OnMainFrameSameDocumentNavigation(const GURL& url) override;
 
 #if BUILDFLAG(IS_CHROMEOS)
   void OnDeviceLocked() override;
@@ -225,6 +226,7 @@ class ReadAnythingAppController
   void OnFontSizeChanged(bool increase);
   void OnFontSizeReset();
   void OnLinksEnabledToggled();
+  void OnTranslationRequested();
   void OnImagesEnabledToggled();
   int LetterSpacing() const;
   int LineSpacing() const;
@@ -268,6 +270,7 @@ class ReadAnythingAppController
   int LineFocusStaticLine() const;
   int LineFocusCursorLine() const;
   int MaxLineWidth() const;
+  int ActivePresentationState() const;
   int InHiddenPresentationState() const;
   int InSidePanelPresentationState() const;
   int InImmersiveOverlayPresentationState() const;
@@ -314,13 +317,17 @@ class ReadAnythingAppController
                          ui::AXNodeID focus_node_id,
                          int focus_offset);
   void OnCollapseSelection();
+  bool MaybeHasKeyPointsSection() const;
+  std::string GetKeyPointsRegex() const;
   void AttemptLogEarlySelection(bool from_side_panel);
   void OnDistilled(int word_count);
   void OnRenderedTextBlocksAvailable(const std::vector<std::u16string>& blocks);
   v8::Local<v8::Value> GetAXMapping(int index);
   bool IsGoogleDocs() const;
+  bool IsPdf() const;
   bool IsImmersiveEnabled() const;
   bool IsImprovedReadAloudEnabled() const;
+  bool IsReadAnythingTranslateEntryPointEnabled() const;
   bool IsTsTextSegmentationEnabled() const;
   bool IsReadabilityEnabled() const;
   bool IsReadabilitySelectTextEnabled() const;
@@ -458,6 +465,10 @@ class ReadAnythingAppController
   // new distillation if the tree is ready.
   void DistillNewTree();
 
+  // Helper function that resets the distillation state and metrics in
+  // preparation for a new content distillation.
+  void PrepareForNewContentDistillation();
+
   // Returns the initial distillation method state based on feature flags and
   // page type (e.g. if it's PDF).
   ReadAnythingAppModel::DistillationMethod GetInitialDistillationMethod(
@@ -465,7 +476,7 @@ class ReadAnythingAppController
 
   void ExecuteJavaScript(const std::string& script);
 
-  // Returns true if a draw occured.
+  // Returns true if a draw occurred.
   bool PostProcessSelection();
 
   // Signals that the side panel has finished loading and it's safe to show
@@ -515,7 +526,9 @@ class ReadAnythingAppController
   // accurate for voices that don't support word boundaries.
   void RecordEstimatedWordsHeard();
 
-  void RecordDistillationSuccess();
+  void RecordScreen2xDistillationStatus(bool just_hidden);
+  void RecordDistillationStatus(
+      read_anything::mojom::DistillationStatus status);
 
   // Given a boundary position within the current granularity, identifies the
   // nodes that needs to be highlighted (e.g. until the word boundary), and
@@ -539,6 +552,10 @@ class ReadAnythingAppController
 
   void LogSpeechStop(int source);
 
+  // Logs the duration a user spent reading a page, broken down by page type
+  // (PDF vs WebPage) and view mode (FullPage overlay vs SidePanel).
+  void LogPageDuration();
+
   // Methods for logging line focus session info.
   void StartLineFocusSession();
   void LogLineFocusSession();
@@ -548,6 +565,8 @@ class ReadAnythingAppController
   void IncrementLineFocusSpeechLines();
 
   void OnUrlInformationSet();
+
+  void OnPdfDebounceFinished();
 
   // Stores a screenshot of the page and triggers distillation to record protos.
   // This function is not used in production and is behind the disabled
@@ -615,14 +634,26 @@ class ReadAnythingAppController
   // drawing instead.
   std::unique_ptr<base::RetainingOneShotTimer> pdf_draw_debouncer_;
 
-  base::OneShotTimer timer_;
+  // Since Screen2x distillation takes some time to occur, distillation success
+  // and failure occurs after kDistillationLoggingDelayMs.
+  base::OneShotTimer distillation_status_logging_delay_timer_;
 
   // The number of times distillation completes successfully after a page
   // change. Used for logging.
-  int distillationsCompleted_;
+  int distillations_completed_;
+
+  // The number of times distillation is attempted after a page
+  // change. distillation_attempts_ may be greater than
+  // distillations_completed_, especially on ad-heavy pages where distillation
+  // is re-triggered multiple times before completion. Used for logging.
+  int distillation_attempts_;
 
   // The distilled title result of DOM distiller distillation.
   std::string dom_distiller_title_;
+
+  // Tracks whether the distillation status for the current active tree
+  // navigation has already been recorded.
+  bool has_logged_distillation_status_ = false;
 
   // The distilled content result of DOM distiller distillation.
   std::string dom_distiller_content_html_;

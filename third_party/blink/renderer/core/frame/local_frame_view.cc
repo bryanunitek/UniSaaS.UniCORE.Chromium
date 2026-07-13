@@ -69,6 +69,8 @@
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/display_lock/display_lock_document_state.h"
 #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
+#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
+#include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/scroll_marker_group_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/static_node_list.h"
 #include "third_party/blink/renderer/core/editing/drag_caret.h"
@@ -158,6 +160,7 @@
 #include "third_party/blink/renderer/core/paint/pre_paint_tree_walk.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing_visualizer.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/resize_observer/resize_observer_controller.h"
 #include "third_party/blink/renderer/core/scroll/scroll_alignment.h"
@@ -177,6 +180,8 @@
 #include "third_party/blink/renderer/platform/graphics/paint/cull_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
+#include "third_party/blink/renderer/platform/graphics/paint/paint_record_builder.h"
+#include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/resource_coordinator/document_resource_coordinator.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
@@ -187,6 +192,7 @@
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
 #include "third_party/blink/renderer/platform/widget/frame_widget.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
@@ -211,6 +217,33 @@
 
 namespace blink {
 namespace {
+
+std::optional<cc::PaintRecord> GetCanvasSnapshot(DOMNodeId id) {
+  if (auto* nested_canvas =
+          DynamicTo<HTMLCanvasElement>(DOMNodeIds::NodeForId(id))) {
+    if (!nested_canvas->OriginClean() || !nested_canvas->GetLayoutObject()) {
+      return cc::PaintRecord();
+    }
+    if (scoped_refptr<StaticBitmapImage> snapshot =
+            nested_canvas->Snapshot(kFrontBuffer)) {
+      PaintRecordBuilder builder;
+      gfx::RectF dest_rect(gfx::SizeF(nested_canvas->Size()));
+      gfx::RectF src_rect(gfx::SizeF(nested_canvas->Size()));
+      {
+        DrawingRecorder recorder(
+            builder.Context(), *nested_canvas->GetLayoutObject(),
+            DisplayItem::kDocumentBackground, gfx::Rect(nested_canvas->Size()));
+        builder.Context().DrawImage(*snapshot, Image::kSyncDecode,
+                                    ImageAutoDarkMode::Disabled(),
+                                    ImagePaintTimingInfo(), dest_rect,
+                                    &src_rect, SkBlendMode::kSrcOver);
+      }
+      return builder.EndRecording();
+    }
+    return cc::PaintRecord();
+  }
+  return std::nullopt;
+}
 
 // Logs a UseCounter for the size of the cursor that will be set. This will be
 // used for compatibility analysis to determine whether the maximum size can be
@@ -299,7 +332,6 @@ LocalFrameView::LocalFrameView(LocalFrame& frame, gfx::Rect frame_rect)
       paint_frame_count_(0),
       unique_id_(NewUniqueObjectId()),
       layout_shift_tracker_(MakeGarbageCollected<LayoutShiftTracker>(this)),
-      paint_timing_detector_(MakeGarbageCollected<PaintTimingDetector>(this)),
       mobile_friendliness_checker_(MobileFriendlinessChecker::Create(*this)),
       tap_friendliness_checker_(TapFriendlinessChecker::CreateIfMobile(*this))
 #if DCHECK_IS_ON()
@@ -342,7 +374,6 @@ void LocalFrameView::Trace(Visitor* visitor) const {
   visitor->Trace(paint_controller_persistent_data_);
   visitor->Trace(paint_artifact_compositor_);
   visitor->Trace(layout_shift_tracker_);
-  visitor->Trace(paint_timing_detector_);
   visitor->Trace(mobile_friendliness_checker_);
   visitor->Trace(tap_friendliness_checker_);
   visitor->Trace(lifecycle_observers_);
@@ -636,7 +667,7 @@ void LocalFrameView::CountObjectsNeedingLayout(unsigned& needs_layout_objects,
                                                bool& is_subtree) {
   needs_layout_objects = 0;
   total_objects = 0;
-  is_subtree = IsSubtreeLayout();
+  is_subtree = HasSubtreeLayoutRoots();
   if (is_subtree) {
     layout_subtree_root_list_.CountObjectsNeedingLayout(needs_layout_objects,
                                                         total_objects);
@@ -696,11 +727,10 @@ void LocalFrameView::PerformLayout() {
     ClearLayoutSubtreeRootsAndMarkContainingBlocks();
   GetLayoutView()->ClearHitTestCache();
 
-  const bool in_subtree_layout = IsSubtreeLayout();
+  const bool has_subtree_layout_roots = HasSubtreeLayoutRoots();
 
   Document* document = GetFrame().GetDocument();
-  if (!in_subtree_layout) {
-    ClearLayoutSubtreeRootsAndMarkContainingBlocks();
+  if (!has_subtree_layout_roots) {
     Node* body = document->body();
     if (IsA<HTMLFrameSetElement>(body) && body->GetLayoutObject()) {
       body->GetLayoutObject()->SetChildNeedsLayout();
@@ -728,11 +758,9 @@ void LocalFrameView::PerformLayout() {
 
   gfx::Size old_size(Size());
 
-  DCHECK(in_subtree_layout || layout_subtree_root_list_.IsEmpty());
-
   double contents_height_before_layout =
       GetLayoutView()->DocumentRect().Height();
-  TRACE_EVENT_BEGIN1(
+  TRACE_EVENT_BEGIN(
       PERFORM_LAYOUT_TRACE_CATEGORIES, "LocalFrameView::performLayout",
       "contentsHeightBeforeLayout", contents_height_before_layout);
 
@@ -747,7 +775,7 @@ void LocalFrameView::PerformLayout() {
   {
     // TODO(szager): Remove this after diagnosing crash.
     DocumentLifecycle::CheckNoTransitionScope check_no_transition(Lifecycle());
-    if (in_subtree_layout) {
+    if (has_subtree_layout_roots) {
       // This map will be used to avoid rebuilding several times the fragment
       // tree spine of a common ancestor.
       HeapHashMap<Member<const LayoutBox>, unsigned> fragment_tree_spines;
@@ -807,8 +835,7 @@ void LocalFrameView::PerformLayout() {
 
   Lifecycle().AdvanceTo(DocumentLifecycle::kAfterPerformLayout);
 
-  TRACE_EVENT_END0(PERFORM_LAYOUT_TRACE_CATEGORIES,
-                   "LocalFrameView::performLayout");
+  TRACE_EVENT_END(PERFORM_LAYOUT_TRACE_CATEGORIES);
   FirstMeaningfulPaintDetector::From(*document)
       .MarkNextPaintAsMeaningfulIfNeeded(
           layout_object_counter_, contents_height_before_layout,
@@ -838,7 +865,7 @@ void LocalFrameView::UpdateLayout() {
 
   v8::Isolate* isolate = frame_->GetPage()->GetAgentGroupScheduler().Isolate();
   ENTER_EMBEDDER_STATE(isolate, frame_, BlinkState::LAYOUT);
-  TRACE_EVENT_BEGIN0("blink,benchmark", "LocalFrameView::layout");
+  TRACE_EVENT_BEGIN("blink,benchmark", "LocalFrameView::layout");
   if (RuntimeEnabledFeatures::BlinkRuntimeCallStatsEnabled()) [[unlikely]] {
     rcs_scope.emplace(RuntimeCallStats::From(isolate),
                       RuntimeCallStats::CounterId::kUpdateLayout);
@@ -846,22 +873,21 @@ void LocalFrameView::UpdateLayout() {
   layout_roots = layout_subtree_root_list_.Ordered();
   if (layout_roots.empty())
     layout_roots.push_back(LayoutObjectWithDepth(GetLayoutView()));
-  TRACE_EVENT_BEGIN1("devtools.timeline", "Layout", "beginData",
-                     [&](perfetto::TracedValue context) {
-                       inspector_layout_event::BeginData(std::move(context),
-                                                         this);
-                     });
+  TRACE_EVENT_BEGIN("devtools.timeline", "Layout", "beginData",
+                    [&](perfetto::TracedValue context) {
+                      inspector_layout_event::BeginData(std::move(context),
+                                                        this);
+                    });
 
   PerformLayout();
   Lifecycle().AdvanceTo(DocumentLifecycle::kLayoutClean);
 
-  TRACE_EVENT_END0("blink,benchmark", "LocalFrameView::layout");
+  TRACE_EVENT_END("blink,benchmark");
 
-  TRACE_EVENT_END1("devtools.timeline", "Layout", "endData",
-                   [&](perfetto::TracedValue context) {
-                     inspector_layout_event::EndData(std::move(context),
-                                                     layout_roots);
-                   });
+  TRACE_EVENT_END(
+      "devtools.timeline", "endData", [&](perfetto::TracedValue context) {
+        inspector_layout_event::EndData(std::move(context), layout_roots);
+      });
   probe::DidChangeViewport(frame_.Get());
 }
 
@@ -1064,9 +1090,22 @@ void LocalFrameView::RunCanvasOnpaintSteps() {
     canvas_elements_needing_onpaint.swap(
         frame_view.canvas_elements_needing_onpaint_);
 
+    HeapVector<std::pair<unsigned, Member<HTMLCanvasElement>>> sorted_canvases;
+    sorted_canvases.reserve(canvas_elements_needing_onpaint.size());
     for (const auto& entry : canvas_elements_needing_onpaint) {
-      HTMLCanvasElement* canvas = entry.key;
-      const HeapVector<Member<Element>> children(*entry.value);
+      unsigned depth = 0;
+      for (Node* n = entry.key; n; n = FlatTreeTraversal::Parent(*n)) {
+        depth++;
+      }
+      sorted_canvases.emplace_back(depth, entry.key);
+    }
+    std::stable_sort(
+        sorted_canvases.begin(), sorted_canvases.end(),
+        [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    for (const auto& [depth, canvas] : sorted_canvases) {
+      auto* value = canvas_elements_needing_onpaint.at(canvas);
+      const HeapVector<Member<Element>> children(*value);
       CanvasPaintEventInit* init = CanvasPaintEventInit::Create();
       init->setChangedElements(std::move(children));
       canvas->DispatchEvent(
@@ -1233,6 +1272,10 @@ std::optional<NaturalSizingInfo> LocalFrameView::GetNaturalDimensions() const {
   return NaturalSizingInfo::MakeSize(unscaled_natural_size);
 }
 
+void LocalFrameView::ClearNaturalDimensions() {
+  natural_size_.reset();
+}
+
 void LocalFrameView::UpdateGeometry() {
   LayoutEmbeddedContent* layout = GetLayoutEmbeddedContent();
   if (!layout)
@@ -1377,8 +1420,13 @@ void LocalFrameView::ViewportSizeChanged() {
     InvalidateLayoutForViewportConstrainedObjects();
   }
 
-  if (GetPaintTimingDetector().Visualizer())
-    GetPaintTimingDetector().Visualizer()->OnViewportChanged();
+  if (Document* document = GetFrame().GetDocument();
+      document && document->domWindow()) {
+    if (PaintTimingVisualizer* visualizer =
+            PaintTimingDetector::From(*document).Visualizer()) {
+      visualizer->OnViewportChanged();
+    }
+  }
 }
 
 void LocalFrameView::InvalidateLayoutForViewportConstrainedObjects() {
@@ -1615,9 +1663,10 @@ void LocalFrameView::ScheduleRelayout() {
   }
 }
 
-void LocalFrameView::ScheduleRelayoutOfSubtree(LayoutObject* relayout_root) {
+void LocalFrameView::ScheduleRelayoutOfSubtree(LayoutObject& relayout_root) {
   DCHECK(frame_->View() == this);
-  DCHECK(relayout_root->IsBox());
+  DCHECK(relayout_root.IsBox());
+  DCHECK(!relayout_root.IsLayoutView());
 
   // TODO(crbug.com/590856): It's still broken when we choose not to crash when
   // the check fails.
@@ -1630,15 +1679,11 @@ void LocalFrameView::ScheduleRelayoutOfSubtree(LayoutObject* relayout_root) {
 
   LayoutView* layout_view = GetLayoutView();
   if (layout_view && layout_view->NeedsLayout()) {
-    if (relayout_root)
-      relayout_root->MarkContainerChainForLayout(false);
+    relayout_root.MarkContainerChainForLayout(false);
     return;
   }
 
-  if (relayout_root == layout_view)
-    layout_subtree_root_list_.ClearAndMarkContainingBlocksForLayout();
-  else
-    layout_subtree_root_list_.Add(*relayout_root);
+  layout_subtree_root_list_.Add(relayout_root);
 
   if (layout_scheduling_enabled_) {
     has_pending_layout_ = true;
@@ -1654,7 +1699,7 @@ void LocalFrameView::ScheduleRelayoutOfSubtree(LayoutObject* relayout_root) {
   DEVTOOLS_TIMELINE_TRACE_EVENT_INSTANT_WITH_CATEGORIES(
       TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "InvalidateLayout",
       inspector_invalidate_layout_event::Data, frame_.Get(),
-      relayout_root->OwnerNodeId());
+      relayout_root.OwnerNodeId());
 }
 
 bool LocalFrameView::LayoutPending() const {
@@ -1673,13 +1718,13 @@ bool LocalFrameView::NeedsLayout() const {
 
   auto* layout_view = GetLayoutView();
   return LayoutPending() || (layout_view && layout_view->NeedsLayout()) ||
-         IsSubtreeLayout();
+         HasSubtreeLayoutRoots();
 }
 
 NOINLINE bool LocalFrameView::CheckDoesNotNeedLayout() const {
   CHECK_FOR_DIRTY_LAYOUT(!LayoutPending());
   CHECK_FOR_DIRTY_LAYOUT(!GetLayoutView() || !GetLayoutView()->NeedsLayout());
-  CHECK_FOR_DIRTY_LAYOUT(!IsSubtreeLayout());
+  CHECK_FOR_DIRTY_LAYOUT(!HasSubtreeLayoutRoots());
   return true;
 }
 
@@ -3057,7 +3102,8 @@ void LocalFrameView::DequeueScrollAnchoringAdjustment(
 void LocalFrameView::SetNeedsEnqueueScrollEvent(
     PaintLayerScrollableArea* scrollable_area) {
   scroll_event_queue_.insert(scrollable_area);
-  GetPage()->Animator().ScheduleVisualUpdate(frame_.Get());
+  GetPage()->Animator().ScheduleVisualUpdate(
+      frame_.Get(), cc::BeginMainFrameReason::kMainThreadScroll);
 }
 
 void LocalFrameView::PerformScrollAnchoringAdjustments() {
@@ -3194,7 +3240,8 @@ void LocalFrameView::PaintTree(
           if (auto* layout_view = frame_view.GetLayoutView())
             layout_view->Layer()->ClearNeedsRepaintRecursively();
         }
-        frame_view.GetPaintTimingDetector().NotifyPaintFinished();
+        PaintTiming::From(*frame_view.GetFrame().GetDocument())
+            .NotifyPaintFinished();
       });
 }
 
@@ -3224,6 +3271,8 @@ void LocalFrameView::PushPaintArtifactToCompositor(bool repainted) {
   if (!paint_artifact_compositor_) {
     paint_artifact_compositor_ = MakeGarbageCollected<PaintArtifactCompositor>(
         page->GetScrollingCoordinator()->GetScrollCallbacks());
+    paint_artifact_compositor_->SetGetCanvasSnapshotCallback(
+        blink::BindRepeating(&GetCanvasSnapshot));
     page->GetChromeClient().AttachRootLayer(
         paint_artifact_compositor_->RootLayer(), &GetFrame());
   }
@@ -3427,8 +3476,19 @@ void LocalFrameView::UpdateStyleAndLayout() {
 
   // Second pass: run autosize until it stabilizes
   if (auto_size_info_) {
-    while (auto_size_info_->AutoSizeIfNeeded())
+    while (auto_size_info_->AutoSizeIfNeeded()) {
+      base::AutoReset<bool> reset(&is_being_auto_sized_, true);
       did_layout |= UpdateStyleAndLayoutInternal();
+    }
+    // We may have a mismatch as we impose an additional min-content constraint
+    // while auto-sizing, set the view as needing layout which will then fall
+    // through to the third-pass below.
+    if (const LayoutView* view = GetLayoutView()) {
+      if (RuntimeEnabledFeatures::AutoSizeUsesScrollWidthForOverflowEnabled() &&
+          view->InitialContainingBlockSize() != view->StitchedSize()) {
+        SetNeedsLayout();
+      }
+    }
     auto_size_info_->Clear();
   }
 
@@ -4670,16 +4730,6 @@ void LocalFrameView::VisibilityForThrottlingChanged() {
 void LocalFrameView::VisibilityChanged(
     blink::mojom::FrameVisibility visibility) {
   frame_->GetLocalFrameHostRemote().VisibilityChanged(visibility);
-  // TODO(crbug.com/351354996): Remove this after the refactor is completed.
-  // LocalFrameClient member may not be valid in some tests.
-  if (frame_->Client() && frame_->Client()->GetWebFrame() &&
-      frame_->Client()->GetWebFrame()->Client()) {
-    frame_->Client()->GetWebFrame()->Client()->OnFrameVisibilityChanged(
-        visibility);
-  }
-
-  // TODO(crbug.com/351354996): Remove this after the refactor is completed.
-  frame_->NotifyFrameVisibilityChanged(visibility);
 }
 
 void LocalFrameView::RenderThrottlingStatusChanged() {
@@ -5035,6 +5085,36 @@ void LocalFrameView::ResetUkmAggregatorForTesting() {
   ukm_aggregator_.reset();
 }
 
+void LocalFrameView::MaybeStopDeferringCommitsWithoutContentfulPaint() {
+  if (!RuntimeEnabledFeatures::
+          ReleasePaintHoldingWithoutContentfulPaintEnabled()) {
+    return;
+  }
+  if (!frame_->IsMainFrame()) {
+    return;
+  }
+  // If the document has finished parsing, first paint has been rendered and FCP
+  // hasn't fired, stop deferring commits. This handles pages that only have
+  // non-contentful paint (e.g., background-color only, no text or images).
+  Document* document = frame_->GetDocument();
+  if (!document || !document->HasFinishedParsing()) {
+    return;
+  }
+
+  PaintTiming& paint_timing = PaintTiming::From(*document);
+  // Wait for the first paint to be rendered before stopping deferring commits.
+  if (paint_timing.FirstPaintRendered().is_null()) {
+    return;
+  }
+  // Stop deferring commits was already called on FCP, so we don't need to do it
+  // again.
+  if (!paint_timing.FirstContentfulPaintRenderedButNotPresentedAsMonotonicTime()
+           .is_null()) {
+    return;
+  }
+  GetPage()->GetChromeClient().StopDeferringCommits(*frame_);
+}
+
 void LocalFrameView::OnFirstContentfulPaint() {
   if (frame_->IsMainFrame()) {
     // Restart commits that may have been deferred.
@@ -5096,9 +5176,6 @@ void LocalFrameView::DidPaintCanvasChild(HTMLCanvasElement& canvas,
                                          Element& child) {
   DCHECK(RuntimeEnabledFeatures::CanvasDrawElementEnabled(
       GetFrame().GetDocument()->GetExecutionContext()));
-  if (canvas.IsInCanvasSubtree()) {
-    return;
-  }
   if (IsUpdatingLifecycle()) {
     auto add_result = canvas_elements_needing_onpaint_.insert(&canvas, nullptr);
     if (add_result.is_new_entry) {
@@ -5113,9 +5190,6 @@ void LocalFrameView::RequestCanvasOnpaint(HTMLCanvasElement& canvas,
                                           Element* child) {
   DCHECK(RuntimeEnabledFeatures::CanvasDrawElementEnabled(
       GetFrame().GetDocument()->GetExecutionContext()));
-  if (canvas.IsInCanvasSubtree()) {
-    return;
-  }
   auto add_result = canvas_elements_needing_onpaint_.insert(&canvas, nullptr);
   if (add_result.is_new_entry) {
     add_result.stored_value->value =

@@ -875,7 +875,7 @@ class AvdConfig:
       return
 
     # Otherwise run uninstall to remove existing image, and proceed next steps
-    self.Uninstall()
+    self.UninstallRawSystemImage()
 
     # The process steps include:
     #  * Install the raw package (zip file) from CIPD and unzip to a temp dir
@@ -1047,15 +1047,18 @@ class AvdConfig:
         raise AvdException('Failed to uninstall CIPD packages: %s' % str(e),
                            command=ensure_cmd)
 
-    # Delete processed raw system image file
+    self.UninstallRawSystemImage()
+
+  def UninstallRawSystemImage(self):
+    """Delete processed raw system image file."""
     if self._config.HasField('raw_system_image_package'):
-      logging.info('Deleting processed raw system image.')
       target_path = os.path.join(
           COMMON_CIPD_ROOT,
           self.GetDestPath(self._config.raw_system_image_package),
           'system-images',
       )
       if os.path.exists(target_path):
+        logging.info('Deleting processed raw system image in %r', target_path)
         shutil.rmtree(target_path)
 
   def Install(self):
@@ -1401,6 +1404,8 @@ class _AvdInstance:
       }
       if 'DISPLAY' in os.environ:
         emulator_env['DISPLAY'] = os.environ.get('DISPLAY')
+      if 'XAUTHORITY' in os.environ:
+        emulator_env['XAUTHORITY'] = os.environ.get('XAUTHORITY')
       if window:
         if 'DISPLAY' not in emulator_env:
           raise AvdException('Emulator failed to start: DISPLAY not defined')
@@ -1596,7 +1601,8 @@ def _EnsureSystemSettings(device):
   # See https://crbug.com/443782461 for more details.
   if device.build_version_sdk >= version_codes.BAKLAVA:
     # On desktop, we do not want to force the soft keyboard.
-    if not device.is_desktop:
+    if (not device.is_desktop
+        and device.IsApplicationInstalled(device_utils.GBOARD_PKG)):
       logging.info('Update Gboard preferences.')
       with device.GboardPreferences() as gboard_prefs:
         # Disable the stylus.

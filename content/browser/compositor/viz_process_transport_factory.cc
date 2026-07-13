@@ -202,10 +202,24 @@ void VizProcessTransportFactory::CreateLayerTreeFrameSink(
   // CADisplayLink is not used in headless mode
   // (use_external_begin_frame_control()).
   if (!compositor->use_external_begin_frame_control() &&
-      !display_link_mac_mojo_ &&
+      !vsync_thread_task_posted_ && !display_link_mac_mojo_ &&
       ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
-    display_link_mac_mojo_ =
-        std::make_unique<ui::DisplayLinkMacMojo>(GetHostFrameSinkManager());
+    vsync_thread_task_posted_ = true;
+    // Delay the creation of DisplayLinkMacMojo (which starts the dedicated
+    // browser-side VSyncThread) to prevent desktop startup performance
+    // regressions.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<VizProcessTransportFactory> weak_this) {
+              if (weak_this && !weak_this->display_link_mac_mojo_) {
+                weak_this->display_link_mac_mojo_ =
+                    std::make_unique<ui::DisplayLinkMacMojo>(
+                        weak_this->GetHostFrameSinkManager());
+              }
+            },
+            weak_ptr_factory_.GetWeakPtr()),
+        base::Seconds(60));
   }
 #endif
 
@@ -420,6 +434,8 @@ void VizProcessTransportFactory::OnEstablishedGpuChannel(
       root_params->external_begin_frame_controller_client =
           factory->CreateExternalBeginFrameControllerClient();
     }
+    root_params->wait_for_all_frame_sinks =
+        compositor->wait_for_all_frame_sinks();
   }
 
   root_params->frame_sink_id = compositor->frame_sink_id();
@@ -487,15 +503,6 @@ void VizProcessTransportFactory::OnEstablishedGpuChannel(
     compositor->SetExternalBeginFrameController(
         std::move(external_begin_frame_controller));
   }
-
-#if BUILDFLAG(IS_WIN)
-  // Windows using the ANGLE D3D backend for compositing needs to disable swap
-  // on resize to avoid D3D scaling the framebuffer texture. This isn't a
-  // problem with software compositing or ANGLE D3D with direct composition.
-  const bool using_angle_d3d_compositing =
-      gpu_compositing && !using_direct_composition;
-  compositor->SetShouldDisableSwapUntilResize(using_angle_d3d_compositing);
-#endif
 }
 
 gpu::ContextResult

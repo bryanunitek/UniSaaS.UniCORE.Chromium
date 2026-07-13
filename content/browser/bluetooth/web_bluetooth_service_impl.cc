@@ -855,6 +855,10 @@ void WebBluetoothServiceImpl::GetDevices(GetDevicesCallback callback) {
 void WebBluetoothServiceImpl::ForgetDevice(
     const blink::WebBluetoothDeviceId& device_id,
     ForgetDeviceCallback callback) {
+  if (GetBluetoothAllowed() != blink::mojom::WebBluetoothResult::SUCCESS) {
+    std::move(callback).Run();
+    return;
+  }
   CHECK(back_forward_cache_feature_handle_.IsValid());
   if (!base::FeatureList::IsEnabled(
           features::kWebBluetoothNewPermissionsBackend)) {
@@ -2060,8 +2064,11 @@ void WebBluetoothServiceImpl::OnCreateGATTConnection(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   if (base::FeatureList::IsEnabled(
-          blink::features::kWebBluetoothCancelConnect)) {
-    pending_connection_device_ids_.erase(device_id);
+          blink::features::kWebBluetoothCancelConnect) &&
+      pending_connection_device_ids_.erase(device_id) == 0) {
+    std::move(callback).Run(
+        blink::mojom::WebBluetoothResult::CONNECT_CONN_FAILED);
+    return;
   }
   if (error_code.has_value()) {
     std::move(callback).Run(TranslateConnectErrorAndRecord(error_code.value()));

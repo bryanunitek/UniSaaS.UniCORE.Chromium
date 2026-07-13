@@ -261,9 +261,9 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
   source->AddBoolean(
       "energyEffectAnimationEnabled",
       base::FeatureList::IsEnabled(ntp_features::kEnergyEffectAnimation));
-  source->AddBoolean("realboxContextMenuAnimationCappingEnabled",
-                     base::FeatureList::IsEnabled(
-                         ntp_features::kRealboxContextMenuAnimationCapping));
+  source->AddBoolean(
+      "contextMenuAnimationLimitingEnabled",
+      base::FeatureList::IsEnabled(omnibox::kContextMenuAnimationLimiting));
   source->AddBoolean(
       "ntpNextFeaturesEnabled",
       ntp_realbox::IsNtpRealboxNextEnabled(profile) &&
@@ -272,8 +272,6 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
                      ntp_features::kNtpNextShowDismissalUIParam.Get());
   source->AddBoolean("ntpNextDisablementContextMenuEnabled",
                      ntp_features::kNtpNextDisablementContextMenuParam.Get());
-  source->AddBoolean("ntpNextDisablementEnabled",
-                     ntp_features::kNtpNextDisablementParam.Get());
   source->AddBoolean(
 
       "oneGoogleBarEnabled",
@@ -332,6 +330,15 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
   source->AddBoolean(
       "caretAnimationEnabled",
       base::FeatureList::IsEnabled(ntp_features::kNtpAnimatedCaret));
+  source->AddBoolean(
+      "voiceSearchCoherenceSearchboxEnabled",
+      base::FeatureList::IsEnabled(omnibox::kVoiceSearchCoherenceSearchbox));
+  source->AddBoolean(
+      "voiceSearchCoherenceAnySearchboxExperimentEnabled",
+      SearchboxHandler::GetVoiceSearchCoherenceAnySearchboxExperimentEnabled());
+  source->AddBoolean(
+      "voiceSearchCoherenceSearchboxWithLiveTranscriptionEnabled",
+      omnibox::kVoiceSearchCoherenceSearchboxWithLiveTranscription.Get());
 
   static constexpr webui::LocalizedString kStrings[] = {
       {"doneButton", IDS_DONE},
@@ -480,6 +487,7 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
       {"modulesDriveTitle", IDS_NTP_MODULES_DRIVE_NAME},
       {"modulesDriveTitleV2", IDS_NTP_MODULES_DRIVE_NAME},
       {"modulesDriveInfo", IDS_NTP_MODULES_DRIVE_INFO},
+      {"modulesDriveSeeMore", IDS_NTP_MODULES_DRIVE_SEE_MORE},
       {"modulesMicrosoftFilesInfo", IDS_NTP_MODULES_MICROSOFT_FILES_INFO},
       {"modulesMicrosoftFilesName", IDS_NTP_MODULES_MICROSOFT_FILES_NAME},
       {"modulesMicrosoftFilesDisableButtonText",
@@ -617,6 +625,9 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
       "hideDismissModules",
       base::FeatureList::IsEnabled(
           ntp_features::kNtpFeatureOptimizationDismissModulesRemoval));
+  source->AddBoolean(
+      "showDriveModuleSeeMoreLink",
+      base::FeatureList::IsEnabled(ntp_features::kNtpDriveModuleLink));
 
   source->AddString(
       "calendarModuleDismissHours",
@@ -662,6 +673,12 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
       "searchboxShowComposeEntrypoint",
       (aim_eligible || ntp_composebox::IsNtpComposeboxEnabled(profile)));
 
+  source->AddBoolean(
+      "ntpRealboxDynamicAiModeButton",
+      ntp_realbox::IsNtpRealboxNextEnabled(profile) &&
+          base::FeatureList::IsEnabled(
+              ntp_realbox::kNtpRealboxDynamicAiModeButton));
+
   if (ntp_realbox::IsNtpRealboxNextEnabled(profile)) {
     if (base::FeatureList::IsEnabled(
             ntp_realbox::kNtpRealboxCyclingPlaceholders)) {
@@ -690,14 +707,17 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
                                IDS_GOOGLE_SEARCH_BOX_EMPTY_HINT_MD);
   }
 
+  source->AddBoolean("keepMenuOpenOnTabSelectForRealbox",
+                     omnibox::kKeepMenuOpenOnTabSelectForRealbox.Get());
   source->AddBoolean("composeboxShowContextMenu",
                      ntp_composebox::kShowContextMenu.Get());
   source->AddBoolean("composeboxShowContextMenuTabPreviews",
                      ntp_composebox::kShowContextMenuTabPreviews.Get());
   source->AddBoolean("composeboxContextMenuEnableMultiTabSelection",
                      ntp_composebox::kContextMenuEnableMultiTabSelection.Get());
-  source->AddBoolean("contextManagementInComposeboxEnabled",
-  base::FeatureList::IsEnabled(omnibox::kContextManagementInComposebox));
+  source->AddBoolean(
+      "contextManagementInComposeboxEnabled",
+      base::FeatureList::IsEnabled(omnibox::kContextManagementInComposebox));
   source->AddBoolean(
       "tabFaviconChipsToCoinsEnabled",
       base::FeatureList::IsEnabled(omnibox::kContextManagementInComposebox) &&
@@ -710,7 +730,6 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
   source->AddBoolean("composeboxShowImageSuggest",
                      ntp_composebox::kShowComposeboxImageSuggestions.Get());
 
-  source->AddBoolean("composeboxShowContextMenuDescription", false);
 
   source->AddBoolean("composeboxSmartComposeEnabled",
                      ntp_composebox::kShowSmartCompose.Get());
@@ -738,6 +757,9 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
     }
     if (aim_eligibility_service->IsCreateImagesEligible()) {
       num_tools_eligible++;
+      if (base::FeatureList::IsEnabled(ntp_features::kNtpStarterChip)) {
+        num_tools_eligible++;
+      }
     }
     if (base::FeatureList::IsEnabled(ntp_features::kNtpNextCanvasChip) &&
         aim_eligibility_service->IsCanvasEligible()) {
@@ -749,7 +771,8 @@ content::WebUIDataSource* CreateAndAddNewTabPageUiHtmlSource(
                                num_tools_eligible >= 2;
   bool show_action_chips =
       action_chips_eligible &&
-      profile->GetPrefs()->GetBoolean(prefs::kNtpToolChipsVisible);
+      (!ntp_features::kNtpNextDisablementParam.Get() ||
+       profile->GetPrefs()->GetBoolean(prefs::kNtpToolChipsVisible));
   if (!show_action_chips) {
     action_chips::RecordActionChipsAnyShown(false);
   }
@@ -848,10 +871,10 @@ NewTabPageUI::NewTabPageUI(content::WebUI* web_ui)
       // for the unlikely case where the NewTabPageHandler is created before we
       // received the DidStartNavigation event.
       navigation_start_time_(base::Time::Now()),
+      navigation_start_time_ticks_(base::TimeTicks::Now()),
       module_id_details_(
           ntp::MakeModuleIdDetails(NewTabPageUI::IsManagedProfile(profile_),
-                                   profile_))
-{
+                                   profile_)) {
 
   instance_count_++;
   base::UmaHistogramCounts100("NewTabPage.Count", instance_count_);
@@ -1044,7 +1067,7 @@ void NewTabPageUI::ResetProfilePrefs(PrefService* prefs) {
   prefs->SetBoolean(ntp_prefs::kNtpDoodleMuralsEnabled, true);
   prefs->SetInt64(ntp_prefs::kNtpMostVisitedTileHoverCount, 0);
   prefs->SetInt64(ntp_prefs::kNtpMostVisitedTileNavigationCount, 0);
-  prefs->SetDict(prefs::kRealboxContextMenuAnimationState, base::DictValue());
+  prefs->SetDict(prefs::kContextMenuAnimationState, base::DictValue());
 }
 
 // static
@@ -1279,7 +1302,8 @@ void NewTabPageUI::CreatePageHandler(
       SyncServiceFactory::GetForProfile(profile_),
       segmentation_platform::SegmentationPlatformServiceFactory::GetForProfile(
           profile_),
-      web_contents(), navigation_start_time_, &module_id_details_);
+      web_contents(), navigation_start_time_, navigation_start_time_ticks_,
+      &module_id_details_);
 }
 
 void NewTabPageUI::ConnectToParentDocument(
@@ -1327,7 +1351,7 @@ void NewTabPageUI::CreatePageHandler(
   most_visited_page_handler_ = std::make_unique<MostVisitedHandler>(
       std::move(pending_page_handler), std::move(pending_page), profile_,
       web_contents(), chrome::ChromeUINewTabPageURLAsGURL(),
-      navigation_start_time_);
+      navigation_start_time_, navigation_start_time_ticks_);
   UpdateMostVisitedTileTypes();
   most_visited_page_handler_->SetShortcutsVisible(IsShortcutsVisible());
 }
@@ -1453,6 +1477,7 @@ void NewTabPageUI::DidStartNavigation(
   if (navigation_handle->IsInPrimaryMainFrame() &&
       navigation_handle->GetURL() == chrome::ChromeUINewTabPageURLAsGURL()) {
     navigation_start_time_ = base::Time::Now();
+    navigation_start_time_ticks_ = base::TimeTicks::Now();
 
     OnLoad();
 

@@ -15,6 +15,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
@@ -48,8 +49,10 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxProperties.BackgroundStyle;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxProperties.PopupButtonData;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxProperties.PopupButtonType;
+import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.omnibox.AutocompleteRequestType;
 import org.chromium.components.omnibox.IconResourceIdsProto.IconResourceIds;
@@ -118,13 +121,16 @@ public class FuseboxViewBinderUnitTest {
         mViewHolder = new FuseboxViewHolder(parent, mPopup);
 
         // Initialize workable defaults.
-        mModel.set(FuseboxProperties.ADD_BUTTON_VISIBLE, true);
+        mModel.set(FuseboxProperties.PLUS_BUTTON_VISIBLE, true);
         mModel.set(FuseboxProperties.FUSEBOX_STATE, FuseboxState.EXPANDED);
         mModel.set(FuseboxProperties.REQUEST_TYPE, AutocompleteRequestType.SEARCH);
         mModel.set(FuseboxProperties.REQUEST_TYPE_BUTTON_TEXT, "test label");
         mModel.set(FuseboxProperties.REQUEST_TYPE_BUTTON_VISIBLE, false);
         mModel.set(FuseboxProperties.COLOR_SCHEME, BrandedColorScheme.APP_DEFAULT);
         mModel.set(FuseboxProperties.FUSEBOX_LAYOUT_MODE, FuseboxLayoutMode.TOOLBAR);
+        mModel.set(
+                FuseboxProperties.PLUS_BUTTON_BACKGROUND_STYLE,
+                BackgroundStyle.INTERACT_ONLY_SMALL);
 
         PropertyModelChangeProcessor.create(mModel, mViewHolder, FuseboxViewBinder::bind);
     }
@@ -157,13 +163,13 @@ public class FuseboxViewBinderUnitTest {
     }
 
     @Test
-    public void addButtonVisible_setsVisibility() {
+    public void plusButtonVisible_setsVisibility() {
         mModel.set(FuseboxProperties.REQUEST_TYPE, AutocompleteRequestType.AI_MODE);
-        mModel.set(FuseboxProperties.ADD_BUTTON_VISIBLE, true);
-        assertEquals(View.VISIBLE, mViewHolder.addButton.getVisibility());
+        mModel.set(FuseboxProperties.PLUS_BUTTON_VISIBLE, true);
+        assertEquals(View.VISIBLE, mViewHolder.plusButton.getVisibility());
 
-        mModel.set(FuseboxProperties.ADD_BUTTON_VISIBLE, false);
-        assertEquals(View.GONE, mViewHolder.addButton.getVisibility());
+        mModel.set(FuseboxProperties.PLUS_BUTTON_VISIBLE, false);
+        assertEquals(View.GONE, mViewHolder.plusButton.getVisibility());
     }
 
     @Test
@@ -183,11 +189,11 @@ public class FuseboxViewBinderUnitTest {
     }
 
     @Test
-    public void addButtonClickListener_isCalled() {
+    public void plusButtonClickListener_isCalled() {
         Runnable runnable = mock(Runnable.class);
-        mModel.set(FuseboxProperties.BUTTON_ADD_CLICKED, runnable);
+        mModel.set(FuseboxProperties.PLUS_BUTTON_CLICKED, runnable);
 
-        mViewHolder.addButton.performClick();
+        mViewHolder.plusButton.performClick();
         verify(runnable).run();
     }
 
@@ -255,7 +261,7 @@ public class FuseboxViewBinderUnitTest {
     public void reanchorViewsForCompactFusebox_compactModeSearch() {
         configureFusebox(Variant.COMPACT, AutocompleteRequestType.SEARCH);
 
-        var lp = (ConstraintLayout.LayoutParams) mViewHolder.addButton.getLayoutParams();
+        var lp = (ConstraintLayout.LayoutParams) mViewHolder.plusButton.getLayoutParams();
         assertEquals(R.id.url_bar, lp.topToTop);
         assertEquals(ConstraintSet.UNSET, lp.topToBottom);
         assertEquals(ConstraintSet.UNSET, lp.bottomToBottom);
@@ -265,7 +271,7 @@ public class FuseboxViewBinderUnitTest {
     public void reanchorViewsForCompactFusebox_notCompactMode() {
         configureFusebox(Variant.DEFAULT, AutocompleteRequestType.SEARCH);
 
-        var lp = (ConstraintLayout.LayoutParams) mViewHolder.addButton.getLayoutParams();
+        var lp = (ConstraintLayout.LayoutParams) mViewHolder.plusButton.getLayoutParams();
         assertEquals(ConstraintSet.UNSET, lp.topToTop);
         assertEquals(R.id.url_bar, lp.topToBottom);
         assertEquals(ConstraintSet.PARENT_ID, lp.bottomToBottom);
@@ -276,7 +282,7 @@ public class FuseboxViewBinderUnitTest {
         configureFusebox(Variant.COMPACT, AutocompleteRequestType.SEARCH);
         mModel.set(FuseboxProperties.FUSEBOX_LAYOUT_MODE, FuseboxLayoutMode.SUGGESTIONS_POPOVER);
 
-        var lp = (ConstraintLayout.LayoutParams) mViewHolder.addButton.getLayoutParams();
+        var lp = (ConstraintLayout.LayoutParams) mViewHolder.plusButton.getLayoutParams();
         assertEquals(ConstraintSet.UNSET, lp.topToTop);
         assertEquals(R.id.omnibox_suggestions_dropdown, lp.topToBottom);
         assertEquals(ConstraintSet.PARENT_ID, lp.bottomToBottom);
@@ -711,6 +717,17 @@ public class FuseboxViewBinderUnitTest {
 
         mViewHolder.activationChip.performClick();
         verify(mRunnable).run();
+
+        Context context = mViewHolder.activationChip.getContext();
+        mModel.set(FuseboxProperties.COLOR_SCHEME, BrandedColorScheme.APP_DEFAULT);
+        assertEquals(
+                OmniboxResourceProvider.getColorPrimary(context, BrandedColorScheme.APP_DEFAULT),
+                mViewHolder.activationChip.getForegroundTintList().getDefaultColor());
+
+        mModel.set(FuseboxProperties.COLOR_SCHEME, BrandedColorScheme.INCOGNITO);
+        assertEquals(
+                OmniboxResourceProvider.getColorPrimary(context, BrandedColorScheme.INCOGNITO),
+                mViewHolder.activationChip.getForegroundTintList().getDefaultColor());
     }
 
     private static class PopupButtonDataBuilder {

@@ -248,7 +248,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </variants>
 
 <histogram name="ChromeOS.AnomalousProcCount.AttemptedMemfdExec"
-    units="processes" expires_after="2026-10-11">
+    units="processes" expires_after="2026-12-16">
   <owner>enlightened@chromium.org</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>
@@ -1194,7 +1194,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.CWP.CollectPerf"
-    enum="ChromeOSProfileCollectionStatus" expires_after="2026-06-22">
+    enum="ChromeOSProfileCollectionStatus" expires_after="2027-06-22">
   <owner>gmx@chromium.org</owner>
   <owner>aalexand@google.com</owner>
   <owner>cwp-team@google.com</owner>
@@ -1229,7 +1229,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.CWP.ParseCPUFrequencies"
-    enum="ChromeOSParseCPUFrequencyStatus" expires_after="2026-10-18">
+    enum="ChromeOSParseCPUFrequencyStatus" expires_after="2026-12-20">
   <owner>gmx@chromium.org</owner>
   <owner>cwp-team@google.com</owner>
   <summary>
@@ -1240,7 +1240,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.CWP.ParsePSICPU" enum="ChromeOSParsePSICPUStatus"
-    expires_after="2026-08-10">
+    expires_after="2027-08-10">
   <owner>shantuo@google.com</owner>
   <owner>cwp-team@google.com</owner>
   <summary>
@@ -1682,7 +1682,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Gaia.Done.ElapsedTime" units="ms"
-    expires_after="2026-06-28">
+    expires_after="2027-06-21">
   <owner>bchikhaoui@google.com</owner>
   <owner>cros-oac@google.com</owner>
   <summary>
@@ -1871,6 +1871,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
     <variant name="GeneralWithLocaleForTest"/>
     <variant name="Performance"/>
     <variant name="Peripherals"/>
+    <variant name="SlowAndLaggyDeepDive"/>
     <variant name="Stability"/>
   </token>
 </histogram>
@@ -2363,7 +2364,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Inputs.Peripherals.MicrophoneMuteToggleDevices"
-    enum="MicrophoneMuteToggleDevices" expires_after="2025-12-15">
+    enum="MicrophoneMuteToggleDevices" expires_after="2027-06-18">
   <owner>jingyliang@google.com</owner>
   <owner>chromeos-tango@google.com</owner>
   <summary>
@@ -2371,6 +2372,9 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
     state. It classifies whether the peripheral has a keyboard (likely
     indicating not a telephony device) and what scan code it uses to trigger the
     event. It also groups devices based on popular vendors.
+
+    Warning: this histogram was expired from 2025-12-15 to 2026-06-18; data may
+    be missing.
   </summary>
 </histogram>
 
@@ -2514,7 +2518,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.K12UserAgeClassification.LogSegment"
-    enum="K12UserAgeClassificationMatrix" expires_after="2026-10-11">
+    enum="K12UserAgeClassificationMatrix" expires_after="2026-12-16">
   <owner>zifanzhang@google.com</owner>
   <owner>cros-client-wa@google.com</owner>
   <summary>Tracks the K12 user age classification.</summary>
@@ -2735,7 +2739,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.LockScreenReauth.LockScreenReauthReason"
-    enum="LoginReauthReasons" expires_after="2026-07-26">
+    enum="LoginReauthReasons" expires_after="2027-07-26">
   <owner>andreydav@google.com</owner>
   <owner>cros-3pidp@google.com</owner>
   <summary>
@@ -2820,7 +2824,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Mahi.ContextMenuView.Activated"
-    enum="MahiContextMenuButtonType" expires_after="2026-11-01">
+    enum="MahiContextMenuButtonType" expires_after="2027-01-03">
   <owner>newcomer@chromium.org</owner>
   <owner>cros-status-area-eng@google.com</owner>
   <summary>
@@ -2840,7 +2844,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Mahi.ContextMenuView.ButtonClicked"
-    enum="MahiMenuButton" expires_after="2026-11-01">
+    enum="MahiMenuButton" expires_after="2027-01-03">
   <owner>newcomer@chromium.org</owner>
   <owner>cros-status-area-eng@google.com</owner>
   <summary>
@@ -2918,7 +2922,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Ownership.OwnerKeyUmaEvent" enum="OwnerKeyUmaEvent"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>miersh@google.com</owner>
   <owner>chromeos-commercial-networking@google.com</owner>
   <summary>
@@ -3146,7 +3150,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.SAML.Provider" enum="ChromeOSSamlProvider"
-    expires_after="2026-10-04">
+    expires_after="2026-12-06">
   <owner>mslus@chromium.org</owner>
   <owner>cros-3pidp@google.com</owner>
   <summary>Records SAML provider when SAML login flow is used.</summary>
@@ -3179,7 +3183,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Sandboxing.LandlockEnabled" enum="Boolean"
-    expires_after="2026-07-05">
+    expires_after="2027-07-05">
   <owner>enlightened@chromium.org</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>
@@ -3193,7 +3197,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Sandboxing.NoNewPrivsProcPercentage" units="%"
-    expires_after="2026-07-05">
+    expires_after="2027-07-05">
   <owner>enlightened@chromium.org</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>
@@ -3207,7 +3211,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Sandboxing.NonInitNsProcPercentage" units="%"
-    expires_after="2026-07-05">
+    expires_after="2027-07-05">
   <owner>enlightened@chromium.org</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>
@@ -3221,7 +3225,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Sandboxing.NonRootProcPercentage" units="%"
-    expires_after="2026-07-05">
+    expires_after="2027-07-05">
   <owner>enlightened@chromium.org</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>
@@ -3235,7 +3239,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Sandboxing.SecCompCoverage" units="%"
-    expires_after="2026-07-05">
+    expires_after="2027-07-05">
   <owner>enlightened@chromium.org</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>
@@ -3249,7 +3253,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.Sandboxing.UnprivProcPercentage" units="%"
-    expires_after="2026-07-05">
+    expires_after="2027-07-05">
   <owner>enlightened@chromium.org</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>
@@ -4833,7 +4837,7 @@ and mapped to the variant by `StatisticNameToMachineStatisticVariant()` -->
 </histogram>
 
 <histogram name="ChromeOS.WXMountCount" units="count"
-    expires_after="2026-10-11">
+    expires_after="2026-12-16">
   <owner>jorgelo@chromium.org</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>

@@ -63,6 +63,12 @@ public class ActorForegroundServiceControllerImpl implements ActorForegroundServ
             };
 
     @Override
+    public void startService() {
+        Context context = ContextUtils.getApplicationContext();
+        ActorForegroundServiceImpl.startActorForegroundService(context);
+    }
+
+    @Override
     public void startAndBindService(Runnable onConnected) {
         mOnConnectedRunnable = onConnected;
         Context context = ContextUtils.getApplicationContext();
@@ -120,6 +126,7 @@ public class ActorForegroundServiceControllerImpl implements ActorForegroundServ
                         tabId, IntentHandler.BringToFrontSource.NOTIFICATION);
         intent.putExtra(ActorNotificationFactory.EXTRA_SHOW_ACTOR_CONTROL, true);
         intent.putExtra(NotificationConstants.EXTRA_ACTOR_TASK_ID, task.getId());
+        intent.putExtra(NotificationConstants.EXTRA_ACTOR_TASK_STATE, task.getState());
         return intent;
     }
 

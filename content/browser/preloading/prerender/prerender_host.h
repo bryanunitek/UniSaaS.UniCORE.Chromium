@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -41,6 +42,7 @@ enum class WebClientHintsType;
 
 namespace content {
 
+class BackForwardCacheImpl;
 class DevToolsPrerenderAttempt;
 class FrameTreeNode;
 class NavigationHandle;
@@ -312,6 +314,9 @@ class CONTENT_EXPORT PrerenderHost {
   // Returns true if the given `url` is the same site as the initial_url.
   bool IsUrlSameSite(const GURL& url) const;
 
+  // Returns true if the prerender is allowed to reuse the initiator's process.
+  bool ShouldAllowProcessReuse() const;
+
   bool IsReusable() const { return attributes_.allow_reuse; }
 
   // Called when the prerender pages asks the client to change the Accept Client
@@ -489,6 +494,7 @@ class CONTENT_EXPORT PrerenderHost {
     PrerenderHostId GetPrerenderHostId() override;
 
     // NavigationControllerDelegate
+    BackForwardCacheImpl& GetBackForwardCache() override;
     void NotifyNavigationStateChangedFromController(
         InvalidateTypes changed_flags) override {}
     void NotifyBeforeFormRepostWarningShow() override {}
@@ -650,6 +656,8 @@ class CONTENT_EXPORT PrerenderHost {
       prerender_initial_preload_serving_metrics_;
   // True if cross-origin subframe navigations are allowed.
   bool allow_cross_origin_subframe_navigation_ = false;
+
+  base::ScopedClosureRunner process_reuse_closure_runner_;
 
   base::WeakPtrFactory<PrerenderHost> weak_factory_{this};
 };

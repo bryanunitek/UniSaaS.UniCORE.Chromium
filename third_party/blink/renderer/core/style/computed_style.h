@@ -54,6 +54,7 @@
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/style/computed_style_initial_values.h"
 #include "third_party/blink/renderer/core/style/cursor_list.h"
+#include "third_party/blink/renderer/core/style/default_anchor_data.h"
 #include "third_party/blink/renderer/core/style/display_style.h"
 #include "third_party/blink/renderer/core/style/filter_operations.h"
 #include "third_party/blink/renderer/core/style/font_size_style.h"
@@ -523,7 +524,9 @@ class ComputedStyle final : public ComputedStyleBase {
   }
 
   bool MayUseImplicitAnchor() const {
-    return PositionAnchor().IsAuto() && HasOutOfFlowPosition() &&
+    return GetDefaultAnchorData().GetType() ==
+               StylePositionAnchor::Type::kAuto &&
+           HasOutOfFlowPosition() &&
            (HasAnchorFunctions() ||
             AlignSelf().GetPosition() == ItemPosition::kAnchorCenter ||
             JustifySelf().GetPosition() == ItemPosition::kAnchorCenter);
@@ -1591,6 +1594,10 @@ class ComputedStyle final : public ComputedStyleBase {
     return GetPosition(Display(), PositionInternal());
   }
 
+  DefaultAnchorData GetDefaultAnchorData() const {
+    return DefaultAnchorData(PositionAnchor(), GetPositionArea());
+  }
+
   // Clear utility functions.
   bool HasClear() const { return Clear() != EClear::kNone; }
   EClear UnresolvedClear() const { return Clear(); }
@@ -1789,8 +1796,8 @@ class ComputedStyle final : public ComputedStyleBase {
   bool IsDisplayMath() const { return IsDisplayMath(Display()); }
 
   bool BlockifiesChildren() const {
-    return IsDisplayFlex() || IsDisplayWebkitBox() || IsDisplayGrid() ||
-           IsDisplayGridLanes() || IsDisplayMath() || IsDisplayLayoutCustom() ||
+    return IsDisplayFlex() || IsDisplayGrid() || IsDisplayGridLanes() ||
+           IsDisplayMath() || IsDisplayLayoutCustom() ||
            (Display() == EDisplay::kContents && IsInBlockifyingDisplay()) ||
            ForcesBlockifiesChildren();
   }
@@ -2074,12 +2081,6 @@ class ComputedStyle final : public ComputedStyleBase {
            IsRunningRotateAnimationOnCompositor() ||
            IsRunningTranslateAnimationOnCompositor();
   }
-  bool RequiresPropertyNodeForAnimation() const {
-    return IsRunningOpacityAnimationOnCompositor() ||
-           IsRunningTransformRelatedAnimationOnCompositor() ||
-           IsRunningFilterAnimationOnCompositor() ||
-           IsRunningBackdropFilterAnimationOnCompositor();
-  }
 
   // Opacity utility functions.
   bool HasOpacity() const { return Opacity() < 1.0f; }
@@ -2291,11 +2292,6 @@ class ComputedStyle final : public ComputedStyleBase {
   bool HasVisualOverflowingEffect() const {
     return BoxShadow() || HasBorderImageOutsets() || HasOutline() ||
            HasMaskBoxImageOutsets() || HasGapRule() || HasBorderShape();
-  }
-
-  bool IsStackedWithoutContainment() const {
-    return IsStackingContextWithoutContainment() ||
-           GetPosition() != EPosition::kStatic;
   }
 
   // Pseudo-element styles.
@@ -2517,9 +2513,13 @@ class ComputedStyle final : public ComputedStyleBase {
       return IsDisplayListItem();
     }
     // ::backdrop is generated for top layer elements (where Overlay is not
-    // none) or for overscroll targets (which have
+    // none).
+    if (pseudo == kPseudoIdBackdrop && Overlay() == EOverlay::kNone) {
+      return false;
+    }
+    // ::overscroll-backdrop is generated for overscroll targets (which have
     // -internal-overscroll-position: auto).
-    if (pseudo == kPseudoIdBackdrop && Overlay() == EOverlay::kNone &&
+    if (pseudo == kPseudoIdOverscrollBackdrop &&
         !IsInternalOverscrollPositionAuto()) {
       return false;
     }
@@ -2807,7 +2807,8 @@ class ComputedStyle final : public ComputedStyleBase {
       const LayoutBox* box,
       const gfx::PointF& starting_point,
       const gfx::SizeF& reference_box_size) const;
-  PointAndTangent CalculatePointAndTangentOnPath(const Path& path) const;
+  PointAndTangent CalculatePointAndTangentOnPath(const Path& path,
+                                                 float zoom) const;
 
   bool DiffNeedsReshape(const ComputedStyle& other, uint64_t field_diff) const;
   bool DiffNeedsFullLayoutAndPaintInvalidation(const ComputedStyle& other,
@@ -3466,6 +3467,10 @@ class ComputedStyleBuilder final : public ComputedStyleBuilderBase {
   }
   bool HasOutOfFlowPosition() const {
     return ComputedStyle::HasOutOfFlowPosition(GetPosition());
+  }
+
+  DefaultAnchorData GetDefaultAnchorData() const {
+    return DefaultAnchorData(PositionAnchor(), GetPositionArea());
   }
 
   // shape-image-threshold

@@ -155,10 +155,6 @@ GetAlternativeNameFieldValueCharacterSet(
 // Records the character set of the submitted value for each alternative name
 // field in the form.
 void LogSubmittedAlternativeNameCharacterSetValues(const FormStructure& form) {
-  if (!base::FeatureList::IsEnabled(
-          features::kAutofillSupportPhoneticNameForJP)) {
-    return;
-  }
   for (const std::unique_ptr<AutofillField>& field : form) {
     if (IsAlternativeNameType(field->Type().GetAddressType()) &&
         !field->value().empty()) {
@@ -199,7 +195,6 @@ void LogPredictionMetrics(
                                        form, *field, metric_type, now);
     LogEmailFieldPredictionMetrics(*field);
     LogFieldPredictionOverlapMetrics(*field);
-    LogPhoneNumberDetectionExperimentMetrics(*field);
   }
 }
 

@@ -18,6 +18,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/no_destructor.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/trace_event.h"
@@ -53,7 +54,8 @@
 #include "extensions/browser/safe_browsing_delegate.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/web_request/web_request_activity_log_constants.h"
-#include "extensions/common/error_utils.h"
+#include "extensions/common/api/web_request/web_request_filter.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/event_dispatcher.mojom.h"
 
@@ -100,12 +102,6 @@ constexpr size_t kWebRequestEventPrefixLen =
     std::char_traits<char>::length(kWebRequestEventPrefix);
 constexpr size_t kWebViewEventPrefixLen =
     std::char_traits<char>::length(kWebViewEventPrefix);
-
-constexpr char kRequestFilterUrlsKey[] = "urls";
-constexpr char kRequestFilterTypesKey[] = "types";
-constexpr char kRequestFilterTabIdKey[] = "tabId";
-constexpr char kRequestFilterWindowIdKey[] = "windowId";
-constexpr char kRequestFilterOptionsKey[] = "_options";
 
 // List of all the webRequest events. Note: this doesn't include
 // "onActionIgnored" which is not related to a request's lifecycle and is
@@ -575,8 +571,12 @@ struct WebRequestEventRouter::BlockedRequest {
   // The event that we're currently blocked on.
   EventTypes event = EventTypes::kInvalidEvent;
 
-  // The number of event handlers that we are awaiting a response from.
-  int num_handlers_blocking = 0;
+  // The number of blocking sources that we are awaiting a response from.
+  // A source is one of:
+  //   - a blocking listener (resolved by `OnEventHandled()`),
+  //   - a not-yet-ready declarative rules registry (see
+  //     `ProcessDeclarativeRules()`).
+  int num_blocking_sources = 0;
 
   // The callback to call when we get a response from all event handlers.
   net::CompletionOnceCallback callback;
@@ -771,65 +771,6 @@ base::DictValue SummarizeResponseDelta(
 
 }  // namespace
 
-bool WebRequestEventRouter::RequestFilter::InitFromValue(
-    const base::DictValue& value,
-    std::string* error) {
-  if (!value.Find(kRequestFilterUrlsKey)) {
-    return false;
-  }
-
-  for (const auto dict_item : value) {
-    if (dict_item.first == kRequestFilterUrlsKey &&
-        dict_item.second.is_list()) {
-      for (const auto& item : dict_item.second.GetList()) {
-        std::string url;
-        URLPattern pattern(kWebRequestFilterValidSchemes);
-        if (item.is_string()) {
-          url = item.GetString();
-        }
-
-        // Parse will fail on an empty url, so we don't need to distinguish
-        // between `item` not being a string and `item` being an empty string.
-        if (url.empty() ||
-            pattern.Parse(url) != URLPattern::ParseResult::kSuccess) {
-          *error = ErrorUtils::FormatErrorMessage(
-              keys::kInvalidRequestFilterUrl, url);
-          return false;
-        }
-        urls.AddPattern(pattern);
-      }
-    } else if (dict_item.first == kRequestFilterTypesKey &&
-               dict_item.second.is_list()) {
-      for (const auto& type : dict_item.second.GetList()) {
-        std::string type_str;
-        if (type.is_string()) {
-          type_str = type.GetString();
-        }
-        types.push_back(WebRequestResourceType::OTHER);
-        if (type_str.empty() ||
-            !ParseWebRequestResourceType(type_str, &types.back())) {
-          return false;
-        }
-      }
-    } else if (dict_item.first == kRequestFilterTabIdKey &&
-               dict_item.second.is_int()) {
-      tab_id = dict_item.second.GetInt();
-    } else if (dict_item.first == kRequestFilterWindowIdKey &&
-               dict_item.second.is_int()) {
-      window_id = dict_item.second.GetInt();
-    } else if (dict_item.first == kRequestFilterOptionsKey) {
-      // The renderer-side bindings inject an "_options" key into the
-      // filter to pass along some extra information (like `extraInfo` and
-      // `webViewInstanceId`). We ignore it here, as it's not a part of the
-      // RequestFilter.
-      continue;
-    } else {
-      return false;
-    }
-  }
-  return true;
-}
-
 base::DictValue WebRequestEventRouter::RequestFilter::ToValue() const {
   base::DictValue dict;
 
@@ -861,16 +802,6 @@ WebRequestEventRouter::EventResponse::EventResponse(
       cancel(false) {}
 
 WebRequestEventRouter::EventResponse::~EventResponse() = default;
-
-WebRequestEventRouter::RequestFilter::RequestFilter()
-    : tab_id(-1), window_id(-1) {}
-WebRequestEventRouter::RequestFilter::~RequestFilter() = default;
-
-WebRequestEventRouter::RequestFilter::RequestFilter(RequestFilter&& other) =
-    default;
-WebRequestEventRouter::RequestFilter&
-WebRequestEventRouter::RequestFilter::operator=(RequestFilter&& other) =
-    default;
 
 WebRequestEventRouter::SignaledRequestIDTracker::SignaledRequestIDTracker() =
     default;
@@ -1107,8 +1038,8 @@ int WebRequestEventRouter::OnBeforeRequest(
   blocked_request.callback = std::move(callback);
   blocked_request.new_url = new_url;
 
-  if (blocked_request.num_handlers_blocking == 0) {
-    // If there are no blocking handlers, only the declarative rules tried
+  if (blocked_request.num_blocking_sources == 0) {
+    // If there are no blocking sources, only the declarative rules tried
     // to modify the request and we can respond synchronously.
     return ExecuteDeltas(browser_context, request, /*call_callback=*/false);
   }
@@ -1164,8 +1095,8 @@ int WebRequestEventRouter::OnBeforeSendHeaders(
   blocked_request.before_send_headers_callback = std::move(callback);
   blocked_request.request_headers = headers;
 
-  if (blocked_request.num_handlers_blocking == 0) {
-    // If there are no blocking handlers, only the declarative rules tried
+  if (blocked_request.num_blocking_sources == 0) {
+    // If there are no blocking sources, only the declarative rules tried
     // to modify the request and we can respond synchronously.
     return ExecuteDeltas(browser_context, request, false /* call_callback*/);
   }
@@ -1371,8 +1302,8 @@ int WebRequestEventRouter::OnHeadersReceived(
   blocked_request.original_response_headers = original_response_headers;
   blocked_request.new_url = preserve_fragment_on_redirect_url;
 
-  if (blocked_request.num_handlers_blocking == 0) {
-    // If there are no blocking handlers, only the declarative rules tried
+  if (blocked_request.num_blocking_sources == 0) {
+    // If there are no blocking sources, only the declarative rules tried
     // to modify the request and we can respond synchronously.
     return ExecuteDeltas(browser_context, request, false /* call_callback*/);
   }
@@ -1607,7 +1538,7 @@ bool WebRequestEventRouter::DispatchEvent(
     std::unique_ptr<WebRequestEventDetails> event_details) {
   // TODO(mpcomplete): Consider consolidating common (extension_id,json_args)
   // pairs into a single message sent to a list of sub_event_names.
-  int num_handlers_blocking = 0;
+  int num_blocking_sources = 0;
 
   auto listeners_to_dispatch = std::make_unique<ListenerIDs>();
   listeners_to_dispatch->reserve(listeners.size());
@@ -1615,19 +1546,19 @@ bool WebRequestEventRouter::DispatchEvent(
     listeners_to_dispatch->push_back(listener->id);
     if (listener->IsBlocking()) {
       listener->blocked_requests.insert(request->id);
-      ++num_handlers_blocking;
+      ++num_blocking_sources;
     }
   }
 
   DispatchEventToListeners(browser_context, std::move(listeners_to_dispatch),
                            request->id, std::move(event_details));
 
-  if (num_handlers_blocking > 0) {
+  if (num_blocking_sources > 0) {
     BlockedRequest& blocked_request =
         GetOrAddBlockedRequest(browser_context, request->id);
     blocked_request.request = request;
     blocked_request.is_incognito |= browser_context->IsOffTheRecord();
-    blocked_request.num_handlers_blocking += num_handlers_blocking;
+    blocked_request.num_blocking_sources += num_blocking_sources;
     blocked_request.blocking_time = base::Time::Now();
     return true;
   }
@@ -1801,6 +1732,36 @@ void WebRequestEventRouter::OnEventHandled(
     DecrementBlockCount(browser_context, extension_id, event_name, request_id,
                         std::move(response), listener->extra_info_spec);
   }
+}
+
+void WebRequestEventRouter::OnEventHandledForTarget(
+    content::BrowserContext* browser_context,
+    const ExtensionId& extension_id,
+    const std::string& event_name,
+    uint64_t request_id,
+    int render_process_id,
+    int web_view_instance_id,
+    int worker_thread_id,
+    int64_t service_worker_version_id,
+    int extra_info_spec,
+    std::unique_ptr<EventResponse> response) {
+  // TODO(crbug.com/494684626): per-context dispatch is not wired up yet;
+  // drop the report. The browser-side dispatch target tracking will land in
+  // a follow-up.
+}
+
+void WebRequestEventRouter::OnEventHandlingDone(
+    content::BrowserContext* browser_context,
+    const ExtensionId& extension_id,
+    const std::string& event_name,
+    uint64_t request_id,
+    int render_process_id,
+    int web_view_instance_id,
+    int worker_thread_id,
+    int64_t service_worker_version_id) {
+  // TODO(crbug.com/494684626): per-context dispatch is not wired up yet;
+  // drop the signal. The browser-side dispatch target tracking will land in
+  // a follow-up.
 }
 
 bool WebRequestEventRouter::AddEventListener(
@@ -1983,15 +1944,6 @@ WebRequestEventRouter::RemoveMatchingListeners(
         (!extra_info_spec || listener->extra_info_spec == *extra_info_spec) &&
         (!filter_value || listener->filter.ToValue() == *filter_value);
     if (!listener_matches) {
-      ++iter;
-      continue;
-    }
-
-    if (id.web_view_instance_id != 0) {
-      // WebView listeners are managed by RemoveWebViewEventListeners, not here.
-      // There is not enough information here to know if the matching listener
-      // is for a WebView that is being destroyed, or an existing WebView that
-      // still needs its listener to be active.
       ++iter;
       continue;
     }
@@ -2520,6 +2472,8 @@ bool WebRequestEventRouter::ListenerMatchesRequest(
     return false;
   }
 
+  // NOTE: keep the following filter matching logic in sync with the renderer
+  // side in `WebRequestNatives::GetMatchingListeners()`.
   if (!listener.filter.urls.is_empty() &&
       !listener.filter.urls.MatchesURL(request.url)) {
     return false;
@@ -2527,10 +2481,12 @@ bool WebRequestEventRouter::ListenerMatchesRequest(
 
   // Check if the tab id and window id match, if they were set in the
   // listener params.
-  if ((listener.filter.tab_id != -1 &&
-       request.frame_data.tab_id != listener.filter.tab_id) ||
-      (listener.filter.window_id != -1 &&
-       request.frame_data.window_id != listener.filter.window_id)) {
+  if (listener.filter.tab_id != -1 &&
+      request.frame_data.tab_id != listener.filter.tab_id) {
+    return false;
+  }
+  if (listener.filter.window_id != -1 &&
+      request.frame_data.window_id != listener.filter.window_id) {
     return false;
   }
 
@@ -2611,8 +2567,8 @@ void WebRequestEventRouter::DecrementBlockCount(
   // Ensure that the response is for the event we are blocked on.
   DCHECK_EQ(blocked_request->event, GetEventTypeFromEventName(event_name));
 
-  int num_handlers_blocking = --blocked_request->num_handlers_blocking;
-  CHECK_GE(num_handlers_blocking, 0);
+  int num_blocking_sources = --blocked_request->num_blocking_sources;
+  CHECK_GE(num_blocking_sources, 0);
 
   if (response) {
     helpers::EventResponseDelta delta = CalculateDelta(
@@ -2626,7 +2582,7 @@ void WebRequestEventRouter::DecrementBlockCount(
     blocked_request->response_deltas.push_back(std::move(delta));
   }
 
-  if (num_handlers_blocking == 0) {
+  if (num_blocking_sources == 0) {
     ExecuteDeltas(browser_context, blocked_request->request, true);
     // Note: `blocked_request` can be deleted here, depending on the outcome
     // of ExecuteDeltas(). Use the cached `request_event` and `request_id`
@@ -2660,7 +2616,7 @@ int WebRequestEventRouter::ExecuteDeltas(
     bool call_callback) {
   BlockedRequest& blocked_request =
       GetOrAddBlockedRequest(browser_context, request->id);
-  CHECK_EQ(0, blocked_request.num_handlers_blocking);
+  CHECK_EQ(0, blocked_request.num_blocking_sources);
   helpers::EventResponseDeltas& deltas = blocked_request.response_deltas;
   base::TimeDelta block_time =
       base::Time::Now() - blocked_request.blocking_time;
@@ -2860,7 +2816,7 @@ bool WebRequestEventRouter::ProcessDeclarativeRules(
                                   event_name, request->id, request_stage));
     BlockedRequest& blocked_request =
         GetOrAddBlockedRequest(browser_context, request->id);
-    blocked_request.num_handlers_blocking++;
+    blocked_request.num_blocking_sources++;
     blocked_request.request = request;
     blocked_request.is_incognito |= browser_context->IsOffTheRecord();
     blocked_request.blocking_time = base::Time::Now();

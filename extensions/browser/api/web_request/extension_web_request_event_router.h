@@ -26,6 +26,8 @@
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/web_request/web_request_filter.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/url_pattern_set.h"
 #include "net/base/completion_once_callback.h"
@@ -46,16 +48,9 @@ class HttpResponseHeaders;
 
 namespace extensions {
 
-enum class WebRequestResourceType : uint8_t;
 class WebRequestRulesRegistry;
 class WebRequestEventDetails;
 struct WebRequestInfo;
-
-inline constexpr int kWebRequestFilterValidSchemes =
-    URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS |
-    URLPattern::SCHEME_FTP | URLPattern::SCHEME_FILE |
-    URLPattern::SCHEME_EXTENSION | URLPattern::SCHEME_WS |
-    URLPattern::SCHEME_WSS | URLPattern::SCHEME_UUID_IN_PACKAGE;
 
 class WebRequestEventRouter : public KeyedService {
  public:
@@ -90,28 +85,9 @@ class WebRequestEventRouter : public KeyedService {
 
   // Internal representation of the webRequest.RequestFilter type, used to
   // filter what network events an extension cares about.
-  struct RequestFilter {
-    RequestFilter();
-    ~RequestFilter();
-
-    RequestFilter(const RequestFilter&) = delete;
-    RequestFilter& operator=(const RequestFilter&) = delete;
-
-    RequestFilter(RequestFilter&& other);
-    RequestFilter& operator=(RequestFilter&& other);
-
-    // Returns false if there was an error initializing. If it is a user error,
-    // an error message is provided, otherwise the error is internal (and
-    // unexpected).
-    bool InitFromValue(const base::DictValue& value, std::string* error);
-
+  struct RequestFilter : public WebRequestParsedFilter {
     // Serializes the filter to a dictionary value suitable for persistence.
     base::DictValue ToValue() const;
-
-    extensions::URLPatternSet urls;
-    std::vector<WebRequestResourceType> types;
-    int tab_id;
-    int window_id;
   };
 
   // Contains an extension's response to a blocking event.
@@ -278,6 +254,35 @@ class WebRequestEventRouter : public KeyedService {
                       int worker_thread_id,
                       int64_t service_worker_version_id,
                       std::unique_ptr<EventResponse> response);
+
+  // Called when a blocking listener for a given target context and
+  // parent event name (not a sub-event name) responds to a dispatched event.
+  // It does NOT resolve the target: resolution is signaled separately by
+  // `OnEventHandlingDone()`, because the context may have multiple listeners
+  // for the same parent event name. `extra_info_spec` holds the options the
+  // responding listener was registered with.
+  void OnEventHandledForTarget(content::BrowserContext* browser_context,
+                               const ExtensionId& extension_id,
+                               const std::string& event_name,
+                               uint64_t request_id,
+                               int render_process_id,
+                               int web_view_instance_id,
+                               int worker_thread_id,
+                               int64_t service_worker_version_id,
+                               int extra_info_spec,
+                               std::unique_ptr<EventResponse> response);
+
+  // Called when a renderer context has finished handling a blocking event
+  // for `request_id`, after all of its matching listeners have settled.
+  // Resolves the pending dispatch target identified by the context.
+  void OnEventHandlingDone(content::BrowserContext* browser_context,
+                           const ExtensionId& extension_id,
+                           const std::string& event_name,
+                           uint64_t request_id,
+                           int render_process_id,
+                           int web_view_instance_id,
+                           int worker_thread_id,
+                           int64_t service_worker_version_id);
 
   // Adds a listener to the given event. `event_name` specifies the event being
   // listened to. `sub_event_name` is an internal event uniquely generated in

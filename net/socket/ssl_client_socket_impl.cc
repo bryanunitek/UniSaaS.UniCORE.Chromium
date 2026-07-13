@@ -36,6 +36,7 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "crypto/openssl_util.h"
+#include "net/base/ech_mode.h"
 #include "net/base/features.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
@@ -58,6 +59,7 @@
 #include "net/ssl/openssl_ssl_util.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_cipher_suite_names.h"
+#include "net/ssl/ssl_config_service.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/ssl/ssl_handshake_details.h"
 #include "net/ssl/ssl_info.h"
@@ -205,6 +207,9 @@ class SSLClientSocketImpl::SSLContext {
     SSL_CTX_set_timeout(ssl_ctx_.get(), 1 * 60 * 60 /* one hour */);
 
     SSL_CTX_set_grease_enabled(ssl_ctx_.get(), 1);
+    if (base::FeatureList::IsEnabled(features::kTlsGreaseSigalgs)) {
+      SSL_CTX_set_grease_sigalgs_enabled(ssl_ctx_.get(), 1);
+    }
 
     // Deduplicate all certificates minted from the SSL_CTX in memory.
     SSL_CTX_set0_buffer_pool(ssl_ctx_.get(), x509_util::GetBufferPool());
@@ -859,21 +864,8 @@ int SSLClientSocketImpl::Init() {
         host_and_port_, &client_cert_, &client_private_key_);
   }
 
-  if (context_->config().ech_enabled) {
-    // TODO(crbug.com/41482204): Enable this unconditionally.
-    SSL_set_enable_ech_grease(ssl_.get(), 1);
-  }
-  if (!ssl_config_.ech_config_list.empty()) {
-    DCHECK(context_->config().ech_enabled);
-    net_log_.AddEvent(NetLogEventType::SSL_ECH_CONFIG_LIST, [&] {
-      return base::DictValue().Set(
-          "bytes", NetLogBinaryValue(ssl_config_.ech_config_list));
-    });
-    if (!SSL_set1_ech_config_list(ssl_.get(),
-                                  ssl_config_.ech_config_list.data(),
-                                  ssl_config_.ech_config_list.size())) {
-      return ERR_INVALID_ECH_CONFIG_LIST;
-    }
+  if (int rv = ConfigureEch(); rv != OK) {
+    return rv;
   }
 
   SSL_set_permute_extensions(ssl_.get(), 1);
@@ -954,6 +946,7 @@ int SSLClientSocketImpl::DoHandshake() {
 
     OpenSSLErrorInfo error_info;
     net_error = MapLastOpenSSLError(ssl_error, err_tracer, &error_info);
+    MaybeClearEarlyDataCache(net_error);
     if (net_error == ERR_IO_PENDING) {
       // If not done, stay in this state
       next_handshake_state_ = STATE_HANDSHAKE;
@@ -1381,6 +1374,7 @@ int SSLClientSocketImpl::DoPayloadRead(base::span<uint8_t> buf) {
     } else {
       pending_read_error_ = MapLastOpenSSLError(
           pending_read_ssl_error_, err_tracer, &pending_read_error_info_);
+      MaybeClearEarlyDataCache(pending_read_error_);
     }
 
     // Many servers do not reliably send a close_notify alert when shutting down
@@ -1436,6 +1430,7 @@ int SSLClientSocketImpl::DoPayloadWrite() {
     return ERR_IO_PENDING;
   OpenSSLErrorInfo error_info;
   int net_error = MapLastOpenSSLError(ssl_error, err_tracer, &error_info);
+  MaybeClearEarlyDataCache(net_error);
 
   if (net_error != ERR_IO_PENDING) {
     NetLogOpenSSLError(net_log_, NetLogEventType::SSL_WRITE_ERROR, net_error,
@@ -1487,11 +1482,7 @@ void SSLClientSocketImpl::DoPeek() {
     // On early data reject, clear early data on any other sessions in the
     // cache, so retries do not get stuck attempting 0-RTT. See
     // https://crbug.com/1066623.
-    if (err == ERR_EARLY_DATA_REJECTED ||
-        err == ERR_WRONG_VERSION_ON_EARLY_DATA) {
-      context_->ssl_client_session_cache()->ClearEarlyData(
-          GetSessionCacheKey(std::nullopt));
-    }
+    MaybeClearEarlyDataCache(err);
 
     handled_early_data_result_ = true;
 
@@ -1675,6 +1666,15 @@ bool SSLClientSocketImpl::IsCachingEnabled() const {
   return context_->ssl_client_session_cache() != nullptr;
 }
 
+void SSLClientSocketImpl::MaybeClearEarlyDataCache(int error) {
+  if ((error == ERR_EARLY_DATA_REJECTED ||
+       error == ERR_WRONG_VERSION_ON_EARLY_DATA) &&
+      IsCachingEnabled()) {
+    context_->ssl_client_session_cache()->ClearEarlyData(
+        GetSessionCacheKey(std::nullopt));
+  }
+}
+
 ssl_private_key_result_t SSLClientSocketImpl::PrivateKeySignCallback(
     uint16_t algorithm,
     base::span<const uint8_t> input) {
@@ -1824,6 +1824,43 @@ int SSLClientSocketImpl::MapLastOpenSSLError(
   }
 
   return net_error;
+}
+
+int SSLClientSocketImpl::ConfigureEch() {
+  EchMode ech_mode = EchMode::kOpportunistic;
+  if (!context_->config().ech_enabled) {
+    DCHECK(ssl_config_.ech_config_list.empty());
+    ech_mode = EchMode::kDisabled;
+  } else if (context_->ssl_config_service()) {
+    ech_mode =
+        context_->ssl_config_service()->GetEchMode(host_and_port_.host());
+  }
+
+  switch (ech_mode) {
+    case EchMode::kDisabled:
+      return OK;
+    case EchMode::kStrict:
+      if (ssl_config_.ech_config_list.empty()) {
+        return ERR_STRICT_ECH_REQUIRED;
+      }
+      [[fallthrough]];
+    case EchMode::kOpportunistic:
+      // TODO(crbug.com/41482204): Enable this unconditionally.
+      SSL_set_enable_ech_grease(ssl_.get(), 1);
+      if (!ssl_config_.ech_config_list.empty()) {
+        net_log_.AddEvent(NetLogEventType::SSL_ECH_CONFIG_LIST, [&] {
+          return base::DictValue().Set(
+              "bytes", NetLogBinaryValue(ssl_config_.ech_config_list));
+        });
+        if (!SSL_set1_ech_config_list(ssl_.get(),
+                                      ssl_config_.ech_config_list.data(),
+                                      ssl_config_.ech_config_list.size())) {
+          return ERR_INVALID_ECH_CONFIG_LIST;
+        }
+      }
+      return OK;
+  }
+  NOTREACHED();
 }
 
 std::string_view SSLClientSocketImpl::GetECHNameOverride() const {

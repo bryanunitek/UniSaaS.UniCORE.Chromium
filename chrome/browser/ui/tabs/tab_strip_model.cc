@@ -1021,15 +1021,21 @@ void TabStripModel::SendDetachWebContentsNotifications(
 
 void TabStripModel::ActivateTabAt(int index,
                                   TabStripUserGestureDetails user_gesture) {
+  CHECK(ContainsIndex(index));
+  ActivateTab(GetTabAtIndex(index), user_gesture);
+}
+
+void TabStripModel::ActivateTab(tabs::TabInterface* tab,
+                                TabStripUserGestureDetails user_gesture) {
   ReentrancyCheck reentrancy_check(&reentrancy_guard_);
 
-  CHECK(ContainsIndex(index));
+  CHECK(tab);
+  CHECK(static_cast<tabs::TabModel*>(tab)->owning_model() == this)
+      << "Tab does not belong to this TabStripModel.";
 
-  TRACE_EVENT0("ui", "TabStripModel::ActivateTabAt");
+  TRACE_EVENT0("ui", "TabStripModel::ActivateTab");
 
   scrubbing_metrics_.IncrementPressCount(user_gesture);
-
-  tabs::TabInterface* tab = GetTabAtIndex(index);
 
   // If this tab was activated, eg. by an extension, but is not in the focused
   // group, unfocus the focused group.
@@ -1467,23 +1473,9 @@ bool TabStripModel::IsTabInForeground(int index) const {
   return active_index() == index;
 }
 
-bool TabStripModel::IsTabClosable(int index) const {
-  return PolicyAllowsTabClosing(GetWebContentsAt(index));
-}
-
-bool TabStripModel::IsTabClosable(const content::WebContents* contents) const {
-  return IsTabClosable(GetIndexOfWebContents(contents));
-}
-
 std::optional<tab_groups::TabGroupId> TabStripModel::GetTabGroupForTab(
     int index) const {
   return ContainsIndex(index) ? GetTabAtIndex(index)->GetGroup() : std::nullopt;
-}
-
-std::optional<tab_groups::TabGroupId> TabStripModel::GetActiveTabGroupId()
-    const {
-  const tabs::TabInterface* active_tab = selection_model_.active_tab();
-  return active_tab ? active_tab->GetGroup() : std::nullopt;
 }
 
 std::optional<tab_groups::TabGroupId> TabStripModel::GetSurroundingTabGroup(
@@ -1552,7 +1544,8 @@ void TabStripModel::SelectTabAt(int index) {
 
   tabs::TabStripModelSelectionState new_model = selection_model_;
 
-  if (std::optional<split_tabs::SplitTabId> split_id = GetSplitForTab(index);
+  if (std::optional<split_tabs::SplitTabId> split_id =
+          tab_to_select->GetSplit();
       split_id.has_value()) {
     std::vector<tabs::TabInterface*> tabs =
         GetSplitData(split_id.value())->ListTabs();
@@ -1586,7 +1579,7 @@ void TabStripModel::DeselectTabAt(int index) {
 
   tabs::TabStripModelSelectionState new_model = selection_model_;
 
-  if (std::optional<split_tabs::SplitTabId> split_id = GetSplitForTab(index);
+  if (std::optional<split_tabs::SplitTabId> split_id = tab->GetSplit();
       split_id.has_value()) {
     for (auto [t, _] : GetTabsAndIndicesInSplit(split_id.value())) {
       new_model.RemoveTabFromSelection(t);
@@ -1874,11 +1867,6 @@ std::set<split_tabs::SplitTabId> TabStripModel::ListSplits() const {
 
 bool TabStripModel::ContainsSplit(split_tabs::SplitTabId split_id) const {
   return contents_data_->GetSplitTabCollection(split_id);
-}
-
-bool TabStripModel::IsActiveTabSplit() const {
-  const tabs::TabInterface* active_tab = GetActiveTab();
-  return active_tab && active_tab->IsSplit();
 }
 
 void TabStripModel::UpdateSplitLayout(
@@ -2388,10 +2376,6 @@ const tabs::TabCollection* TabStripModel::Root() const {
   return contents_data_.get();
 }
 
-const tabs::TabCollection* TabStripModel::GetRootForTesting() const {
-  return contents_data_.get();
-}
-
 std::optional<const tab_groups::TabGroupId> TabStripModel::FindGroupIdFor(
     const tabs::TabCollection::Handle& collection_handle,
     base::PassKey<tabs_api::TabStripModelAdapterImpl>) const {
@@ -2489,12 +2473,6 @@ bool TabStripModel::IsContextMenuCommandEnabled(
              delegate()->CanMoveTabsToWindow(indices);
     }
 
-    case CommandGlicShareLimit:
-      return false;
-    case CommandGlicStartShare:
-      return true;
-    case CommandGlicStopShare:
-      return true;
     case CommandGlicShare:
       return true;
     case CommandGlicCreateNewChat:
@@ -2642,7 +2620,8 @@ void TabStripModel::ExecuteContextMenuCommand(int context_index,
       base::UmaHistogramCounts1000(
           "Tab.ContextMenu.SendTabToSelf.SelectedTabsCount",
           selection_model_.size());
-      send_tab_to_self::ShowBubble(GetWebContentsAt(context_index));
+      send_tab_to_self::ShowBubble(GetWebContentsAt(context_index),
+                                   send_tab_to_self::ShareEntryPoint::kTabMenu);
       break;
     }
 
@@ -2848,39 +2827,6 @@ void TabStripModel::ExecuteContextMenuCommand(int context_index,
       break;
     }
 
-    case CommandGlicShareLimit:
-      base::UmaHistogramCounts1000(
-          "Tab.ContextMenu.GlicShareLimit.SelectedTabsCount",
-          selection_model_.size());
-      break;
-    case CommandGlicStopShare:
-    case CommandGlicStartShare: {
-      if (command_id == CommandGlicStartShare) {
-        base::UmaHistogramCounts1000(
-            "Tab.ContextMenu.GlicStartShare.SelectedTabsCount",
-            selection_model_.size());
-      } else {
-        base::UmaHistogramCounts1000(
-            "Tab.ContextMenu.GlicStopShare.SelectedTabsCount",
-            selection_model_.size());
-      }
-      std::vector<int> indices = GetIndicesForCommand(context_index);
-      std::vector<tabs::TabHandle> tab_handles;
-      for (const auto& selection : indices) {
-        tabs::TabInterface* tab = GetTabAtIndex(selection);
-        if (command_id == CommandGlicStartShare &&
-            delegate_->IsTabGlicPinned(tab->GetHandle())) {
-          continue;
-        }
-        tab_handles.push_back(tab->GetHandle());
-      }
-      if (command_id == CommandGlicStartShare) {
-        CHECK(delegate_->GlicPinTabs(tab_handles));
-      } else {
-        CHECK(delegate_->GlicUnpinTabs(tab_handles));
-      }
-      break;
-    }
     case CommandGlicShare:
       // Do nothing. The submenu's delegate will invoke the correct subcommand
       // later.
@@ -3043,7 +2989,7 @@ void TabStripModel::ExecuteAddToExistingGroupCommand(
 
   // If there are no groups to delete OR there is only one group that was found
   // to be deleted, but it is the group that is being added to then the there
-  // are no actual deletions occuring. Otherwise the group deletion must be
+  // are no actual deletions occurring. Otherwise the group deletion must be
   // confirmed.
   base::OnceCallback<void()> callback = base::BindOnce(
       [](TabStripModel* model, std::vector<tabs::TabInterface*> tabs,
@@ -3668,11 +3614,12 @@ void TabStripModel::CloseTabs(base::span<content::WebContents* const> items,
                               uint32_t close_types) {
   std::vector<content::WebContents*> filtered_items;
   for (content::WebContents* contents : items) {
-    if (IsTabClosable(contents)) {
+    tabs::TabInterface* tab = GetTabForWebContents(contents);
+    if (IsTabClosable(tab)) {
       filtered_items.push_back(contents);
     } else {
       for (auto& observer : observers_) {
-        observer.OnTabCloseCancelled(GetTabForWebContents(contents));
+        observer.OnTabCloseCancelled(tab);
       }
     }
   }
@@ -5308,16 +5255,16 @@ void TabStripModel::OnActiveTabChanged(
   }
 }
 
-bool TabStripModel::PolicyAllowsTabClosing(
-    content::WebContents* contents) const {
-  if (!contents) {
+bool TabStripModel::IsTabClosable(const tabs::TabInterface* tab) const {
+  if (!tab) {
     return true;
   }
 
   web_app::WebAppProvider* provider =
-      web_app::WebAppProvider::GetForWebContents(contents);
+      web_app::WebAppProvider::GetForWebContents(tab->GetContents());
   // Can be null if there is no tab helper or app id.
-  const webapps::AppId* app_id = web_app::WebAppTabHelper::GetAppId(contents);
+  const webapps::AppId* app_id =
+      web_app::WebAppTabHelper::GetAppId(tab->GetContents());
   if (!app_id) {
     return true;
   }

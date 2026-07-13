@@ -232,6 +232,7 @@ static_library("screens") {
 
   deps = [
     "//ash/constants",
+    "//ash/login/resources:login_strings",
     "//ash/public/mojom:input_device_settings",
     "//ash/strings",
     "//ash/webui/connectivity_diagnostics",
@@ -283,6 +284,7 @@ static_library("screens") {
     "//chrome/browser/signin",
     "//chrome/browser/sync",
     "//chrome/browser/sync:factories",
+    "//chrome/browser/ui:chrome_pages",
     "//chrome/browser/ui/ash/login",
     "//chrome/browser/ui/ash/multi_user",
     "//chrome/browser/ui/webui/ash/internet",
@@ -484,6 +486,7 @@ source_set("browser_tests") {
     "//ash",
     "//ash:test_support",
     "//ash/constants",
+    "//ash/login/resources:login_strings",
     "//ash/public/cpp",
     "//ash/webui/help_app_ui:help_app_ui_pref",
     "//base",
@@ -640,6 +643,7 @@ source_set("unit_tests") {
     "//chromeos/ash/components/dbus/arc",
     "//chromeos/ash/components/dbus/arc:arcvm_data_migrator_proto_lib",
     "//chromeos/ash/components/dbus/concierge",
+    "//chromeos/ash/components/dbus/oobe_config",
     "//chromeos/ash/components/dbus/spaced",
     "//chromeos/ash/components/dbus/update_engine",
     "//chromeos/ash/components/dbus/upstart",

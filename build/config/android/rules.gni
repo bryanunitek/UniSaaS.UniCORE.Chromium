@@ -10,6 +10,10 @@ import("//build/config/rts.gni")
 import("//build/config/sanitizers/sanitizers.gni")
 import("//build_overrides/build.gni")
 
+if (build_with_chromium) {
+  import("//build/config/gclient_args.gni")
+}
+
 assert(
     is_android || is_robolectric,
     "current_toolchain=$current_toolchain default_toolchain=$default_toolchain")
@@ -110,6 +114,7 @@ template("create_native_executable_dist") {
 if (!is_robolectric && enable_java_templates) {
   import("//build/config/android/config.gni")
   import("//build/config/android/internal_rules.gni")
+  import("//build/config/android/tiered_dex.gni")
   import("//build/config/compiler/compiler.gni")
   import("//build/config/coverage/coverage.gni")
   import("//build/config/profiling/profiling.gni")
@@ -2045,10 +2050,6 @@ if (!is_robolectric && enable_java_templates) {
         defines += [ "_IS_DESKTOP_ANDROID" ]
       }
 
-      if (enable_javaless_renderers) {
-        defines += [ "_JAVALESS_RENDERERS_AVAILABLE" ]
-      }
-
       if (defined(invoker.write_clang_profiling_data) &&
           invoker.write_clang_profiling_data) {
         defines += [ "_WRITE_CLANG_PROFILING_DATA" ]
@@ -2143,11 +2144,10 @@ if (!is_robolectric && enable_java_templates) {
   #   resource_values_filter_rules: List of "source_path:name_regex" used to
   #     filter out unwanted values/ resources.
 
-  #   app_as_shared_lib: This is now obsolete. True if this is a regular
-  #     application apk that can also serve as a runtime shared library, like
-  #     the (obsolete) monochrome_public_apk target. Ensures that the resources
-  #     are usable both by the APK running as an application, or by another
-  #     process that loads it at runtime.
+  #   app_as_shared_lib: True if this is a regular application apk that can also
+  #     serve as a runtime shared library. Ensures that the resources are usable
+  #     both by the APK running as an application, or by another process that
+  #     loads it at runtime.
 
   #   uncompress_dex: Store final .dex files uncompressed in the apk.
   #   omit_dex: If true, do not build or include classes.dex.
@@ -2299,8 +2299,26 @@ if (!is_robolectric && enable_java_templates) {
 
     _use_chromium_linker =
         defined(invoker.use_chromium_linker) && invoker.use_chromium_linker
+    _rebased_build_config = rebase_path(_build_config, root_build_dir)
 
-    not_needed([ "_use_chromium_linker" ])
+    _generate_productconfig_java =
+        defined(invoker.product_config_java_packages) && !_omit_dex
+
+    _proguard_enabled =
+        defined(invoker.proguard_enabled) && invoker.proguard_enabled
+
+    if (!_is_bundle_module && _proguard_enabled) {
+      _proguard_mapping_path = "$_final_apk_path.mapping"
+    }
+
+    if (defined(invoker.resource_ids_provider_dep)) {
+      _resource_ids_provider_dep = invoker.resource_ids_provider_dep
+    }
+
+    not_needed([
+                 "_rebased_build_config",
+                 "_use_chromium_linker",
+               ])
 
     # The dependency that makes the chromium linker, if any is needed.
     _native_libs_deps = []
@@ -2350,21 +2368,38 @@ if (!is_robolectric && enable_java_templates) {
       }
     }
 
-    _rebased_build_config = rebase_path(_build_config, root_build_dir)
-    assert(_rebased_build_config != "")  # Mark as used.
-
-    _generate_productconfig_java =
-        defined(invoker.product_config_java_packages) && !_omit_dex
-
-    if (!_is_bundle_module && _proguard_enabled) {
-      _proguard_mapping_path = "$_final_apk_path.mapping"
-    }
-
-    if (defined(invoker.resource_ids_provider_dep)) {
-      _resource_ids_provider_dep = invoker.resource_ids_provider_dep
-    }
-
     _uses_static_library = defined(invoker.static_library_provider)
+
+    _loadable_modules = []
+    if (defined(invoker.loadable_modules)) {
+      _loadable_modules = invoker.loadable_modules
+    }
+    _sanitizer_loadable_modules = []
+    _sanitizer_deps = []
+    if (_is_base_module && _native_libs_deps != [] && !_uses_static_library) {
+      _sanitizer_loadable_modules += _sanitizer_runtimes
+    }
+    if (enable_wrap_sh && _is_base_module &&
+        (_uses_static_library || _native_libs_deps != [])) {
+      _sanitizer_loadable_modules +=
+          [ "$root_gen_dir/build/android/generate_wrap_sh/wrap.sh" ]
+      _sanitizer_deps += [ "//build/android:generate_wrap_sh" ]
+    }
+
+    _all_native_libs_deps = _native_libs_deps + _secondary_abi_native_libs_deps
+    if (_all_native_libs_deps != []) {
+      _native_libs_filearg_dep = ":$_build_config_target"
+      _all_native_libs_deps += [ _native_libs_filearg_dep ]
+
+      if (!_is_bundle_module) {
+        _native_libs_filearg =
+            "@FileArg($_rebased_build_config:native:libraries)"
+      }
+    }
+
+    _has_native_libs =
+        defined(_native_libs_filearg) || _loadable_modules != [] ||
+        _sanitizer_loadable_modules != []
 
     # TODO(crbug.com/40585188): Allow incremental installs of bundle modules.
     _incremental_apk =
@@ -2401,6 +2436,9 @@ if (!is_robolectric && enable_java_templates) {
       manifest_build_config = _manifest_build_config
       min_sdk_version = _min_sdk_version
       target_sdk_version = _target_sdk_version
+
+      # Bundletool will add extractNativeLibraries for us.
+      inject_extract_native_libs = _has_native_libs && !_is_bundle_module
 
       # Depend on android_resources() targets that use generated files
       # in mergeable_android_manifests (such as android_aar_prebuilt).
@@ -2515,6 +2553,11 @@ if (!is_robolectric && enable_java_templates) {
         resource_ids_provider_dep = invoker.apk_under_test
 
         _link_against = invoker.apk_under_test
+
+        apk_under_test_rtxt =
+            get_label_info(invoker.apk_under_test, "target_gen_dir") + "/" +
+            get_label_info(invoker.apk_under_test, "name") +
+            "__compile_resources_R.txt"
       }
 
       if (_is_bundle_module || _optimize_resources) {
@@ -2628,22 +2671,6 @@ if (!is_robolectric && enable_java_templates) {
         # instead captured via a depfile.
       }
       _srcjar_deps += [ ":${_template_name}__native_libraries" ]
-    }
-
-    _loadable_modules = []
-    if (defined(invoker.loadable_modules)) {
-      _loadable_modules = invoker.loadable_modules
-    }
-    _sanitizer_loadable_modules = []
-    _sanitizer_deps = []
-    if (_is_base_module && _native_libs_deps != [] && !_uses_static_library) {
-      _sanitizer_loadable_modules += _sanitizer_runtimes
-    }
-    if (enable_wrap_sh && _is_base_module &&
-        (_uses_static_library || _native_libs_deps != [])) {
-      _sanitizer_loadable_modules +=
-          [ "$root_gen_dir/build/android/generate_wrap_sh/wrap.sh" ]
-      _sanitizer_deps += [ "//build/android:generate_wrap_sh" ]
     }
 
     _assertions_implicitly_enabled = defined(invoker.custom_assertion_handler)
@@ -2836,71 +2863,93 @@ if (!is_robolectric && enable_java_templates) {
         _shrunk_proto_resources_path =
             "$target_out_dir/${_template_name}.shrunk.proto.ap_"
       }
-      dex(_final_dex_target_name) {
-        forward_variables_from(invoker,
-                               [
-                                 "enable_proguard_checks",
-                                 "custom_assertion_handler",
-                                 "proguard_enable_obfuscation",
-                                 "repackage_classes",
-                               ])
-        min_sdk_version = _min_sdk_version
-        proguard_enabled = _proguard_enabled
-        build_config = _build_config
-        output = _final_dex_path
-        deps = [
-          ":$_build_config_target",
-          ":$_java_target_name",
-        ]
-        if (_proguard_enabled) {
-          # Generates proguard configs
-          deps += [ ":$_compile_resources_target" ]
-          proguard_mapping_path = _proguard_mapping_path
-
-          if (!defined(enable_proguard_checks) && defined(testonly) &&
-              testonly) {
-            # Ignore -checkdiscard and -checkenumunboxed failures.
-            enable_proguard_checks = false
+      if (tiered_dex_assembly && !_proguard_enabled &&
+          _min_sdk_version >= default_min_sdk_version) {
+        tiered_dex_assembly(_final_dex_target_name) {
+          apk_template_name = _template_name
+          build_config = _build_config
+          build_config_target = ":$_build_config_target"
+          min_sdk_version = _min_sdk_version
+          java_target_name = ":$_java_target_name"
+          final_dex_target_name = _final_dex_target_name
+          final_dex_path = _final_dex_path
+          if (defined(testonly)) {
+            testonly = testonly
           }
-
-          # Must not be set via write_build_config, because that will cause it
-          # to be picked up by test apks that use apk_under_test.
-          if (!_assertions_implicitly_enabled && !enable_java_asserts &&
-              (!defined(testonly) || !testonly) &&
-              # Injected JaCoCo code causes -checkdiscards to fail.
-              !use_jacoco_coverage) {
-            proguard_configs = [
-              "//build/android/dcheck_is_off.flags",
-              "//third_party/jni_zero/checkdiscard_proguard.flags",
-            ]
-          }
-
-          if (_optimize_resources) {
-            resources_input = _proto_resources_path
-            resources_output = _shrunk_proto_resources_path
-            deps += [ ":${_compile_resources_target}" ]
-          }
-        } else {
-          if (_min_sdk_version >= default_min_sdk_version) {
-            # Enable dex merging only when min_sdk_version is >= what the
-            # library .dex files were created with.
-            input_dex_filearg =
-                "@FileArg(${_rebased_build_config}:all_dex_files)"
-
-            # Pure dex-merge.
-            enable_desugar = false
-          } else {
-            input_classes_filearg =
-                "@FileArg($_rebased_build_config:processed_classpath)"
-          }
+          forward_variables_from(invoker,
+                                 [
+                                   "custom_assertion_handler",
+                                   "proguard_enable_obfuscation",
+                                   "repackage_classes",
+                                 ])
         }
+      } else {
+        dex(_final_dex_target_name) {
+          forward_variables_from(invoker,
+                                 [
+                                   "enable_proguard_checks",
+                                   "custom_assertion_handler",
+                                   "proguard_enable_obfuscation",
+                                   "repackage_classes",
+                                 ])
+          min_sdk_version = _min_sdk_version
+          proguard_enabled = _proguard_enabled
+          build_config = _build_config
+          output = _final_dex_path
+          deps = [
+            ":$_build_config_target",
+            ":$_java_target_name",
+          ]
+          if (_proguard_enabled) {
+            # Generates proguard configs
+            deps += [ ":$_compile_resources_target" ]
+            proguard_mapping_path = _proguard_mapping_path
 
-        # The individual dependencies would have caught real missing deps in
-        # their respective dex steps. False positives that were suppressed at
-        # per-target dex steps are emitted here since this may use jar files
-        # rather than dex files.
-        if (!defined(enable_desugar)) {
-          ignore_desugar_missing_deps = true
+            if (!defined(enable_proguard_checks) && defined(testonly) &&
+                testonly) {
+              # Ignore -checkdiscard and -checkenumunboxed failures.
+              enable_proguard_checks = false
+            }
+
+            # Must not be set via write_build_config, because that will cause it
+            # to be picked up by test apks that use apk_under_test.
+            if (!_assertions_implicitly_enabled && !enable_java_asserts &&
+                (!defined(testonly) || !testonly) &&
+                # Injected JaCoCo code causes -checkdiscards to fail.
+                !use_jacoco_coverage) {
+              proguard_configs = [
+                "//build/android/dcheck_is_off.flags",
+                "//third_party/jni_zero/checkdiscard_proguard.flags",
+              ]
+            }
+
+            if (_optimize_resources) {
+              resources_input = _proto_resources_path
+              resources_output = _shrunk_proto_resources_path
+              deps += [ ":${_compile_resources_target}" ]
+            }
+          } else {
+            if (_min_sdk_version >= default_min_sdk_version) {
+              # Enable dex merging only when min_sdk_version is >= what the
+              # library .dex files were created with.
+              input_dex_filearg =
+                  "@FileArg(${_rebased_build_config}:all_dex_files)"
+
+              # Pure dex-merge.
+              enable_desugar = false
+            } else {
+              input_classes_filearg =
+                  "@FileArg($_rebased_build_config:processed_classpath)"
+            }
+          }
+
+          # The individual dependencies would have caught real missing deps in
+          # their respective dex steps. False positives that were suppressed at
+          # per-target dex steps are emitted here since this may use jar files
+          # rather than dex files.
+          if (!defined(enable_desugar)) {
+            ignore_desugar_missing_deps = true
+          }
         }
       }
 
@@ -2937,17 +2986,6 @@ if (!is_robolectric && enable_java_templates) {
         outputs = [ "${_final_apk_path}.pathmap.txt" ]
       }
       _final_deps += [ ":$_copy_pathmap_target" ]
-    }
-
-    _all_native_libs_deps = _native_libs_deps + _secondary_abi_native_libs_deps
-    if (_all_native_libs_deps != []) {
-      _native_libs_filearg_dep = ":$_build_config_target"
-      _all_native_libs_deps += [ _native_libs_filearg_dep ]
-
-      if (!_is_bundle_module) {
-        _native_libs_filearg =
-            "@FileArg($_rebased_build_config:native:libraries)"
-      }
     }
 
     if (_is_bundle_module) {
@@ -3045,9 +3083,6 @@ if (!is_robolectric && enable_java_templates) {
 
           # All native libraries are side-loaded, so use a placeholder to force
           # the proper bitness for the app.
-          _has_native_libs =
-              defined(_native_libs_filearg) || _loadable_modules != [] ||
-              _sanitizer_loadable_modules != []
           if (_has_native_libs && loadable_modules == [] &&
               !defined(native_lib_placeholders)) {
             native_lib_placeholders = [ "libfix.crbug.384638.so" ]
@@ -3649,6 +3684,7 @@ if (!is_robolectric && enable_java_templates) {
                                "data",
                                "data_deps",
                                "deps",
+                               "device_data_filters",
                                "extra_args",
                                "fake_modules",
                                "ignore_all_data_deps",
@@ -3657,6 +3693,12 @@ if (!is_robolectric && enable_java_templates) {
                                "proguard_mapping_path",
                                "use_webview_provider",
                              ])
+      if (!defined(data)) {
+        data = []
+      }
+      if (build_with_chromium && generate_location_tags) {
+        data += [ "//testing/location_tags.json" ]
+      }
       test_name = invoker.target_name
       test_type = "instrumentation"
       apk_target = invoker.android_test_apk
@@ -3789,8 +3831,12 @@ if (!is_robolectric && enable_java_templates) {
     assert(defined(invoker.apk_name))
     _apk_target_name = "${target_name}__test_apk"
     forward_variables_from(invoker, TESTONLY_AND_VISIBILITY)
+
     android_test_apk(_apk_target_name) {
-      forward_variables_from(invoker, "*", TESTONLY_AND_VISIBILITY)
+      forward_variables_from(
+          invoker,
+          "*",
+          TESTONLY_AND_VISIBILITY + [ "device_data_filters" ])
     }
     instrumentation_test_runner(target_name) {
       forward_variables_from(invoker,
@@ -3800,6 +3846,7 @@ if (!is_robolectric && enable_java_templates) {
                                "data",
                                "data_deps",
                                "deps",
+                               "device_data_filters",
                                "extra_args",
                                "ignore_all_data_deps",
                                "is_unit_test",

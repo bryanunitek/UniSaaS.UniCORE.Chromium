@@ -30,6 +30,7 @@
 
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -59,6 +60,7 @@
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+#include "third_party/blink/public/common/widget/constants.h"
 #include "third_party/blink/public/mojom/frame/intrinsic_sizing_info.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame_sinks/embedded_frame_sink.mojom-blink.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
@@ -148,7 +150,6 @@
 #include "third_party/blink/renderer/core/page/validation_message_client.h"
 #include "third_party/blink/renderer/core/page/viewport_description.h"
 #include "third_party/blink/renderer/core/paint/timing/first_meaningful_paint_detector.h"
-#include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/scroll/scroll_into_view_util.h"
@@ -738,8 +739,9 @@ gfx::Rect WebFrameWidgetImpl::GetAbsoluteCaretBounds() {
   LocalFrame* local_frame = GetPage()->GetFocusController().FocusedFrame();
   if (local_frame) {
     auto& selection = local_frame->Selection();
-    if (selection.GetSelectionInDOMTree().IsCaret())
+    if (selection.GetSelectionInDomTree().IsCaret()) {
       return selection.AbsoluteCaretBounds();
+    }
   }
   return gfx::Rect();
 }
@@ -946,7 +948,7 @@ viz::FrameSinkId WebFrameWidgetImpl::GetFrameSinkIdAtPoint(
     gfx::PointF local_point(result.LocalPoint());
     LayoutObject* object = result_node->GetLayoutObject();
     if (auto* box = DynamicTo<LayoutBox>(object))
-      local_point -= gfx::Vector2dF(box->PhysicalContentBoxOffset());
+      local_point -= gfx::Vector2dF(box->PhysicalContentBoxRect().offset);
 
     *local_point_in_dips = widget_base_->BlinkSpaceToDIPs(local_point);
     return remote_frame_sink_id;
@@ -1548,6 +1550,31 @@ void WebFrameWidgetImpl::UpdateCompositorScrollState(
   if (commit_data.scroll_end_data.done_containers.size()) {
     SendEndOfScrollEvents(commit_data);
   }
+
+  if (!commit_data.scroll_timing_infos.empty()) {
+    ProcessScrollTimingData(commit_data);
+  }
+}
+
+void WebFrameWidgetImpl::ProcessScrollTimingData(
+    const cc::CompositorCommitData& commit_data) {
+  LocalDOMWindow* dom_window = LocalRootImpl()->GetFrame()->DomWindow();
+  // Compositor only populates `scroll_timing_infos` when the feature is on.
+  CHECK(RuntimeEnabledFeatures::ScrollPerformanceTimingEnabled(dom_window));
+
+  WindowPerformance* performance =
+      DOMWindowPerformance::performance(*dom_window);
+
+  for (const auto& timing : commit_data.scroll_timing_infos) {
+    // `ScrollTimingController` only enqueues records after assigning both
+    // `end_time` and `input_type`, so dereferencing here is safe.
+    // `target` may be null if the scrollable container was disposed before the
+    // commit reaches us; `AddScrollTiming` tolerates a null target.
+    Node* target =
+        View()->FindNodeFromScrollableCompositorElementId(timing.element_id);
+    performance->AddScrollTiming(timing.start_time, *timing.end_time,
+                                 *timing.input_type, target);
+  }
 }
 
 void WebFrameWidgetImpl::UpdateAnimatedImageState(
@@ -1556,6 +1583,11 @@ void WebFrameWidgetImpl::UpdateAnimatedImageState(
     if (Element* client = DynamicTo<Element>(
             DOMNodeIds::NodeForId(DOMNodeIdFromCompositorElementId(id)))) {
       if (auto* canvas = DynamicTo<HTMLCanvasElement>(client->parentNode())) {
+        if (auto* layout_object = client->GetLayoutObject()) {
+          // The canvas child element needs to update
+          // animated_image_frame_index_map in paint_property_tree_builder.cc
+          layout_object->SetNeedsPaintPropertyUpdate();
+        }
         if (auto* view = canvas->GetDocument().View()) {
           view->RequestCanvasOnpaint(*canvas, client);
         }
@@ -1745,6 +1777,14 @@ AnimationFrameTimingInfo* WebFrameWidgetImpl::RecordRenderingUpdateEndTime(
       *local_root_frame->DomWindow(), rendering_update_time);
 }
 
+void WebFrameWidgetImpl::MarkConditional(const AtomicString& name,
+                                         base::TimeTicks start_time) {
+  if (!animation_frame_timing_monitor_) {
+    return;
+  }
+  animation_frame_timing_monitor_->MarkConditional(name, start_time);
+}
+
 void WebFrameWidgetImpl::DidBeginMainFrame() {
   LocalFrame* local_root_frame = LocalRootImpl()->GetFrame();
   CHECK(local_root_frame);
@@ -1902,21 +1942,6 @@ void WebFrameWidgetImpl::UpdateVisualProperties(
         visual_properties.min_size_for_auto_resize,
         visual_properties.max_size_for_auto_resize,
         visual_properties.screen_infos.current().device_scale_factor);
-  }
-
-  bool capture_sequence_number_changed =
-      visual_properties.capture_sequence_number !=
-      last_capture_sequence_number_;
-  if (capture_sequence_number_changed) {
-    last_capture_sequence_number_ = visual_properties.capture_sequence_number;
-
-    // Send the capture sequence number to RemoteFrames that are below the
-    // local root for this widget.
-    ForEachRemoteFrameControlledByWidget(
-        [capture_sequence_number = visual_properties.capture_sequence_number](
-            RemoteFrame* remote_frame) {
-          remote_frame->UpdateCaptureSequenceNumber(capture_sequence_number);
-        });
   }
 
   if (!View()->AutoResizeMode()) {
@@ -2212,13 +2237,6 @@ std::unique_ptr<cc::ScopedPauseRendering> WebFrameWidgetImpl::PauseRendering() {
   return widget_base_->LayerTreeHost()->PauseRendering();
 }
 
-void WebFrameWidgetImpl::SetShouldThrottleFrameRate(bool flag) {
-  if (!View()->does_composite() || flag == throttling_frame_rate_) {
-    return;
-  }
-  throttling_frame_rate_ = flag;
-  return widget_base_->LayerTreeHost()->SetShouldThrottleFrameRate(flag);
-}
 
 void WebFrameWidgetImpl::RequestMainFrameOnCompositorAnimation(
     cc::PropertyChangeForcesCommitCriteria criteria,
@@ -2730,13 +2748,12 @@ void WebFrameWidgetImpl::OnCommitRequested() {
 }
 
 WebFrameWidgetImpl::UnboundedSurfaceState*
-WebFrameWidgetImpl::GetOrCreateUnboundedSurfaceState() {
+WebFrameWidgetImpl::GetOrCreateUnboundedSurfaceState(
+    ExecutionContext* execution_context) {
   CHECK(RuntimeEnabledFeatures::UnboundedElementEnabled());
-  if (!local_root_ || !local_root_->GetFrame() ||
-      !local_root_->GetFrame()->DomWindow()) {
+  if (!execution_context) {
     return nullptr;
   }
-  auto* execution_context = local_root_->GetFrame()->DomWindow();
   if (!unbounded_surface_state_ ||
       unbounded_surface_state_->GetExecutionContext() != execution_context) {
     unbounded_surface_state_ =
@@ -2773,17 +2790,28 @@ void WebFrameWidgetImpl::RegisterActiveUnboundedElement(
     mojo::PendingAssociatedRemote<mojom::blink::UnboundedSurfaceHost>
         host_remote) {
   CHECK(RuntimeEnabledFeatures::UnboundedElementEnabled());
-  if (auto* state = GetOrCreateUnboundedSurfaceState()) {
+  // TODO(crbug.com/508672616): Add support for unbounded element when
+  // TreesInViz is enabled.
+  CHECK(!base::FeatureList::IsEnabled(::features::kTreesInViz));
+  // Dismiss any existing active unbounded element to ensure only one is
+  // active at a time.
+  if (unbounded_surface_state_) {
+    OnDismissed();
+  }
+  auto* execution_context = element->GetDocument().GetFrame()
+                                ? element->GetDocument().GetFrame()->DomWindow()
+                                : nullptr;
+  if (auto* state = GetOrCreateUnboundedSurfaceState(execution_context)) {
     state->active_element_ = element;
 
     state->client_receiver_.reset();
     state->client_receiver_.Bind(
         std::move(client_receiver),
-        local_root_->GetTaskRunner(TaskType::kInternalDefault));
+        execution_context->GetTaskRunner(TaskType::kInternalDefault));
 
     state->host_.reset();
-    state->host_.Bind(std::move(host_remote),
-                      local_root_->GetTaskRunner(TaskType::kInternalDefault));
+    state->host_.Bind(std::move(host_remote), execution_context->GetTaskRunner(
+                                                  TaskType::kInternalDefault));
   }
 }
 
@@ -2791,7 +2819,7 @@ void WebFrameWidgetImpl::OnSurfaceAllocated(
     const viz::FrameSinkId& frame_sink_id,
     const viz::LocalSurfaceId& local_surface_id) {
   CHECK(RuntimeEnabledFeatures::UnboundedElementEnabled());
-  auto* state = GetOrCreateUnboundedSurfaceState();
+  auto* state = GetUnboundedSurfaceState();
   if (!state) {
     return;
   }
@@ -2822,12 +2850,14 @@ void WebFrameWidgetImpl::OnSurfaceAllocated(
       if (unbounded_frame_sink) {
         host->SetUnboundedFrameSink(std::move(unbounded_frame_sink),
                                     local_surface_id);
+        host->SetNeedsCommitWithForcedRedraw();
       }
     }
   } else if (state->local_surface_id_ != local_surface_id) {
     state->local_surface_id_ = local_surface_id;
     if (auto* host = LayerTreeHost()) {
       host->SetUnboundedLocalSurfaceId(local_surface_id);
+      host->SetNeedsCommitWithForcedRedraw();
     }
   }
 }
@@ -2844,6 +2874,14 @@ void WebFrameWidgetImpl::OnDismissed() {
   if (auto* host = LayerTreeHost()) {
     host->DismissUnboundedFrameSink();
   }
+}
+
+void WebFrameWidgetImpl::UpdateUnboundedElementBounds(const gfx::Rect& bounds) {
+  if (!unbounded_surface_state_ ||
+      !unbounded_surface_state_->host_.is_bound()) {
+    return;
+  }
+  unbounded_surface_state_->host_->UpdateBounds(bounds);
 }
 
 void WebFrameWidgetImpl::BeginMainFrame(const viz::BeginFrameArgs& args) {
@@ -3304,11 +3342,6 @@ WebInputEventResult WebFrameWidgetImpl::HandleInputEvent(
     return WebInputEventResult::kNotHandled;
   }
 
-  // Only unthrottle once to avoid repeatedly posting tasks to the cc impl
-  // thread.
-  if (throttling_frame_rate_) {
-    SetShouldThrottleFrameRate(false);
-  }
 
   base::AutoReset<const WebInputEvent*> current_event_change(
       &CurrentInputEvent::current_input_event_, &input_event);
@@ -3472,6 +3505,12 @@ void WebFrameWidgetImpl::MouseCaptureLost() {
   TRACE_EVENT_END("input", perfetto::NamedTrack::FromPointer(
                                "blink::WebFrameWidgetImpl", this));
   mouse_capture_element_ = nullptr;
+}
+
+void WebFrameWidgetImpl::SetPointerLocked(bool is_locked) {
+  if (auto* manager = widget_base_->widget_input_handler_manager()) {
+    manager->PostSetPointerLockedToInputThread(is_locked);
+  }
 }
 
 void WebFrameWidgetImpl::ApplyVisualProperties(
@@ -4545,6 +4584,15 @@ void WebFrameWidgetImpl::ClearImeTextSpansByType(uint32_t start,
   focused_frame->ClearImeTextSpansByType(type, start, end);
 }
 
+void WebFrameWidgetImpl::CancelStylusGesturePreview() {
+  LocalFrame* local_frame = FocusedLocalFrameInWidget();
+  if (local_frame) {
+    local_frame->GetInputMethodController().ClearImeTextSpansByType(
+        blink::ImeTextSpan::Type::kPreviewStylusGesture, 0,
+        std::numeric_limits<unsigned>::max());
+  }
+}
+
 void WebFrameWidgetImpl::SetCompositionFromExistingText(
     int32_t start,
     int32_t end,
@@ -4985,7 +5033,7 @@ void WebFrameWidgetImpl::CalculateSelectionBounds(
   // Calculate the bounding box of the selection area.
   if (bounding_box_in_root_frame) {
     Range* range =
-        CreateRange(selection.GetSelectionInDOMTree().ComputeRange());
+        CreateRange(selection.GetSelectionInDomTree().ComputeRange());
     // This bounding box is in CSS pixels.
     // TODO(https://issues.chromium.org/515746975) : BoundingRect should be in
     // DIPs.
@@ -5348,12 +5396,13 @@ void WebFrameWidgetImpl::NotifyInputObservers(
   if (!frame)
     return;
 
-  LocalFrameView* frame_view = frame->View();
-  if (!frame_view)
+  Document* document = frame->GetDocument();
+  if (!document) {
     return;
+  }
 
   const WebInputEvent& input_event = coalesced_event.Event();
-  frame_view->GetPaintTimingDetector().NotifyInputEvent(input_event.GetType());
+  PaintTimingDetector::From(*document).NotifyInputEvent(input_event.GetType());
 }
 
 Frame* WebFrameWidgetImpl::FocusedCoreFrame() const {
@@ -5604,6 +5653,31 @@ void WebFrameWidgetImpl::ImeFinishComposingTextForPlugin(bool keep_selection) {
     plugin->ImeFinishComposingTextForPlugin(keep_selection);
 }
 
+gfx::Rect WebFrameWidgetImpl::AdjustPendingWindowRectForDisplay(
+    const gfx::Rect& pending_rect,
+    int minimum_size) {
+  DCHECK_GE(pending_rect.width(), minimum_size);
+  DCHECK_GE(pending_rect.height(), minimum_size);
+
+  gfx::Rect screen = widget_base_->GetScreenInfo().available_rect;
+  gfx::Rect window = pending_rect;
+
+  window.set_width(std::min(window.width(), screen.width()));
+  window.set_height(std::min(window.height(), screen.height()));
+
+  window.set_x(std::max(screen.x(),
+                        std::min(window.x(), screen.right() - window.width())));
+  window.set_y(std::max(
+      screen.y(), std::min(window.y(), screen.bottom() - window.height())));
+
+  if (!screen.Contains(window) && local_root_ && local_root_->GetFrame()) {
+    UseCounter::Count(local_root_->GetFrame()->DomWindow(),
+                      WebFeature::kDOMWindowSetWindowRectCrossScreen);
+  }
+
+  return window;
+}
+
 void WebFrameWidgetImpl::SetWindowRect(const gfx::Rect& requested_rect,
                                        const gfx::Rect& adjusted_rect) {
   DCHECK(ForMainFrame());
@@ -5611,6 +5685,50 @@ void WebFrameWidgetImpl::SetWindowRect(const gfx::Rect& requested_rect,
   View()->SendWindowRectToMainFrameHost(
       requested_rect, BindOnce(&WebFrameWidgetImpl::AckPendingWindowRect,
                                WrapWeakPersistent(this)));
+}
+
+void WebFrameWidgetImpl::MoveWindowTo(const gfx::Point& origin) {
+  DCHECK(ForMainFrame());
+  gfx::Rect new_pending_rect = WindowRect();
+  base::OnceClosure ack = base::DoNothing();
+  // WindowRect() is empty if move/resize is called before the first screen
+  // update sets the window rect; in that case skip the pending-rect update and
+  // just forward the request.
+  if (!new_pending_rect.IsEmpty()) {
+    new_pending_rect.set_origin(origin);
+    const int minimum_size =
+        DisplayMode() == mojom::blink::DisplayMode::kUnframed
+            ? blink::kMinimumUnframedWindowSize
+            : blink::kMinimumWindowSize;
+    new_pending_rect =
+        AdjustPendingWindowRectForDisplay(new_pending_rect, minimum_size);
+    SetPendingWindowRect(new_pending_rect);
+    ack = BindOnce(&WebFrameWidgetImpl::AckPendingWindowRect,
+                   WrapWeakPersistent(this));
+  }
+  View()->SendMoveWindowToMainFrameHost(origin, std::move(ack));
+}
+
+void WebFrameWidgetImpl::ResizeWindowTo(const gfx::Size& size) {
+  DCHECK(ForMainFrame());
+  gfx::Rect new_pending_rect = WindowRect();
+  base::OnceClosure ack = base::DoNothing();
+  // WindowRect() is empty if move/resize is called before the first screen
+  // update sets the window rect; in that case skip the pending-rect update and
+  // just forward the request.
+  if (!new_pending_rect.IsEmpty()) {
+    new_pending_rect.set_size(size);
+    const int minimum_size =
+        DisplayMode() == mojom::blink::DisplayMode::kUnframed
+            ? blink::kMinimumUnframedWindowSize
+            : blink::kMinimumWindowSize;
+    new_pending_rect =
+        AdjustPendingWindowRectForDisplay(new_pending_rect, minimum_size);
+    SetPendingWindowRect(new_pending_rect);
+    ack = BindOnce(&WebFrameWidgetImpl::AckPendingWindowRect,
+                   WrapWeakPersistent(this));
+  }
+  View()->SendResizeWindowToMainFrameHost(size, std::move(ack));
 }
 
 void WebFrameWidgetImpl::SetWindowRectSynchronouslyForTesting(

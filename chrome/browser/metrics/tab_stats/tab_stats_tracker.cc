@@ -102,7 +102,8 @@ void UmaHistogramCounts10000WithBatteryStateVariant(const char* histogram_name,
 #if !BUILDFLAG(IS_ANDROID)
 void UmaHistogramCounts10000WithTabStripModeVariant(
     const char* histogram_name,
-    const TabStatsTracker::TabStripInterface& tab_strip) {
+    const TabStatsTracker::TabStripInterface& tab_strip,
+    size_t value) {
   // Guest mode and incognito should not count for the per-profile metrics
   if (tab_strip.GetProfile()->IsOffTheRecord()) {
     return;
@@ -114,8 +115,7 @@ void UmaHistogramCounts10000WithTabStripModeVariant(
                            ? ".VerticalTabStrip"
                            : ".HorizontalTabStrip";
 
-  base::UmaHistogramCounts10000(base::StrCat({histogram_name, suffix}),
-                                tab_strip.GetTabCount());
+  base::UmaHistogramCounts10000(base::StrCat({histogram_name, suffix}), value);
 }
 #endif
 
@@ -152,7 +152,11 @@ content::WebContents* TabStatsTracker::TabStripInterface::GetWebContentsAt(
   return tab_model()->GetWebContentsAt(index);
 }
 
-Profile* TabStatsTracker::TabStripInterface::GetProfile() const {
+Profile* TabStatsTracker::TabStripInterface::GetProfile() {
+  return tab_model()->GetProfile();
+}
+
+const Profile* TabStatsTracker::TabStripInterface::GetProfile() const {
   return tab_model()->GetProfile();
 }
 
@@ -182,6 +186,12 @@ size_t TabStatsTracker::TabStripInterface::GetTabCount() const {
   return browser_window_interface()->GetTabStripModel()->count();
 }
 
+size_t TabStatsTracker::TabStripInterface::GetPinnedTabCount() const {
+  return browser_window_interface()
+      ->GetTabStripModel()
+      ->IndexOfFirstNonPinnedTab();
+}
+
 #if !BUILDFLAG(IS_ANDROID)
 // Returns the count of tabs within Split Views in this tab strip.
 size_t TabStatsTracker::TabStripInterface::GetSplitTabCount() const {
@@ -201,8 +211,12 @@ content::WebContents* TabStatsTracker::TabStripInterface::GetWebContentsAt(
       index);
 }
 
-Profile* TabStatsTracker::TabStripInterface::GetProfile() const {
-  return const_cast<Profile*>(browser_window_interface()->GetProfile());
+Profile* TabStatsTracker::TabStripInterface::GetProfile() {
+  return browser_window_interface()->GetProfile();
+}
+
+const Profile* TabStatsTracker::TabStripInterface::GetProfile() const {
+  return browser_window_interface()->GetProfile();
 }
 
 bool TabStatsTracker::TabStripInterface::IsInNormalBrowser() const {
@@ -256,6 +270,9 @@ const char TabStatsTracker::UmaStatsReportingDelegate::
 const char TabStatsTracker::UmaStatsReportingDelegate::
     kKeyboardTabSwitchModeHistogramName[] =
         "TabStrip.Tab.KeyboardTabSwitchMode";
+const char
+    TabStatsTracker::UmaStatsReportingDelegate::kPinnedTabCountHistogramName[] =
+        "Tabs.PinnedTabCount";
 
 // Daily discard/reload histograms.
 const char TabStatsTracker::UmaStatsReportingDelegate::
@@ -892,12 +909,12 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportDailyMetrics(
 
 #if !BUILDFLAG(IS_ANDROID)
   // Record the keyboard tab switch mode for each profile.
-  std::set<Profile*> profiles;
+  std::set<const Profile*> profiles;
   TabStripInterface::ForEach([&profiles](const TabStripInterface& tab_strip) {
     profiles.insert(tab_strip.GetProfile());
   });
 
-  for (Profile* profile : profiles) {
+  for (const Profile* profile : profiles) {
     if (profile->IsOffTheRecord()) {
       continue;
     }
@@ -922,6 +939,7 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportHeartbeatMetrics(
                                                  tab_stats.total_tab_count);
   UmaHistogramCounts10000WithBatteryStateVariant(kWindowCountHistogramName,
                                                  tab_stats.window_count);
+
   if (base::FeatureList::IsEnabled(features::kTabDuplicateMetrics)) {
     ReportTabDuplicateMetrics(true);
     ReportTabDuplicateMetrics(false);
@@ -935,8 +953,10 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportHeartbeatMetrics(
       return;
     }
 
-    UmaHistogramCounts10000WithTabStripModeVariant(kTabCountHistogramName,
-                                                   tab_strip);
+    UmaHistogramCounts10000WithTabStripModeVariant(
+        kTabCountHistogramName, tab_strip, tab_strip.GetTabCount());
+    UmaHistogramCounts10000WithTabStripModeVariant(
+        kPinnedTabCountHistogramName, tab_strip, tab_strip.GetPinnedTabCount());
 
     auto* controller = tabs::VerticalTabStripStateController::From(
         tab_strip.browser_window_interface());
@@ -977,13 +997,13 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportHeartbeatMetrics(
 
 void TabStatsTracker::UmaStatsReportingDelegate::ReportTabDuplicateMetrics(
     bool exclude_fragments) {
-  std::map<Profile*, DuplicateData> duplicate_data_per_profile;
+  std::map<const Profile*, DuplicateData> duplicate_data_per_profile;
   TabStripInterface::ForEach([&](const TabStripInterface& tab_strip) {
     if (!tab_strip.IsInNormalBrowser()) {
       return;
     }
 
-    Profile* const profile = tab_strip.GetProfile();
+    const Profile* const profile = tab_strip.GetProfile();
     DuplicateData duplicate_data_multi_window =
         duplicate_data_per_profile[profile];
     DuplicateData duplicate_data_single_window = DuplicateData();
@@ -1029,7 +1049,7 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportTabDuplicateMetrics(
 
   for (const auto& duplicate_data : duplicate_data_per_profile) {
     // Guest mode and incognito should not count for the per-profile metrics
-    Profile* const profile = duplicate_data.first;
+    const Profile* const profile = duplicate_data.first;
     if (profile->IsOffTheRecord()) {
       continue;
     }

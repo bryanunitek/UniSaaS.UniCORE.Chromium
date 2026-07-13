@@ -156,6 +156,15 @@ export class WebuiBrowserAppElement extends CrLitElement {
     browserProxyFactory.getInstance().handler.openAppMenu();
   }
 
+  protected onBookmarksClick_() {
+    if (this.showingSidePanel_ && this.$.sidePanel.isShowingBookmarks()) {
+      this.closeSidePanel_();
+    } else {
+      this.showingSidePanel_ = true;
+      this.$.sidePanel.showBookmarks();
+    }
+  }
+
   protected onAvatarClick_(_: Event) {
     browserProxyFactory.getInstance().handler.openProfileMenu();
   }
@@ -325,19 +334,7 @@ export class WebuiBrowserAppElement extends CrLitElement {
   protected onTabDragMousedown_(e: MouseEvent) {
     if (e.target instanceof TabStripElement) {
       this.$.tabstrip.dragMouseDown(e);
-      this.addEventListener('mouseup', this.onTabDragMouseUp_);
-      this.addEventListener('mousemove', this.onTabDragMouseMove_);
     }
-  }
-
-  protected onTabDragMouseUp_(_: MouseEvent) {
-    this.$.tabstrip.closeDragElement();
-    this.removeEventListener('mouseup', this.onTabDragMouseUp_);
-    this.removeEventListener('mousemove', this.onTabDragMouseMove_);
-  }
-
-  protected onTabDragMouseMove_(e: MouseEvent) {
-    this.$.tabstrip.elementDrag(e);
   }
 
   protected setFocusToLocationBar(isUserInitiated: boolean) {

@@ -27,6 +27,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EDITING_POSITION_ITERATOR_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/editing/editing_strategy.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
@@ -98,8 +99,6 @@ extern template class CORE_EXTERN_TEMPLATE_EXPORT
     SlowPositionIteratorAlgorithm<EditingInFlatTreeStrategy>;
 
 using SlowPositionIterator = SlowPositionIteratorAlgorithm<EditingStrategy>;
-using SlowPositionIteratorInFlatTree =
-    SlowPositionIteratorAlgorithm<EditingInFlatTreeStrategy>;
 
 // ----
 
@@ -208,8 +207,6 @@ extern template class CORE_EXTERN_TEMPLATE_EXPORT
     FastPositionIteratorAlgorithm<EditingInFlatTreeStrategy>;
 
 using FastPositionIterator = FastPositionIteratorAlgorithm<EditingStrategy>;
-using FastPositionIteratorInFlatTree =
-    FastPositionIteratorAlgorithm<EditingInFlatTreeStrategy>;
 
 // --
 

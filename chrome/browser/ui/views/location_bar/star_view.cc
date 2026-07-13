@@ -7,14 +7,10 @@
 #include <string>
 
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/metrics/user_metrics.h"
-#include "base/metrics/user_metrics_action.h"
-#include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/defaults.h"
-#include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
@@ -28,18 +24,13 @@
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
-#include "components/feature_engagement/public/event_constants.h"
-#include "components/feature_engagement/public/feature_constants.h"
-#include "components/feature_engagement/public/tracker.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/user_education/common/user_education_class_properties.h"
-#include "components/variations/variations_associated_data.h"
-#include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/gfx/color_utils.h"
+#include "ui/gfx/animation/tween.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
@@ -151,18 +142,27 @@ void StarView::OnActiveStateChanged() {
     return;
   }
 
-  views::SingleAnimatedImageContainer::AnimationConfig config{
-      .direction =
-          views::SingleAnimatedImageContainer::AnimationDirection::kForward,
-      .end_behavior =
-          views::SingleAnimatedImageContainer::AnimationEndBehavior::kReset};
+  views::SingleAnimatedImageContainer::AnimationConfig config;
+  config.tween = gfx::Tween::FAST_OUT_SLOW_IN_3;
 
   if (GetActive()) {
+    config.duration = base::Milliseconds(400);
+    config.boundary = views::SingleAnimatedImageContainer::AnimationBoundary{
+        .start_offset = 0.0f, .end_offset = 0.25f};
     animated_image_container().PlayAnimation(
-        {IDR_UNSTAR_TO_STAR_LOTTIE, GetForegroundColor()}, config);
+        {IDR_STAR_LOTTIE, GetForegroundColor(),
+         views::SingleAnimatedImageContainer::AnimationDirection::kForward,
+         views::SingleAnimatedImageContainer::AnimationEndBehavior::kReset},
+        config);
   } else {
+    config.duration = base::Milliseconds(250);
+    config.boundary = views::SingleAnimatedImageContainer::AnimationBoundary{
+        .start_offset = 0.5f, .end_offset = 0.75f};
     animated_image_container().PlayAnimation(
-        {IDR_STAR_TO_UNSTAR_LOTTIE, GetForegroundColor()}, config);
+        {IDR_STAR_LOTTIE, GetForegroundColor(),
+         views::SingleAnimatedImageContainer::AnimationDirection::kForward,
+         views::SingleAnimatedImageContainer::AnimationEndBehavior::kReset},
+        config);
   }
 }
 

@@ -27,6 +27,7 @@
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -505,6 +506,9 @@ void ProfilePickerFlowController::Init() {
   // If an initial email was provided, switch to the account selection step and
   // prefill the email field.
   if (!initial_email_.empty()) {
+    signin_metrics::LogSignInOffered(
+        signin_metrics::AccessPoint::kUserManagerWithPrefilledEmail,
+        signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO);
     SwitchToIdentityStepsFromAccountSelection(
         StepSwitchFinishedCallback(),
         signin_metrics::AccessPoint::kUserManagerWithPrefilledEmail,
@@ -735,16 +739,21 @@ void ProfilePickerFlowController::PickProfile(
     profile_picked_time_on_startup_ = base::TimeTicks::Now();
   }
 
-  bool open_command_line_urls = ProfilePicker::GetOpenCommandLineUrlsInNextProfileOpened();
+  bool open_command_line_urls =
+      ProfilePicker::GetOpenCommandLineUrlsInNextProfileOpened();
   ProfilePicker::SetOpenCommandLineUrlsInNextProfileOpened(false);
 
-  profiles::SwitchToProfile(
-      profile_path, /*always_create=*/false,
+  base::OnceCallback<void(Browser*)> switch_to_profile_complete_callback =
       base::BindOnce(&ProfilePickerFlowController::OnSwitchToProfileComplete,
                      weak_ptr_factory_.GetWeakPtr(), args.open_settings,
                      args.exit_flow_after_profile_picked,
-                     std::move(pick_profile_complete_callback)),
-      open_command_line_urls);
+                     std::move(pick_profile_complete_callback));
+
+  g_browser_process->profile_manager()->CreateProfileAsync(
+      profile_path,
+      base::BindOnce(&ProfilePickerFlowController::OnProfileLoadedForPicking,
+                     weak_ptr_factory_.GetWeakPtr(), open_command_line_urls,
+                     std::move(switch_to_profile_complete_callback)));
 }
 
 void ProfilePickerFlowController::OnSwitchToProfileComplete(
@@ -760,11 +769,11 @@ void ProfilePickerFlowController::OnSwitchToProfileComplete(
     return;
   }
 
-  DCHECK(browser->window());
+  DCHECK(browser->GetWindow());
   if (pick_profile_complete_callback) {
     std::move(pick_profile_complete_callback).Run(true);
   }
-  Profile* profile = browser->profile();
+  Profile* profile = browser->GetProfile();
   TRACE_EVENT1("browser",
                "ProfilePickerFlowController::OnSwitchToProfileComplete",
                "profile_path", profile->GetPath().AsUTF8Unsafe());
@@ -786,7 +795,7 @@ void ProfilePickerFlowController::OnSwitchToProfileComplete(
       std::ranges::count(entries, false, &ProfileAttributesEntry::IsOmitted);
   if (profile_count > 1 && !open_settings &&
       selected_profile_target_url_.is_empty()) {
-    browser->window()->MaybeShowProfileSwitchIPH();
+    BrowserWindow::FromBrowser(browser)->MaybeShowProfileSwitchIPH();
   }
 
   if (profile->IsGuestSession()) {
@@ -867,4 +876,20 @@ ProfilePickerFlowController::RegisterPostIdentitySteps(
       ProfileManagementFlowController::Step::kFinishFlow);
 
   return post_identity_steps;
+}
+
+void ProfilePickerFlowController::OnProfileLoadedForPicking(
+    bool open_command_line_urls,
+    base::OnceCallback<void(Browser*)> pick_profile_complete_callback,
+    Profile* profile) {
+  CHECK(pick_profile_complete_callback);
+  if (!profile) {
+    std::move(pick_profile_complete_callback).Run(nullptr);
+    return;
+  }
+
+  // TODO(b/512836948): Conditionally display the signals disclaimer dialog.
+  profiles::OpenBrowserWindowForProfile(
+      std::move(pick_profile_complete_callback), /*always_create=*/false,
+      /*is_new_profile=*/false, open_command_line_urls, profile);
 }

@@ -45,7 +45,8 @@ const char* kUnsafeHeaders[] = {
     net::HttpRequestHeaders::kHost,
 
     // Trailers are not supported.
-    "Trailer", "Te",
+    "Trailer",
+    "Te",
 
     // Websockets use a different API.
     "Upgrade",
@@ -63,19 +64,7 @@ const char* kUnsafeHeaders[] = {
     "Set-Cookie",
 
     // TODO(mmenke): Figure out what to do about the remaining headers:
-    // Connection, Cookie, Date, Expect, Referer, Via.
-};
-
-// Headers that consumers are currently allowed to set, with the exception of
-// certain values could cause problems.
-// TODO(mmenke): Gather stats on these, and see if these headers can be banned
-// outright instead.
-const struct {
-  const char* name;
-  const char* value;
-} kUnsafeHeaderValues[] = {
-    // Websockets use a different API.
-    {net::HttpRequestHeaders::kConnection, "Upgrade"},
+    // Cookie, Date, Expect, Referer, Via.
 };
 
 }  // namespace
@@ -86,10 +75,19 @@ bool IsRequestHeaderSafe(std::string_view key, std::string_view value) {
       return false;
   }
 
-  for (const auto& header : kUnsafeHeaderValues) {
-    if (base::EqualsCaseInsensitiveASCII(header.name, key) &&
-        base::EqualsCaseInsensitiveASCII(header.value, value)) {
-      return false;
+  // The Connection header is a comma-separated list of tokens. Per RFC 9110
+  // section 7.6.1, intermediaries treat each listed token as the name of a
+  // header to remove before forwarding, so only allow the connection-management
+  // options that the network stack itself uses. Websockets use a different API,
+  // so "upgrade" is not needed here.
+  if (base::EqualsCaseInsensitiveASCII(key,
+                                       net::HttpRequestHeaders::kConnection)) {
+    net::HttpUtil::ValuesIterator tokens(value, ',');
+    while (tokens.GetNext()) {
+      if (!base::EqualsCaseInsensitiveASCII(tokens.value(), "close") &&
+          !base::EqualsCaseInsensitiveASCII(tokens.value(), "keep-alive")) {
+        return false;
+      }
     }
   }
 
@@ -122,7 +120,8 @@ bool AreRequestHeadersSafe(const net::HttpRequestHeaders& request_headers) {
   return true;
 }
 
-bool ContainsForbiddenSecurityHeader(net::HttpRequestHeaders& headers) {
+bool ContainsForbiddenSecurityHeader(net::HttpRequestHeaders& headers,
+                                     std::string* out_forbidden_header_name) {
   static const bool enabled =
       base::FeatureList::IsEnabled(features::kRestrictForbiddenSecurityHeaders);
   if (!enabled) {
@@ -203,6 +202,9 @@ bool ContainsForbiddenSecurityHeader(net::HttpRequestHeaders& headers) {
     if (base::StartsWith(it.name(), "Sec-",
                          base::CompareCase::INSENSITIVE_ASCII)) {
       if (!sanitize_and_check_security_header(it.name(), it.value())) {
+        if (out_forbidden_header_name) {
+          *out_forbidden_header_name = std::string(it.name());
+        }
         return true;
       }
     }

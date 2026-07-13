@@ -81,6 +81,7 @@
 #include "third_party/blink/renderer/platform/fonts/font_variant_emoji.h"
 #include "third_party/blink/renderer/platform/fonts/opentype/font_settings.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/transforms/matrix_3d_transform_operation.h"
 #include "third_party/blink/renderer/platform/transforms/matrix_transform_operation.h"
 #include "third_party/blink/renderer/platform/transforms/perspective_transform_operation.h"
@@ -220,9 +221,14 @@ const blink::Color ComputedStyleUtils::BorderSideColor(
              border_style == EBorderStyle::kOutset ||
              border_style == EBorderStyle::kRidge ||
              border_style == EBorderStyle::kGroove) {
-    // FIXME: Treating styled borders with initial color differently causes
-    // problems, see crbug.com/316559, crbug.com/276231
-    current_color = blink::Color(238, 238, 238);
+    if (RuntimeEnabledFeatures::TableDefaultBorderColorCurrentColorEnabled() &&
+        style.IsDisplayTableType()) {
+      current_color = style.GetCurrentColor();
+    } else {
+      // FIXME: Treating styled borders with initial color differently causes
+      // problems, see crbug.com/316559, crbug.com/276231
+      current_color = blink::Color(238, 238, 238);
+    }
   } else {
     current_color = style.GetCurrentColor();
   }
@@ -2353,9 +2359,14 @@ std::optional<gfx::SizeF> ComputedStyleUtils::UsedBoxSize(
       return std::nullopt;
     }
     gfx::SizeF size = layout_object.ObjectBoundingBox().size();
-    // The object bounding box does not have zoom applied. Multiply with zoom
-    // here since we'll divide by it when we produce the CSS value.
-    size.Scale(layout_object.StyleRef().EffectiveZoom());
+    if (!RuntimeEnabledFeatures::SvgNewZoomEnabled()) {
+      // The CSS value producer will divide by EffectiveZoom, so the value
+      // returned here must be in zoomed-pixel units.
+      // Under SvgNewZoom, ObjectBoundingBox() is already in zoomed CSS pixels
+      // (since SVG element layout absorbs EffectiveZoom). Under the old model,
+      // the bbox is in CSS pixels, so we must multiply by zoom.
+      size.Scale(layout_object.StyleRef().EffectiveZoom());
+    }
     return size;
   }
   if (const auto* box = DynamicTo<LayoutBox>(layout_object)) {
@@ -3606,7 +3617,7 @@ CSSValue* ComputedStyleUtils::ValueForShape(const ComputedStyle& style,
 
   CSSValueList* list = CSSValueList::CreateSpaceSeparated();
   list->Append(*ValueForBasicShape(style, shape_value->Shape()));
-  if (shape_value->CssBox() != ShapeBox::kMissing) {
+  if (shape_value->CssBox() != ShapeBox::kMarginBox) {
     list->Append(*CSSIdentifierValue::Create(shape_value->CssBox()));
   }
   return list;
@@ -4284,7 +4295,7 @@ CSSValueList* ComputedStyleUtils::ValueForGapDecorationRuleShorthand(
       shorthand.properties()[2]->CSSValueFromComputedStyle(
           style, layout_object, allow_visited_style, value_phase));
 
-  const size_t count = width_values->length();
+  const wtf_size_t count = width_values->length();
 
   // If the longhands differ in length, return nullptr.
   if (count != style_values->length() || count != color_values->length()) {
@@ -4293,7 +4304,7 @@ CSSValueList* ComputedStyleUtils::ValueForGapDecorationRuleShorthand(
 
   CSSValueList* result = CSSValueList::CreateCommaSeparated();
 
-  for (size_t i = 0; i < count; ++i) {
+  for (wtf_size_t i = 0; i < count; ++i) {
     const auto* style_repeat_value =
         DynamicTo<cssvalue::CSSRepeatValue>(style_values->Item(i));
     const auto* color_repeat_value =
@@ -4338,7 +4349,7 @@ CSSValueList* ComputedStyleUtils::ValueForGapDecorationRuleShorthand(
         return nullptr;
       }
 
-      for (size_t j = 0; j < rules_count; ++j) {
+      for (wtf_size_t j = 0; j < rules_count; ++j) {
         CSSValueList* gap_rule =
             GetValueListForGapRule(width_repeat_value->Values().Item(j),
                                    style_repeat_value->Values().Item(j),

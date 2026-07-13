@@ -16,11 +16,14 @@
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/map_util.h"
+#include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
+#include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -36,6 +39,7 @@
 #include "components/actor/core/journal_details_builder.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
+#include "components/autofill/core/browser/filling/field_filling_skip_reason.h"
 #include "components/autofill/core/browser/filling/form_filler.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
@@ -55,6 +59,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "url/gurl.h"
 #include "url/origin.h"
 
 namespace autofill {
@@ -826,6 +831,10 @@ ActorFormFillingServiceImpl::FillOrPreviewFormImpl(
     if (!filling_observer_) {
       filling_observer_ =
           std::make_unique<ActorFillingObserver>(autofill_manager.client());
+      filling_observer_->SetSkipReasonsCallback(base::BindRepeating(
+          &ActorFormFillingServiceImpl::LogSkipReasonsToJournal,
+          weak_ptr_factory_.GetWeakPtr(),
+          tab.GetContents()->GetLastCommittedURL()));
     }
     filling_observer_->ObserveNewFilling(fill_data->field_ids);
   }
@@ -846,13 +855,13 @@ ActorFormFillingServiceImpl::FillOrPreviewFormImpl(
                                *form_structure, trigger_field_id,
                                fill_data->split_part, action_persistence);
                        autofill_manager.FillOrPreviewForm(
-                           action_persistence, form_structure->ToFormData(),
+                           action_persistence, form_structure->global_id(),
                            trigger_field_id, &autofill_profile,
                            AutofillTriggerSource::kGlic, blocked_fields);
                      },
                      [&](const CreditCard& credit_card) {
                        autofill_manager.FillOrPreviewForm(
-                           action_persistence, form_structure->ToFormData(),
+                           action_persistence, form_structure->global_id(),
                            trigger_field_id, &credit_card,
                            AutofillTriggerSource::kGlic,
                            /*blocked_fields=*/{});
@@ -871,6 +880,39 @@ ActorFormFillingServiceImpl::FillOrPreviewFormImpl(
     }
   }
   return std::nullopt;
+}
+
+void ActorFormFillingServiceImpl::LogSkipReasonsToJournal(
+    const GURL& url,
+    const FieldGlobalId& trigger_field_id,
+    mojom::ActionPersistence action_persistence,
+    const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&
+        skip_reasons) {
+  ::actor::JournalDetailsBuilder builder;
+  bool has_skipped_fields = false;
+
+  for (const auto& [field_id, reasons] : skip_reasons) {
+    if (!reasons.empty()) {
+      has_skipped_fields = true;
+      builder.Add(
+          base::StrCat(
+              {"field_", base::ToString(field_id.renderer_id.value())}),
+          base::JoinString(base::ToVector(reasons,
+                                          [](FieldFillingSkipReason reason) {
+                                            return base::ToString(
+                                                static_cast<int>(reason));
+                                          }),
+                           ", "));
+    }
+  }
+
+  if (has_skipped_fields) {
+    std::string_view action_str =
+        (action_persistence == mojom::ActionPersistence::kFill) ? "Fill"
+                                                                : "Preview";
+    journal_->Log(url, task_id_, "ActorFormFillingServiceImpl::LogSkipReasons",
+                  std::move(builder).Add("action", action_str).Build());
+  }
 }
 
 }  // namespace autofill

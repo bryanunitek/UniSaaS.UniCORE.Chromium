@@ -25,6 +25,7 @@ namespace {
 
 constexpr char kPathPrefix[] = "layout_constants";
 constexpr char kPathV0[] = "layout_constants_v0.css";
+constexpr int kAvatarChipIconLabelSpacing = 6;
 
 std::string_view LayoutConstantToCssVarName(LayoutConstant layout_constant) {
   using enum LayoutConstant;
@@ -226,6 +227,17 @@ std::string WebUIToolbarLayoutCssHelper::GenerateLayoutConstantsCss() {
   AddInsets("--location-bar-icon-interior-padding",
             GetLayoutInsets(LOCATION_BAR_ICON_INTERIOR_PADDING), css_string);
 
+  AddInsets("--app-menu-chip-padding",
+            GetLayoutInsets(BROWSER_APP_MENU_CHIP_PADDING), css_string);
+
+  AddInsets("--avatar-chip-padding", GetLayoutInsets(AVATAR_CHIP_PADDING),
+            css_string);
+  AddInsets("--toolbar-button-padding", GetLayoutInsets(TOOLBAR_BUTTON),
+            css_string);
+  base::StrAppend(&css_string,
+                  {"--avatar-chip-icon-label-spacing:",
+                   base::NumberToString(kAvatarChipIconLabelSpacing), "px;"});
+
   // Add fonts.
   const auto& typography_provider = views::TypographyProvider::Get();
   AddFontVariables("--omnibox-primary", CONTEXT_OMNIBOX_PRIMARY,
@@ -238,6 +250,9 @@ std::string WebUIToolbarLayoutCssHelper::GenerateLayoutConstantsCss() {
                    views::style::STYLE_BODY_4_EMPHASIS, typography_provider,
                    css_string);
   AddFontVariables("--permission-chip", views::style::CONTEXT_BUTTON_MD,
+                   views::style::STYLE_PRIMARY, typography_provider,
+                   css_string);
+  AddFontVariables("--toolbar-button", CONTEXT_TOOLBAR_BUTTON,
                    views::style::STYLE_PRIMARY, typography_provider,
                    css_string);
 
@@ -330,21 +345,29 @@ void WebUIToolbarLayoutCssHelper::AddFontVariables(
     int style,
     const views::TypographyProvider& typography_provider,
     std::string& out) {
-  const gfx::FontList& font = typography_provider.GetFont(context, style);
-  DCHECK_EQ(1u, font.GetFonts().size());
-  std::string_view font_family = font.GetPrimaryFont().GetFontName();
-  // Convert internal Mac font name back to CSS name.
-  if (font_family == ".AppleSystemUIFont") {
-    font_family = "system-ui";
+  const gfx::FontList& font_list = typography_provider.GetFont(context, style);
+
+  std::vector<std::string> escaped_font_names;
+  for (const gfx::Font& font : font_list.GetFonts()) {
+    std::string_view font_name = font.GetFontName();
+    // Convert internal Mac font name back to CSS name.
+    if (font_name == ".AppleSystemUIFont") {
+      font_name = "system-ui";
+    }
+    escaped_font_names.push_back(
+        base::StrCat({"\"", EscapeCssFontName(font_name), "\""}));
   }
+
+  std::string font_family_css = base::JoinString(escaped_font_names, ",");
+
   base::StrAppend(
       &out,
       // clang-format off
-      {prefix, "-font-family:\"",
-       EscapeCssFontName(font_family), "\";",
-       prefix, "-font-size:", base::NumberToString(font.GetFontSize()), "px;",
+      {prefix, "-font-family:", font_family_css, ";",
+       prefix, "-font-size:",
+       base::NumberToString(font_list.GetFontSize()), "px;",
        prefix, "-font-weight:",
-       base::NumberToString(static_cast<int>(font.GetFontWeight())), ";",
+       base::NumberToString(static_cast<int>(font_list.GetFontWeight())), ";",
        prefix, "-line-height:",
        base::NumberToString(typography_provider.GetLineHeight(context, style)),
        "px;"});

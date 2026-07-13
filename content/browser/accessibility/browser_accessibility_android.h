@@ -82,6 +82,10 @@ class CONTENT_EXPORT BrowserAccessibilityAndroid
   bool IsVisibleToUser() const;
   bool ShouldUsePaneTitle() const;
 
+  const std::string& GetMathTag() const;
+  const std::string& GetMathIntent() const;
+  const std::string& GetMathArg() const;
+
   // This returns true for all nodes that we should navigate to.
   // Nodes that have a generic role, no accessible name, and aren't
   // focusable or clickable aren't interesting.
@@ -386,6 +390,17 @@ class CONTENT_EXPORT BrowserAccessibilityAndroid
 
   // Get image description string.
   std::u16string GetImageAnnotationText() const;
+
+  // Get canvas description string.
+  std::u16string GetCanvasAnnotationText() const;
+
+  // Returns true if we should inform the user that this image is unlabeled
+  // (e.g., to invite them to enable image descriptions).
+  bool ShouldInformUserAboutUnlabeledImage(
+      ax::mojom::ImageAnnotationStatus status) const;
+
+  std::optional<std::u16string> GetPopupRoleDescription(
+      ax::mojom::HasPopup has_popup) const;
 
   std::u16string old_value_;
   std::u16string new_value_;

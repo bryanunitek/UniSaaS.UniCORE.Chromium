@@ -525,6 +525,11 @@ void EmitEdge(const std::string& lhs, const std::string& rhs) {
   Emit(llvm::formatv("e {0} {1}\n", lhs, rhs));
 }
 
+// Emits an exclusion edge to prevent a node entirely from being rewritten.
+void EmitExclusion(const std::string& node) {
+  EmitEdge(node, "global_exclude");
+}
+
 // Emits a source node.
 //
 // A source node is a node that triggers the rewrite. All rewrites will start
@@ -653,11 +658,14 @@ clang::SourceRange GetExprRange(const clang::Expr& expr,
   }
 
   if (const auto* decl_ref = clang::dyn_cast<clang::DeclRefExpr>(&expr)) {
-    assert(decl_ref->getBeginLoc() == decl_ref->getEndLoc() &&
-           "DeclRefExpr doesn't have the expected end loc.");
+    // The range [beginLoc, EndLoc] encompasses the qualified namespace before
+    // the decl name. Therefore if there are no namespaces, they will be equal
+    // to each other.
+    // <namespace qualifiers>::<decl_name>
     clang::SourceLocation begin_loc = ToSpellingLoc(decl_ref->getBeginLoc());
+    clang::SourceLocation end_loc = ToSpellingLoc(decl_ref->getEndLoc());
     auto name = decl_ref->getNameInfo().getName().getAsString();
-    return {begin_loc, begin_loc.getLocWithOffset(name.size())};
+    return {begin_loc, end_loc.getLocWithOffset(name.size())};
   }
 
   if (const auto* call_expr = clang::dyn_cast<clang::CallExpr>(&expr)) {
@@ -669,6 +677,30 @@ clang::SourceRange GetExprRange(const clang::Expr& expr,
             ToSpellingLoc(call_expr->getRParenLoc()).getLocWithOffset(1)};
   }
 
+  if (const auto* cast_expr = clang::dyn_cast<clang::ImplicitCastExpr>(&expr)) {
+    // Unwrap implicit casts to find the range of the underlying expression.
+    //
+    // This prevents assertion crashes (`begin_location == end_location`) that
+    // are triggered when a multi-token expression falls back to the default
+    // single-token check.
+    //
+    // For example, in:
+    //   a += b + get_offset();
+    // where `a` is a pointer and `b` is a short, the RHS `b + get_offset()`
+    // is wrapped in an ImplicitCastExpr (IntegralCast to ptrdiff_t).
+    // Unwrapping it allows us to visit the BinaryOperator `b + get_offset()`
+    // and correctly resolve its range:
+    //   `b + get_offset()`
+    return GetExprRange(*cast_expr->getSubExpr(), source_manager, lang_opts);
+  }
+
+  if (const auto* paren_expr = clang::dyn_cast<clang::ParenExpr>(&expr)) {
+    // Prevent crashes on parenthesized expressions (e.g., (width - 1)) by
+    // returning the full range from the opening to the closing parenthesis.
+    return {ToSpellingLoc(paren_expr->getLParen()),
+            ToSpellingLoc(paren_expr->getRParen()).getLocWithOffset(1)};
+  }
+
   if (auto* binary_op = clang::dyn_cast<clang::BinaryOperator>(&expr)) {
     // Disclaimer: This doesn't support edge cases like following.
     //     #define MY_MACRO(arg) arg
@@ -677,6 +709,14 @@ clang::SourceRange GetExprRange(const clang::Expr& expr,
     return {
         ToSpellingLoc(expr.getBeginLoc()),
         GetExprRange(*binary_op->getRHS(), source_manager, lang_opts).getEnd()};
+  }
+
+  if (const auto* cast_expr = clang::dyn_cast<clang::ExplicitCastExpr>(&expr)) {
+    clang::SourceLocation end_loc = ToSpellingLoc(cast_expr->getEndLoc());
+    size_t token_length =
+        clang::Lexer::MeasureTokenLength(end_loc, source_manager, lang_opts);
+    return {ToSpellingLoc(cast_expr->getBeginLoc()),
+            end_loc.getLocWithOffset(token_length)};
   }
 
   if (auto* uett_expr =
@@ -722,6 +762,31 @@ std::string GetTypeAsString(const clang::QualType& qual_type,
   return qual_type.getAsString(printing_policy);
 }
 
+// Matchers running under `TK_IgnoreUnlessSpelledInSource` bypass `ParenExpr`
+// nodes and bind directly to the underlying expression (e.g., `DeclRefExpr`).
+// This function traverses up the AST parents of the given expression to find
+// the outermost `ParenExpr` wrapping it.
+//
+// This is necessary when we need the source range of the expression including
+// its parentheses, for example, to ensure that `.data()` is appended outside
+// the parentheses in pointer arithmetic:
+//     expected_data + (index) -> expected_data.subspan(...((index))...).data()
+// rather than inside:
+//     expected_data + (index) -> expected_data.subspan(...((index.data()))...)
+const clang::Expr* GetParenAwareExpr(const clang::Expr* expr,
+                                     clang::ASTContext& context) {
+  const clang::Expr* current = expr;
+  for (auto parents = context.getParents(*expr); !parents.empty();
+       parents = context.getParents(parents[0])) {
+    const auto* paren = parents[0].get<clang::ParenExpr>();
+    if (!paren) {
+      break;
+    }
+    current = paren;
+  }
+  return current;
+}
+
 // It is intentional that this function ignores cast expressions and applies
 // the `.data()` addition to the internal expression. if we have:
 // type* ptr = reinterpret_cast<type*>(buf);  where buf needs to be rewritten
@@ -749,6 +814,7 @@ clang::SourceRange getSourceRange(const MatchFinder::MatchResult& result) {
 
   if (auto* op = result.Nodes.getNodeAs<clang::Expr>("binaryOperator")) {
     auto* sub_expr = result.Nodes.getNodeAs<clang::Expr>("binary_op_rhs");
+    sub_expr = GetParenAwareExpr(sub_expr, *result.Context);
     auto end_loc = GetExprRange(*sub_expr, source_manager, lang_opts).getEnd();
     // Disclaimer: This doesn't support edge cases like following.
     //     #define MACRO(var) var
@@ -812,6 +878,103 @@ clang::TypeLoc UnwrapTypedefTypeLoc(clang::TypeLoc type_loc) {
   return type_loc;
 }
 
+bool isConstToken(const clang::Token& tok) {
+  const bool is_const_keyword = tok.is(clang::tok::kw_const);
+  const bool is_raw_identifier_and_const =
+      tok.is(clang::tok::raw_identifier) && tok.getRawIdentifier() == "const";
+  return is_const_keyword || is_raw_identifier_and_const;
+}
+
+bool isVolatileToken(const clang::Token& tok) {
+  return tok.is(clang::tok::kw_volatile) ||
+         (tok.is(clang::tok::raw_identifier) &&
+          tok.getRawIdentifier() == "volatile");
+}
+
+template <typename F>
+bool HasQualifierInRange(clang::SourceLocation begin,
+                         clang::SourceLocation end,
+                         const clang::SourceManager& source_manager,
+                         const clang::LangOptions& lang_opts,
+                         F qualifierFunc) {
+  clang::Token tok;
+  if (!clang::Lexer::getRawToken(begin, tok, source_manager, lang_opts,
+                                 /*KeepWhitespace=*/false)) {
+    if (qualifierFunc(tok)) {
+      return true;
+    }
+  }
+
+  auto get_next_tok = [&](clang::SourceLocation loc) {
+    return clang::Lexer::findNextToken(loc, source_manager, lang_opts);
+  };
+  for (auto maybe_tok = get_next_tok(begin);
+       maybe_tok && maybe_tok->getLocation() < end;
+       maybe_tok = get_next_tok(maybe_tok->getLocation())) {
+    if (qualifierFunc(*maybe_tok)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+template <typename F>
+bool HasQualifierNode(const clang::TypeLoc* type_loc,
+                      const clang::SourceManager& source_manager,
+                      const clang::LangOptions& lang_opts,
+                      F qualifierFunc) {
+  return HasQualifierInRange(type_loc->getBeginLoc(), type_loc->getEndLoc(),
+                             source_manager, lang_opts, qualifierFunc);
+}
+
+template <typename F>
+clang::SourceLocation ExpandLeft(clang::SourceLocation start,
+                                 const clang::SourceManager& source_manager,
+                                 const clang::LangOptions& lang_opts,
+                                 F predicate) {
+  auto get_prev_token = [&](clang::SourceLocation src) {
+    return clang::Lexer::findPreviousToken(src, source_manager, lang_opts,
+                                           /*IncludeComments=*/false);
+  };
+  clang::SourceLocation current = start;
+  for (std::optional<clang::Token> prev = get_prev_token(current);
+       prev.has_value(); prev = get_prev_token(current)) {
+    auto prev_loc = prev->getLocation();
+    if (prev_loc.isInvalid() ||
+        !source_manager.isWrittenInSameFile(start, prev_loc)) {
+      // We have reached beyond our starting file (likely a macro),
+      // return whatever valid range we found before updating with `prev`.
+      return current;
+    }
+    if (!predicate(*prev)) {
+      // This isn't one of the tokens we wanted so return the valid
+      // range before updating.
+      return current;
+    }
+    // The previous token should be included as well; extend our valid range.
+    current = prev_loc;
+  }
+  return current;
+}
+
+void ReportQualifierError(clang::SourceLocation new_begin,
+                          const clang::SourceManager& source_manager,
+                          const clang::LangOptions& lang_opts) {
+  std::optional<clang::Token> failed_prev =
+      clang::Lexer::findPreviousToken(new_begin, source_manager, lang_opts,
+                                      /*IncludeComments=*/false);
+  std::string_view got_text = "unknown";
+  if (failed_prev.has_value()) {
+    got_text = clang::Lexer::getSourceText(
+        clang::CharSourceRange::getCharRange(
+            {failed_prev->getLocation(), failed_prev->getEndLoc()}),
+        source_manager, lang_opts);
+  }
+  llvm::errs()
+      << "WARNING: `getNodeFromPointerTypeLoc()` expected `const` or `volatile`"
+      << ", but got: " << got_text << " instead.\n";
+}
+
 std::string getNodeFromPointerTypeLoc(const clang::PointerTypeLoc* type_loc,
                                       const MatchFinder::MatchResult& result) {
   const clang::SourceManager& source_manager = *result.SourceManager;
@@ -828,45 +991,53 @@ std::string getNodeFromPointerTypeLoc(const clang::PointerTypeLoc* type_loc,
   // *  `QualifiedTypeLoc` deliberately does not provide source locations
   //    for qualifiers [1].
   //
-  // As a best effort, if we bound `qualified_type_loc`, we abuse the
-  // Lexer to back up one token behind `type_loc`. Take a deep breath
-  // and hope that it's the `const` qualifier.
+  // As a best effort, if the type is const-qualified or volatile-qualified:
+  // 1. We first check if the qualifiers are already within the source range
+  //    of `type_loc` (e.g. `const int*` or `int const*`).
+  // 2. Otherwise, we abuse the Lexer to back up and find them, extending
+  //    the range to include them.
   //
   // [1]
   // https://github.com/llvm/llvm-project/blob/6cf656eca717890a43975c026d0ae34c16c6c455/clang/include/clang/AST/TypeLoc.h#L288
-  clang::SourceRange replacement_range = [type_loc, &result, &source_manager,
+  clang::SourceRange replacement_range = [type_loc, &source_manager,
                                           &lang_opts]() {
-    const auto* qualified_type_loc =
-        result.Nodes.getNodeAs<clang::QualifiedTypeLoc>("qualified_type_loc");
+    const auto qualified_type_loc =
+        type_loc->getPointeeLoc().getAs<clang::QualifiedTypeLoc>();
     clang::SourceRange result = {type_loc->getBeginLoc(),
                                  type_loc->getEndLoc().getLocWithOffset(1)};
-    if (!qualified_type_loc ||
-        !qualified_type_loc->getType().isConstQualified()) {
+    if (qualified_type_loc.isNull()) {
       return result;
     }
-    std::optional<clang::Token> previous_token =
-        clang::Lexer::findPreviousToken(type_loc->getBeginLoc(), source_manager,
-                                        lang_opts, /*IncludeComments=*/false);
-    // If we can't find the previous token, bail out to the previous
-    // behavior.
-    if (!previous_token.has_value()) {
-      return result;
-    }
-    std::string_view hopefully_const_qualifier = clang::Lexer::getSourceText(
-        clang::CharSourceRange::getCharRange(
-            {previous_token->getLocation(), previous_token->getEndLoc()}),
-        source_manager, lang_opts);
-    if (hopefully_const_qualifier != "const") {
-      // A patch hitting this will likely fail to compile.
-      llvm::errs() << "WARNING: `getNodeFromPointerTypeLoc()` expected "
-                      "`const`, but got: "
-                   << hopefully_const_qualifier << " instead.\n";
+    const bool type_is_const = qualified_type_loc.getType().isConstQualified();
+    const bool type_is_volatile =
+        qualified_type_loc.getType().isVolatileQualified();
+    if (!type_is_const && !type_is_volatile) {
       return result;
     }
 
+    auto is_qualifier_token = [](const clang::Token& tok) {
+      return isConstToken(tok) || isVolatileToken(tok);
+    };
+
+    // Look back to extend range and find remaining qualifiers
+    const clang::SourceLocation new_begin = ExpandLeft(
+        type_loc->getBeginLoc(), source_manager, lang_opts, is_qualifier_token);
+
+    // Verify we found what we expected
+    const bool found_const =
+        HasQualifierInRange(new_begin, type_loc->getEndLoc(), source_manager,
+                            lang_opts, isConstToken);
+    const bool found_volatile =
+        HasQualifierInRange(new_begin, type_loc->getEndLoc(), source_manager,
+                            lang_opts, isVolatileToken);
+
+    if (type_is_const != found_const || type_is_volatile != found_volatile) {
+      ReportQualifierError(new_begin, source_manager, lang_opts);
+      assert(false && "failed to find const or volatile see logs");
+    }
     // Extend the replacement range leftward to include `const` in the
     // type to be rewritten.
-    result.setBegin(previous_token->getLocation());
+    result.setBegin(new_begin);
     return result;
   }();
 
@@ -880,6 +1051,17 @@ std::string getNodeFromPointerTypeLoc(const clang::PointerTypeLoc* type_loc,
       "{0}<{1}>", GetProject()->GetSpanRelativePath(result), initial_text);
 
   const std::string key = NodeKey(type_loc, source_manager);
+  const clang::QualType& qual_type = type_loc->getType();
+  // TODO(https://crbug.com/501280389): The tool currently cannot correctly
+  // strip trailing array dimensions when rewriting pointer-to-array
+  // declarations (e.g. producing syntax errors like `std::span<int[20]>
+  // p)[20]`). Exclude these declarations until declarator rewriting fully
+  // supports them.
+  if (qual_type->isPointerType() &&
+      qual_type->getPointeeType()->isArrayType()) {
+    EmitExclusion(key);
+    return key;
+  }
   EmitReplacement(key,
                   GetReplacementDirective(replacement_range, replacement_text,
                                           source_manager));
@@ -999,6 +1181,16 @@ std::string getNodeFromDecl(const clang::DeclaratorDecl* decl,
   // See test: 'tests/chrome/span-template-original.cc' for an example.
   const std::string key =
       NodeKeyFromRange(replacement_range, source_manager, type);
+  // TODO(https://crbug.com/501280389): The tool currently cannot correctly
+  // strip trailing array dimensions when rewriting pointer-to-array
+  // declarations (e.g. producing syntax errors like `std::span<int[20]>
+  // p)[20]`). Exclude these declarations until declarator rewriting fully
+  // supports them.
+  if (qual_type->isPointerType() &&
+      qual_type->getPointeeType()->isArrayType()) {
+    EmitExclusion(key);
+    return key;
+  }
   EmitReplacement(key,
                   GetReplacementDirective(replacement_range, replacement_text,
                                           source_manager));
@@ -1063,17 +1255,6 @@ clang::SourceLocation GetBinaryOperationOperatorLoc(
   assert(false && "Unexpected binaryOperation Node");
 }
 
-struct RangedReplacement {
-  clang::SourceRange range;
-  std::string text;
-};
-
-// Specifies an edit: `base::checked_cast<size_t>(...)`
-struct CheckedCastReplacement {
-  RangedReplacement opener;
-  RangedReplacement closer;
-};
-
 // There are three possible subspan expr replacements, respectively:
 // 1. No replacement (leave as is)
 // 2. Append a `u` to an integer literal.
@@ -1085,17 +1266,6 @@ SubspanExprReplacement GetSubspanExprReplacement(
     const clang::Expr* expr,
     const MatchFinder::MatchResult& result,
     std::string_view key) {
-  clang::QualType type = expr->getType();
-  const clang::ASTContext& ast_context = *result.Context;
-
-  const uint64_t size_t_bits =
-      ast_context.getTypeSize(ast_context.getSizeType());
-  const bool is_unsigned_type =
-      type == ast_context.getCorrespondingUnsignedType(type);
-  if (is_unsigned_type && ast_context.getTypeSize(type) <= size_t_bits) {
-    return {};
-  }
-
   const clang::SourceManager& source_manager = *result.SourceManager;
   const clang::SourceRange range =
       GetExprRange(*expr, source_manager, result.Context->getLangOpts());
@@ -1103,17 +1273,37 @@ SubspanExprReplacement GetSubspanExprReplacement(
   if (const auto* integer_literal =
           clang::dyn_cast<clang::IntegerLiteral>(expr)) {
     assert(integer_literal->getValue().isNonNegative());
+    if (integer_literal->getType()->isUnsignedIntegerType()) {
+      return {};
+    }
     return RangedReplacement{.range = range.getEnd(), .text = "u"};
+  }
+
+  clang::QualType type = expr->getType();
+  const clang::ASTContext& ast_context = *result.Context;
+
+  // Floating point types cannot be used as array indices or for pointer
+  // arithmetic in C++. They must be explicitly cast to an integer type first,
+  // which means the index expression itself will have an integral type, not a
+  // floating point type.
+  assert(!type->isRealFloatingType());
+  const uint64_t size_t_bits =
+      ast_context.getTypeSize(ast_context.getSizeType());
+  clang::QualType underlying_type = type;
+  if (const auto* enum_type = type->getAs<clang::EnumType>()) {
+    underlying_type = enum_type->getDecl()->getIntegerType();
+  }
+  const bool is_unsigned_type = underlying_type->isUnsignedIntegerType();
+  if (is_unsigned_type && ast_context.getTypeSize(type) <= size_t_bits) {
+    // The type is already unsigned and fits in size_t. No cast needed.
+    return {};
   }
 
   EmitReplacement(
       key, GetIncludeDirective(range, source_manager,
                                GetProject()->GetSafeConversionsIncludePath()));
   EmitReplacement(key, GetIncludeDirective(range, source_manager, "<cstdint>"));
-  return CheckedCastReplacement{
-      .opener = {.range = range.getBegin(),
-                 .text = "base::checked_cast<size_t>("},
-      .closer = {.range = range.getEnd(), .text = ")"}};
+  return GetProject()->GetCheckedCastReplacement(range);
 }
 
 // When a binary operation and rhs expr appear inside a macro expansion,
@@ -1249,6 +1439,8 @@ void AdaptBinaryOperation(const MatchFinder::MatchResult& result) {
   // a .subspan( b
   const auto* binary_op_RHS =
       GetNodeOrCrash<clang::Expr>(result, "binary_op_rhs", __FUNCTION__);
+  binary_op_RHS = GetParenAwareExpr(binary_op_RHS, *result.Context);
+
   const auto subspan_expr_replacement =
       GetSubspanExprReplacement(binary_op_RHS, result, key);
 
@@ -1296,6 +1488,7 @@ void AdaptBinaryPlusEqOperation(const MatchFinder::MatchResult& result) {
   // respectively.
   auto* lhs_expr = result.Nodes.getNodeAs<clang::Expr>("rhs_expr");
   auto* binary_op_RHS = result.Nodes.getNodeAs<clang::Expr>("binary_op_RHS");
+  binary_op_RHS = GetParenAwareExpr(binary_op_RHS, *result.Context);
   auto lhs_expr_range = GetExprRange(*lhs_expr, source_manager, lang_opts);
   auto binary_op_rhs_range =
       GetExprRange(*binary_op_RHS, source_manager, lang_opts);
@@ -1919,15 +2112,17 @@ void RewriteUnaryOperation(const MatchFinder::MatchResult& result) {
   clang::SourceRange end_replacement_range;
 
   if (is_prefix) {
-    begin_insert_text = "base::PreIncrementSpan(";
-    // Replace the '++' with "base::PreIncrementSpan(".
+    begin_insert_text =
+        std::string(GetProject()->GetPreIncrementSpanName()) + "(";
+    // Replace the '++' with the helper call.
     begin_replacement_range = op_token_range;
     // Insert ")" at the end of the operand.
     end_replacement_range =
         clang::SourceRange(operand_range.getEnd(), operand_range.getEnd());
   } else {
-    begin_insert_text = "base::PostIncrementSpan(";
-    // Insert "base::PostIncrementSpan(" at the beginning of the operand.
+    begin_insert_text =
+        std::string(GetProject()->GetPostIncrementSpanName()) + "(";
+    // Insert the helper call at the beginning of the operand.
     begin_replacement_range =
         clang::SourceRange(operand_range.getBegin(), operand_range.getBegin());
     // Replace "++"" with ")".
@@ -2873,12 +3068,15 @@ void RewriteFunctionParamAndReturnType(const MatchFinder::MatchResult& result) {
   EmitEdge(current_key, replacement_key);
   EmitEdge(replacement_key, current_key);
 
-  // Connect to the previous function decl, which is already connected to the
-  // previous previous function decl.
-  if (const clang::Decl* previous_decl = fct_decl->getPreviousDecl()) {
-    const std::string& previous_key =
-        NodeKey(previous_decl, source_manager, parm_or_return_id);
-    if (GetProject()->IsExcludedFromProject(*previous_decl)) {
+  // Connect to all redeclarations of the function (e.g. header declaration and
+  // out-of-line definition).
+  for (const clang::FunctionDecl* redecl : fct_decl->redecls()) {
+    if (redecl == fct_decl) {
+      continue;
+    }
+    const std::string& redecl_key =
+        NodeKey(redecl, source_manager, parm_or_return_id);
+    if (GetProject()->IsExcludedFromProject(*redecl)) {
       // A declaration in third party codebase is found, so we do not want to
       // rewrite the parameter/return type in a third party function. This one-
       // way edge prevents making a flow from a source to a sink, hence the
@@ -2894,10 +3092,10 @@ void RewriteFunctionParamAndReturnType(const MatchFinder::MatchResult& result) {
       //
       // where node_arg1_1st is not a sink node, so the source node reaches a
       // non-sink end node. Hence, the rewriting will be cancelled.
-      EmitEdge(current_key, previous_key);
+      EmitEdge(current_key, redecl_key);
     } else {
-      EmitEdge(current_key, previous_key);
-      EmitEdge(previous_key, current_key);
+      EmitEdge(current_key, redecl_key);
+      EmitEdge(redecl_key, current_key);
     }
   }
 

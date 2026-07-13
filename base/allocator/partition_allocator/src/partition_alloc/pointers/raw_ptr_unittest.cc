@@ -266,6 +266,18 @@ using CountingRawPtrUninitialized =
 static_assert(
     std::is_same_v<CountingRawPtrUninitialized<int>::Impl, RawPtrCountingImpl>);
 
+template <typename T>
+using CountingRawPtrUnprotectedInRelease =
+    raw_ptr<T,
+            base::RawPtrTraits::kUseCountingImplForTest |
+                base::RawPtrTraits::kAllowPtrArithmetic |
+                base::RawPtrTraits::kIsUnprotectedInRelease>;
+
+// Ensure that the `kUseCountingImplForTest` flag selects the test impl even in
+// the presence of `kIsUnprotectedInRelease`.
+static_assert(std::is_same_v<CountingRawPtrUnprotectedInRelease<int>::Impl,
+                             RawPtrCountingImpl>);
+
 struct MyStruct {
   int x;
 };
@@ -1619,7 +1631,7 @@ TEST_F(RawPtrTest, AllowUninitialized) {
 namespace base::internal {
 
 #if PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL) && \
-    !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+    !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 void HandleOOM(size_t unused_size) {
   PA_LOG(FATAL) << "Out of memory";
@@ -2448,7 +2460,7 @@ TEST_F(BackupRefPtrTest, QuarantineHook) {
 }
 
 #endif  // PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL) &&
-        // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+        // !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 #if PA_BUILDFLAG(USE_RAW_PTR_HOOKABLE_IMPL)
 

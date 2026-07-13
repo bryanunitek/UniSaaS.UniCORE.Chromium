@@ -53,7 +53,13 @@ BASE_FEATURE_PARAM(base::TimeDelta,
                    &kMultistepFilter,
                    base::Minutes(2));
 
-// JSON map of task types to string templates for contextual cues.
-BASE_FEATURE_PARAM(std::string, kCueTemplatesMap, &kMultistepFilter, "{}");
+// Enables the Send Feedback button in the contextual cue three-dot menu.
+BASE_FEATURE(kMultistepFilterSendFeedback, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// The URL to navigate to when the Send Feedback button is clicked.
+BASE_FEATURE_PARAM(std::string,
+                   kMultistepFilterSendFeedbackUrl,
+                   &kMultistepFilterSendFeedback,
+                   "");
 
 }  // namespace multistep_filter

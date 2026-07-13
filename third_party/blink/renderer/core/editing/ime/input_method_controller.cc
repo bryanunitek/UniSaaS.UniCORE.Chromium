@@ -73,6 +73,7 @@
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -224,7 +225,7 @@ int CalculateAfterDeletionLengthsInCodePoints(const String& text,
 }
 
 Element* RootEditableElementOfSelection(const FrameSelection& frame_selection) {
-  const SelectionInDOMTree& selection = frame_selection.GetSelectionInDOMTree();
+  const SelectionInDomTree& selection = frame_selection.GetSelectionInDomTree();
   if (selection.IsNone())
     return nullptr;
   // To avoid update layout, we attempt to get root editable element from
@@ -592,7 +593,7 @@ void InputMethodController::SelectComposition() const {
   // SetShouldClearTypingStyle(true), which will cause problems applying
   // formatting during composition. See https://crbug.com/803278.
   GetFrame().Selection().SetSelection(
-      SelectionInDOMTree::Builder().SetBaseAndExtent(range).Build(),
+      SelectionInDomTree::Builder().SetBaseAndExtent(range).Build(),
       SetSelectionOptions());
 
   if (widget) {
@@ -657,11 +658,11 @@ bool InputMethodController::FinishComposingText(
         EphemeralRangeForOffsets(old_offsets);
     if (old_selection_range.IsNull())
       return false;
-    const SelectionInDOMTree& selection =
-        is_forward_selection ? SelectionInDOMTree::Builder()
+    const SelectionInDomTree& selection =
+        is_forward_selection ? SelectionInDomTree::Builder()
                                    .SetAsForwardSelection(old_selection_range)
                                    .Build()
-                             : SelectionInDOMTree::Builder()
+                             : SelectionInDomTree::Builder()
                                    .SetAsBackwardSelection(old_selection_range)
                                    .Build();
     GetFrame().Selection().SetSelection(
@@ -1110,7 +1111,7 @@ void InputMethodController::SetComposition(
   // the stack could end up not corresponding to the TypingCommand. Make sure we
   // don't crash in these cases (it's unclear what the composition range should
   // be set to in these cases, so we don't worry too much about that).
-  SelectionInDOMTree selection;
+  SelectionInDomTree selection;
   if (GetEditor().GetUndoStack().CanUndo()) {
     const UndoStep* undo_step = *GetEditor().GetUndoStack().UndoSteps().begin();
     const SelectionForUndoStep& undo_selection = undo_step->EndingSelection();
@@ -1183,7 +1184,7 @@ void InputMethodController::SetComposition(
         CompositionEphemeralRange(), Color::kTransparent,
         ui::mojom::ImeTextSpanThickness::kThin,
         ui::mojom::ImeTextSpanUnderlineStyle::kSolid, Color::kTransparent,
-        LayoutTheme::GetTheme().PlatformDefaultCompositionBackgroundColor());
+        LayoutTheme::PlatformDefaultCompositionBackgroundColor());
     return;
   }
 
@@ -1334,7 +1335,7 @@ bool InputMethodController::SetSelectionOffsets(
     return false;
 
   GetFrame().Selection().SetSelection(
-      SelectionInDOMTree::Builder().SetBaseAndExtent(range).Build(),
+      SelectionInDomTree::Builder().SetBaseAndExtent(range).Build(),
       SetSelectionOptions::Builder()
           .SetShouldCloseTyping(typing_continuation == TypingContinuation::kEnd)
           .SetShouldShowHandle(show_handle)
@@ -1443,8 +1444,8 @@ bool InputMethodController::DeleteSelection() {
 }
 
 bool InputMethodController::DeleteSelectionWithoutAdjustment() {
-  const SelectionInDOMTree& selection_in_dom_tree =
-      GetFrame().Selection().GetSelectionInDOMTree();
+  const SelectionInDomTree& selection_in_dom_tree =
+      GetFrame().Selection().GetSelectionInDomTree();
   if (selection_in_dom_tree.IsCaret())
     return true;
 
@@ -1818,12 +1819,33 @@ int InputMethodController::TextInputFlags() const {
     }
   }
 
-  if (const AtomicString& autocorrect =
-          element->FastGetAttribute(html_names::kAutocorrectAttr)) {
-    if (EqualIgnoringAsciiCase(autocorrect, keywords::kOn)) {
-      flags |= kWebTextInputFlagAutocorrectOn;
-    } else if (EqualIgnoringAsciiCase(autocorrect, keywords::kOff)) {
-      flags |= kWebTextInputFlagAutocorrectOff;
+  if (RuntimeEnabledFeatures::WebAutocorrectByDefaultEnabled()) {
+    if (auto* html_element = DynamicTo<HTMLElement>(element)) {
+      // https://html.spec.whatwg.org/multipage/interaction.html#autocorrection
+      // The used autocorrection state is always On or Off (HTMLElement::
+      // autocorrect()), but several IME backends honor only the Off flag and
+      // otherwise apply their own (enabled) default. Treat Off as authoritative
+      // while emitting On only when the element explicitly requests it.
+      if (!html_element->autocorrect()) {
+        flags |= kWebTextInputFlagAutocorrectOff;
+      } else if (html_element->FastHasAttribute(html_names::kAutocorrectAttr)) {
+        // An explicit attribute that is present here resolves to On: an "off"
+        // value (or a URL/Email/Password type) already took the Off branch
+        // above, and the attribute's invalid and empty value defaults are both
+        // On.
+        flags |= kWebTextInputFlagAutocorrectOn;
+      }
+    }
+  } else {
+    // Without the feature, only an explicit autocorrect attribute sets a flag;
+    // the used-state defaulting and form-owner inheritance are not applied.
+    if (const AtomicString& autocorrect =
+            element->FastGetAttribute(html_names::kAutocorrectAttr)) {
+      if (EqualIgnoringAsciiCase(autocorrect, keywords::kOn)) {
+        flags |= kWebTextInputFlagAutocorrectOn;
+      } else if (EqualIgnoringAsciiCase(autocorrect, keywords::kOff)) {
+        flags |= kWebTextInputFlagAutocorrectOff;
+      }
     }
   }
 

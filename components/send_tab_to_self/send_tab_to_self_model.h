@@ -13,6 +13,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/observer_list.h"
+#include "components/send_tab_to_self/metrics_util.h"
 #include "components/send_tab_to_self/page_context.h"
 #include "components/send_tab_to_self/send_tab_to_self_entry.h"
 #include "components/send_tab_to_self/send_tab_to_self_model_observer.h"
@@ -63,10 +64,17 @@ class SendTabToSelfModel {
   virtual std::vector<const SendTabToSelfEntry*>
   GetUnopenedEntriesTargetedToLocalDevice() const = 0;
 
-  // Adds |url| at the top of the entries. The entry title will be a
-  // trimmed copy of |title|. Allows clients to modify the state of the model
+  // Returns opened entries targeted to the local device.
+  virtual std::vector<const SendTabToSelfEntry*>
+  GetOpenedEntriesTargetedToLocalDevice() const = 0;
+
+  // Adds `url` at the top of the entries. The entry title will be a
+  // trimmed copy of `title`. Allows clients to modify the state of the model
   // as driven by user behaviors.
-  // Returns the entry if it was successfully added to the local model.
+  // Returns the entry if it was successfully added to the local model. The
+  // operation requires `url` to be valid (as per
+  // SendTabToSelfEntry::IsValidUrl()) to succeed; otherwise, it returns nullptr
+  // and `commit_confirmation` is invoked with kFailureInvalidUrl.
   // `commit_confirmation` is an asynchronous callback that will be invoked
   // once the entry has been successfully queued in the local sync pipeline or
   // if it failed to be queued. Callers do not need to check IsReady() before
@@ -78,9 +86,10 @@ class SendTabToSelfModel {
       const std::string& target_device_cache_guid,
       const PageContext& context,
       NavigationHistory navigation_history,
-      base::OnceCallback<void(SendTabToSelfResult)> commit_confirmation) = 0;
+      base::OnceCallback<void(SendTabToSelfResult)> commit_confirmation,
+      ShareEntryPoint entry_point) = 0;
 
-  // Dismiss entry with key |guid|. Allows clients to modify the state
+  // Dismiss entry with key `guid`. Allows clients to modify the state
   // of the model as driven by user behaviors.
   virtual void DismissEntry(std::string_view guid) = 0;
 
@@ -91,6 +100,11 @@ class SendTabToSelfModel {
   // the tab can be additionally received/displayed by layers other than
   // SendTabToSelfModel, to avoid showing the same notification twice.
   virtual void MarkEntryOpened(std::string_view guid) = 0;
+
+  // Marks the entry as activated (interacted with by the user) and records
+  // activation metrics.
+  virtual void MarkEntryActivated(std::string_view guid,
+                                  ShareActivatedEntryPoint entry_point) = 0;
 
   // Guarantee that the model is operational and syncing, i.e., the local
   // database is started and the initial data has been downloaded.

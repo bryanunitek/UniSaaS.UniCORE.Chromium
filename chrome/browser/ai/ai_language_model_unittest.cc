@@ -85,7 +85,7 @@ using Role = ::blink::mojom::AILanguageModelPromptRole;
 constexpr uint32_t kTestMaxContextToken = 10u;
 constexpr uint32_t kTestDefaultTopK = 1u;
 constexpr float kTestDefaultTemperature = 0.0f;
-constexpr uint32_t kTestMaxTopK = 50u;
+constexpr uint32_t kTestMaxTopK = 200u;
 constexpr float kTestMaxTemperature = 1.5;
 constexpr uint32_t kTestMaxTokens = 100u;
 constexpr uint32_t kTestConfiguredMaxOutputTokens = 10u;
@@ -275,7 +275,8 @@ class AILanguageModelTest : public AITestUtils::AITestBase {
  public:
   AILanguageModelTest() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{blink::features::kAIPromptAPIMultimodalInput, {}},
+        {{blink::features::kAIPromptAPI, {}},
+         {blink::features::kAIPromptAPIMultimodalInput, {}},
          {features::kAILanguageModelOverrideConfiguration,
           {{"ai_language_model_output_buffer", "100"}}},
          {features::kAILanguageModelAppendOutputTokensToContext, {}},
@@ -445,6 +446,18 @@ TEST_F(AILanguageModelTest, MultiplePrompts) {
               ElementsAreArray({"UfooEM", "UbarEM", "UbazEM"}));
 }
 
+// TODO(crbug.com/530923828): remove this test with the feature entry.
+TEST_F(AILanguageModelTest, MultiplePrompts_AppendOutputTokensDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      features::kAILanguageModelAppendOutputTokensToContext);
+
+  auto session = CreateSession();
+  EXPECT_THAT(Prompt(*session, MakeInput("foo")), ElementsAreArray({"UfooEM"}));
+  EXPECT_THAT(Prompt(*session, MakeInput("bar")),
+              ElementsAreArray({"UfooEM", "UfooEME", "UbarEM"}));
+}
+
 TEST_F(AILanguageModelTest, PromptMultipleContents) {
   auto session = CreateSession();
   EXPECT_THAT(Prompt(*session, MakeInput({"foo", "bar"})),
@@ -601,7 +614,7 @@ TEST_F(AILanguageModelTest, SamplingModeMappings) {
         blink::mojom::AILanguageModelSamplingMode::kPredictable;
     auto session = CreateSession(std::move(options));
     EXPECT_THAT(Prompt(*session, MakeInput("foo")),
-                ElementsAre("UfooEM", IsPromptWithParams(2, 0.2)));
+                ElementsAre("UfooEM", IsPromptWithParams(30, 0.3)));
   }
   // Test balanced
   {
@@ -610,7 +623,7 @@ TEST_F(AILanguageModelTest, SamplingModeMappings) {
         blink::mojom::AILanguageModelSamplingMode::kBalanced;
     auto session = CreateSession(std::move(options));
     EXPECT_THAT(Prompt(*session, MakeInput("foo")),
-                ElementsAre("UfooEM", IsPromptWithParams(3, 1.0)));
+                ElementsAre("UfooEM", IsPromptWithParams(64, 0.7)));
   }
   // Test creative
   {
@@ -619,7 +632,7 @@ TEST_F(AILanguageModelTest, SamplingModeMappings) {
         blink::mojom::AILanguageModelSamplingMode::kCreative;
     auto session = CreateSession(std::move(options));
     EXPECT_THAT(Prompt(*session, MakeInput("foo")),
-                ElementsAre("UfooEM", IsPromptWithParams(10, 1.1)));
+                ElementsAre("UfooEM", IsPromptWithParams(80, 1.1)));
   }
   // Test most-creative
   {
@@ -628,7 +641,7 @@ TEST_F(AILanguageModelTest, SamplingModeMappings) {
         blink::mojom::AILanguageModelSamplingMode::kMostCreative;
     auto session = CreateSession(std::move(options));
     EXPECT_THAT(Prompt(*session, MakeInput("foo")),
-                ElementsAre("UfooEM", IsPromptWithParams(25, 1.2)));
+                ElementsAre("UfooEM", IsPromptWithParams(100, 1.2)));
   }
 }
 
@@ -676,7 +689,7 @@ TEST_F(AILanguageModelTest, MaxSamplingParams) {
   auto session = CreateSession(std::move(options));
 
   EXPECT_THAT(Prompt(*session, MakeInput("foo")),
-              ElementsAre("UfooEM", "TopK: 50, Temp: 1.5"));
+              ElementsAre("UfooEM", "TopK: 200, Temp: 1.5"));
 }
 
 TEST_F(AILanguageModelTest, InitialPrompts) {

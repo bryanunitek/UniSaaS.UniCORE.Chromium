@@ -604,6 +604,21 @@ historical analysis. -->
   <int value="4" label="CT_REQUIREMENT_OVERRIDDEN_APPLIES_ACROSS_NAMES"/>
 </enum>
 
+<!-- LINT.IfChange(DeviceBoundSessionAttestationKeySaveOutcome) -->
+
+<enum name="DeviceBoundSessionAttestationKeySaveOutcome">
+  <int value="0" label="No Attestation Key"/>
+  <int value="1" label="Key Not Ready: Copied Old Key"/>
+  <int value="2" label="Key Not Ready: No Site in DB"/>
+  <int value="3" label="Key Not Ready: No Session in DB"/>
+  <int value="4" label="Key Not Ready: No Old Key to Copy"/>
+  <int value="5" label="Save Session Key Success"/>
+  <int value="6" label="Get Wrapped Key Failure"/>
+  <int value="7" label="Unexpected Error"/>
+</enum>
+
+<!-- LINT.ThenChange(//net/device_bound_sessions/session_store_impl.h:AttestationKeySaveOutcome) -->
+
 <!-- LINT.IfChange(DeviceBoundSessionDeletionReason) -->
 
 <enum name="DeviceBoundSessionDeletionReason">
@@ -628,7 +643,7 @@ historical analysis. -->
   <int value="2" label="Session key not restored"/>
   <int value="3" label="Attempted"/>
   <int value="4" label="Previous failed proactive refresh"/>
-  <int value="5" label="Signing quota exceeded"/>
+  <int value="5" label="(Obsolete) Signing quota exceeded"/>
   <int value="6" label="Session in backoff"/>
 </enum>
 
@@ -641,7 +656,7 @@ historical analysis. -->
   <int value="1" label="Service initialized"/>
   <int value="2" label="Endpoint unreachable"/>
   <int value="3" label="Endpoint transient error"/>
-  <int value="4" label="Refresh quota exceeded"/>
+  <int value="4" label="(Obsolete) Refresh quota exceeded"/>
   <int value="5" label="Fatal error"/>
   <int value="6" label="Signing exceeded"/>
   <int value="7" label="Refreshed as waiter"/>
@@ -1320,6 +1335,24 @@ historical analysis. -->
     button on it and the user pressed that button.
   </int>
 </enum>
+
+<!-- LINT.IfChange(NetHttpCacheLogicalInvalidationClearContext) -->
+
+<enum name="NetHttpCacheLogicalInvalidationClearContext">
+  <int value="0" label="kSameSession"/>
+  <int value="1" label="kRecoveredAfterCrash"/>
+</enum>
+
+<!-- LINT.ThenChange(//net/http/http_cache.h:InvalidationFilterClearContext) -->
+
+<!-- LINT.IfChange(NetHttpCacheLogicalInvalidationMatchResult) -->
+
+<enum name="NetHttpCacheLogicalInvalidationMatchResult">
+  <int value="0" label="kMatchedStale"/>
+  <int value="1" label="kUnmatched"/>
+</enum>
+
+<!-- LINT.ThenChange(//net/http/http_cache.cc:LogicalInvalidationMatchResult) -->
 
 <enum name="NetNetworkErrorLoggingRequestOutcome">
   <int value="0" label="Discarded: no NetworkErrorLoggingService"/>
@@ -3365,6 +3398,19 @@ Called by update_net_trust_anchors.py.-->
 
 <!-- LINT.ThenChange(//net/socket/socket_pool_additional_capacity.cc:SocketPoolAdditionalCapacityError) -->
 
+<!-- LINT.IfChange(SpareKeyPoolRetrievalResult) -->
+
+<enum name="SpareKeyPoolRetrievalResult">
+  <int value="0" label="Hit"/>
+  <int value="1" label="MissNotInitialized"/>
+  <int value="2" label="MissFailedToCreateSpareKey"/>
+  <int value="3" label="MissNoKeyForAlgorithm"/>
+  <int value="4" label="MissDidNotReplenishFromLastUse"/>
+  <int value="5" label="AlgorithmNotSupported"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/unexportable_keys/unexportable_key_service_impl.h:SpareKeyPoolRetrievalResult) -->
+
 <enum name="SpdyFrameFlowControlState">
   <int value="0" label="Send not stalled"/>
   <int value="1" label="Send stalled by stream"/>
@@ -3769,10 +3815,10 @@ Called by update_net_trust_anchors.py.-->
   <int value="3" label="TpmErrorResponse"/>
   <int value="4" label="BadMagicNumber"/>
   <int value="5" label="WrongType"/>
-  <int value="6" label="NonceMismatch"/>
+  <int value="6" label="ChallengeMismatch"/>
 </enum>
 
-<!-- LINT.ThenChange(//crypto/tpm.rs:ParseResult) -->
+<!-- LINT.ThenChange(//crypto/tpm_parser.h:TpmCertifyParseResult) -->
 
 <!-- LINT.IfChange(TpmCertifyVerifyResult) -->
 
@@ -3786,7 +3832,7 @@ Called by update_net_trust_anchors.py.-->
   <int value="6" label="InvalidSignature"/>
 </enum>
 
-<!-- LINT.ThenChange(//crypto/tpm.rs:VerificationResult) -->
+<!-- LINT.ThenChange(//crypto/tpm_parser.h:TpmCertifyVerifyResult) -->
 
 <enum name="TPMSupport">
   <int value="0" label="None"/>

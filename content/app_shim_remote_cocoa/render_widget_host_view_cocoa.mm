@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <tuple>
 #include <utility>
 
@@ -41,6 +42,7 @@
 #include "ui/accessibility/platform/browser_accessibility_manager_mac.h"
 #import "ui/base/clipboard/clipboard_util_mac.h"
 #import "ui/base/cocoa/appkit_utils.h"
+#import "ui/base/cocoa/menu_utils.h"
 #import "ui/base/cocoa/nsmenu_additions.h"
 #import "ui/base/cocoa/nsmenuitem_additions.h"
 #include "ui/base/cocoa/remote_accessibility_api.h"
@@ -120,6 +122,15 @@ class DummyHostHelper : public RenderWidgetHostNSViewHostHelper {
 NSString* const kWebContentTouchBarId = @"web-content";
 
 constexpr int kWrapAroundDistance = 10000;
+
+// Converts a point in AppKit global screen coordinates (origin at the
+// bottom-left of the primary display, as returned by e.g.
+// `NSEvent.mouseLocation`) to a Core Graphics global point (origin at
+// the top-left of the primary display, as expected by
+// `CGWarpMouseCursorPosition`).
+CGPoint CGPointFromNSEventScreenPoint(NSPoint p) {
+  return CGPointMake(p.x, NSMaxY(NSScreen.screens.firstObject.frame) - p.y);
+}
 
 // Whether a keyboard event has been reserved by macOS.
 BOOL EventIsReservedBySystem(NSEvent* event) {
@@ -259,6 +270,9 @@ void ExtractUnderlines(NSAttributedString* string,
   // Controlled by setShowingContextMenu.
   BOOL _showingContextMenu;
 
+  // Controlled by setSupportsAutoFill.
+  BOOL _supportsAutoFill;
+
   // Set during -setFrame to avoid spamming host_ with origin and size
   // changes.
   BOOL _inSetFrame;
@@ -356,6 +370,15 @@ void ExtractUnderlines(NSAttributedString* string,
   bool _mouseLocked;
   bool _mouseLockUnacceleratedMovement;
   gfx::PointF _lastMouseScreenPosition;
+
+  // The cursor's screen position (AppKit coordinates) at the moment we
+  // entered pointer lock. `std::nullopt` when not locked.
+  std::optional<NSPoint> _preLockCursorScreenPosition;
+
+  // When pointer lock re-centers the cursor, the OS generates an artificial
+  // mouse movement. Ignore the initial events until the re-centering delta
+  // has been fully absorbed to avoid exposing this artificial movement.
+  bool _suppressNextLockedMouseMoveForRecenter;
 
   // The parent accessibility element. This is set only in the browser process.
   id __strong _accessibilityParent;
@@ -962,6 +985,10 @@ static NSWindow* __weak _deferredResignKeyWindow;
   _hostHelper->ForwardMouseEvent(webEvent);
 }
 
+- (void)setSupportsAutoFill:(BOOL)supports {
+  _supportsAutoFill = supports;
+}
+
 - (BOOL)shouldIgnoreMouseEvent:(NSEvent*)theEvent {
   NSWindow* window = self.window;
   if (theEvent.type == NSEventTypeMouseMoved) {
@@ -1119,6 +1146,27 @@ static NSWindow* __weak _deferredResignKeyWindow;
     return;
   }
 
+  // After re-centering the cursor for pointer lock, macOS folds the
+  // re-centering distance into the delta of the first real mouse-move. Suppress
+  // locked move/crossing events until that movement is absorbed so the spurious
+  // delta never reaches the DOM. Mirrors Aura's
+  // RenderWidgetHostViewEventHandler::ModifyEventMovementAndCoords.
+  bool suppressRecenterArtifact = false;
+  if (_suppressNextLockedMouseMoveForRecenter) {
+    const bool isMovement = type == NSEventTypeMouseMoved ||
+                            type == NSEventTypeLeftMouseDragged ||
+                            type == NSEventTypeRightMouseDragged ||
+                            type == NSEventTypeOtherMouseDragged;
+    const bool isCrossing =
+        type == NSEventTypeMouseEntered || type == NSEventTypeMouseExited;
+    suppressRecenterArtifact = isMovement || isCrossing;
+    // The re-centering delta is only present on the first real movement; stop
+    // once it's absorbed.
+    if (isMovement) {
+      _suppressNextLockedMouseMoveForRecenter = NO;
+    }
+  }
+
   if (_mouseEventWasIgnored) {
     // If this is the first mouse event after a previous event that was ignored
     // due to the hitTest, send a mouse enter event to the host view.
@@ -1126,6 +1174,11 @@ static NSWindow* __weak _deferredResignKeyWindow;
         WebMouseEventBuilder::Build(theEvent, self, _pointerType);
     enterEvent.SetType(WebInputEvent::Type::kMouseMove);
     enterEvent.button = WebMouseEvent::Button::kNoButton;
+    if (suppressRecenterArtifact) {
+      enterEvent.SetModifiers(
+          enterEvent.GetModifiers() |
+          blink::WebInputEvent::Modifiers::kRelativeMotionEvent);
+    }
     _hostHelper->RouteOrProcessMouseEvent(enterEvent);
   }
   _mouseEventWasIgnored = NO;
@@ -1191,6 +1244,11 @@ static NSWindow* __weak _deferredResignKeyWindow;
     event.SetPositionInScreen(
         _lastMouseScreenPosition +
         gfx::Vector2dF(event.movement_x, event.movement_y));
+
+    if (suppressRecenterArtifact) {
+      event.SetModifiers(event.GetModifiers() |
+                         blink::WebInputEvent::Modifiers::kRelativeMotionEvent);
+    }
   }
 
   _lastMouseScreenPosition = event.PositionInScreen();
@@ -1222,10 +1280,37 @@ static NSWindow* __weak _deferredResignKeyWindow;
 - (void)setCursorLocked:(BOOL)locked {
   _mouseLocked = locked;
   if (_mouseLocked) {
+    // When the pointer is outside the view we move the cursor to the center
+    // of the browser's window so that the browser will receive the pointer
+    // events.
+    const NSPoint locationInScreen = NSEvent.mouseLocation;
+    _preLockCursorScreenPosition = locationInScreen;
+    const NSPoint locationInView =
+        [self convertPoint:[self.window convertPointFromScreen:locationInScreen]
+                  fromView:nil];
+    if (!NSPointInRect(locationInView, self.bounds)) {
+      const NSPoint centerInWindow = [self
+          convertPoint:NSMakePoint(NSMidX(self.bounds), NSMidY(self.bounds))
+                toView:nil];
+      CGWarpMouseCursorPosition(CGPointFromNSEventScreenPoint(
+          [self.window convertPointToScreen:centerInWindow]));
+
+      // `mouseEvent()` suppresses locked events until the move distance has
+      // been absorbed.
+      _suppressNextLockedMouseMoveForRecenter = YES;
+    }
+
     CGAssociateMouseAndMouseCursorPosition(NO);
     [NSCursor hide];
   } else {
-    // Unlock position of mouse cursor and unhide it.
+    // Unlock position of mouse cursor and unhide it. Restore the pre-lock
+    // cursor position if we had moved it before locking.
+    _suppressNextLockedMouseMoveForRecenter = NO;
+    if (_preLockCursorScreenPosition) {
+      CGWarpMouseCursorPosition(
+          CGPointFromNSEventScreenPoint(*_preLockCursorScreenPosition));
+      _preLockCursorScreenPosition.reset();
+    }
     CGAssociateMouseAndMouseCursorPosition(YES);
     [NSCursor unhide];
   }
@@ -2403,6 +2488,11 @@ extern NSString* NSTextInputReplacementRangeAttributeName;
 // There is also a privacy risk if the composition candidate window shows your
 // password when the user is "composing" inside a password field. See
 // https://crbug.com/40759416 for more info.
+//
+// If AutoFill support has been disabled and we're currently showing a native
+// context menu, then we return nil in order to ensure that macOS does NOT add
+// any "AutoFill" items (contact, passwords, etc.) to the menu. This logic
+// mirrors `ui/views/cocoa/text_input_host.mm`.
 - (NSTextInputContext*)inputContext {
   if (_textInputType == ui::TEXT_INPUT_TYPE_NONE ||
       _textInputType == ui::TEXT_INPUT_TYPE_PASSWORD) {
@@ -2411,6 +2501,11 @@ extern NSString* NSTextInputReplacementRangeAttributeName;
 
   if (_textInputFlags & ui::TEXT_INPUT_FLAG_HAS_BEEN_PASSWORD ||
       _textInputFlags & ui::TEXT_INPUT_FLAG_HAS_BEEN_CUSTOM_PASSWORD) {
+    return nil;
+  }
+
+  if (!_supportsAutoFill &&
+      ui::GetActiveCocoaMenuAnchorLocation().has_value()) {
     return nil;
   }
 

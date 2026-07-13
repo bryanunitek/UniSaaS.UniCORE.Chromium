@@ -29,7 +29,6 @@
 #include <limits>
 
 #include "base/auto_reset.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/security_context/insecure_request_policy.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
@@ -214,10 +213,8 @@ void HTMLFormElement::HTMLFormMcpTool::ExecuteTool(
     // Without `toolautosubmit`, we focus the submit button, tell the agent to
     // allow user input, and wait for the user to submit it.
     submit_button->Focus();
-    if (auto* context =
-            ModelContextSupplement::modelContext(form_->GetDocument())) {
-      context->PauseExecution();
-    }
+    auto* context = ModelContextSupplement::modelContext(form_->GetDocument());
+    context->PauseExecution();
   } else {
     // With the `toolautosubmit` attribute, we immediately submit the form.
     form_->PrepareForSubmission(/*event*/ nullptr, submit_button);
@@ -371,15 +368,13 @@ void HTMLFormElement::ScheduleDeclarativeWebMCPToolRegistration() {
 
     ModelContext* model_context =
         ModelContextSupplement::modelContext(GetDocument());
-    if (model_context) {
-      if (!active_webmcp_tool_->IsHandlingSubmit()) {
-        active_webmcp_tool_->CallDoneCallback(base::unexpected(
-            ScriptToolError(ScriptToolErrorCode::kToolCancelled,
-                            "Tool execution cancelled, since tool definition "
-                            "was updated")));
-      }
-      model_context->UnregisterTool(active_webmcp_tool_->ToolName());
+    if (!active_webmcp_tool_->IsHandlingSubmit()) {
+      active_webmcp_tool_->CallDoneCallback(base::unexpected(
+          ScriptToolError(ScriptToolErrorCode::kToolCancelled,
+                          "Tool execution cancelled, since tool definition "
+                          "was updated")));
     }
+    model_context->UnregisterTool(active_webmcp_tool_->ToolName());
 
     active_webmcp_tool_ = nullptr;
     return;
@@ -412,9 +407,6 @@ void HTMLFormElement::RegisterDeclarativeWebMCPTool() {
 
   ModelContext* model_context =
       ModelContextSupplement::modelContext(GetDocument());
-  if (!model_context) {
-    return;
-  }
 
   if (active_webmcp_tool_) {
     String new_schema = active_webmcp_tool_->ComputeInputSchema();
@@ -752,6 +744,9 @@ void HTMLFormElement::PrepareForSubmission(const Event* event,
       submit_event_init->setBubbles(true);
       submit_event_init->setCancelable(true);
       submit_event_init->setSubmitter(DynamicTo<HTMLElement>(submitter));
+      submit_event_init->setComposed(
+          submitter && RuntimeEnabledFeatures::ShadowRootReferenceTargetEnabled(
+                           submitter->GetExecutionContext()));
       if (declarative_webmcp_call) {
         CHECK(RuntimeEnabledFeatures::WebMCPEnabled(GetExecutionContext()));
         submit_event_init->setAgentInvoked(true);
@@ -1294,10 +1289,7 @@ void HTMLFormElement::CollectListedElements(
   const bool nested_forms_have_form_associated_elements =
       std::ranges::any_of(nested_forms, [](const auto& form) {
         return form->has_elements_associated_by_form_attribute_ ||
-               (form->has_elements_associated_by_parser_ &&
-                base::FeatureList::IsEnabled(
-                    features::
-                        kAutofillFixFieldsAssociatedWithNestedFormsByParser));
+               form->has_elements_associated_by_parser_;
       });
   if (nested_forms_have_form_associated_elements && isConnected()) {
     root = &GetTreeScope().RootNode();

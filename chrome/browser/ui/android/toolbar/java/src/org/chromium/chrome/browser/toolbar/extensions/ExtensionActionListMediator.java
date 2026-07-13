@@ -240,6 +240,11 @@ class ExtensionActionListMediator implements Destroyable {
         }
     }
 
+    /** Whether the popped out action can be shown. */
+    boolean canShowPoppedOutAction() {
+        return mCanShowPoppedOutAction;
+    }
+
     /**
      * Reconciles the current list of models with the list of IDs from the bridge. This handles
      * additions, removals, and reordering without rebuilding the whole list.
@@ -454,7 +459,7 @@ class ExtensionActionListMediator implements Destroyable {
         model.set(ExtensionActionButtonProperties.ACCESSIBLE_NAME, action.getAccessibleName());
     }
 
-    private void updateActionPropertiesForAll(WebContents webContents) {
+    void updateActionPropertiesForAll(WebContents webContents) {
         for (int i = 0; i < mModels.size(); i++) {
             updateActionPropertiesForIndex(i, getActionIdForIndex(i), webContents);
         }

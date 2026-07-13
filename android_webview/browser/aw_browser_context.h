@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,7 +53,10 @@ class InProgressDownloadManager;
 }
 
 namespace visitedlink {
+// TODO(crbug.com/517136103): Remove VisitedLinkWriter and only use
+// PartitionedVisitedLinkWriter
 class VisitedLinkWriter;
+class PartitionedVisitedLinkWriter;
 }
 
 namespace android_webview {
@@ -60,6 +64,7 @@ namespace android_webview {
 class AwBrowserContextIoThreadHandle;
 class AwContentRestrictionManagerClient;
 class AwContentRestrictionBlockedNavigationTracker;
+class AwHttpCacheManager;
 class AwQuotaManagerBridge;
 class CookieManager;
 
@@ -255,10 +260,14 @@ class AwBrowserContext : public content::BrowserContext,
   // Adds a QUIC hints for the given origins.
   void AddQuicHints(JNIEnv* env, const std::vector<GURL>& origins);
 
+  AwHttpCacheManager* GetHttpCacheManager() {
+    return http_cache_manager_.get();
+  }
   AwPrefetchManager& GetPrefetchManager() { return *prefetch_manager_.get(); }
 
  private:
   friend class AwBrowserContextIoThreadHandle;
+  friend class AwBrowserContextTest;
   void CreateUserPrefService();
   void MigrateLocalStatePrefs();
 
@@ -278,7 +287,11 @@ class AwBrowserContext : public content::BrowserContext,
 
   scoped_refptr<AwQuotaManagerBridge> quota_manager_bridge_;
 
+  // TODO(crbug.com/517136103): Remove VisitedLinkWriter and only use
+  // PartitionedVisitedLinkWriter
   std::unique_ptr<visitedlink::VisitedLinkWriter> visitedlink_writer_;
+  std::unique_ptr<visitedlink::PartitionedVisitedLinkWriter>
+      partitioned_visitedlink_writer_;
 
   std::unique_ptr<PrefService> user_pref_service_;
   std::unique_ptr<AwSSLHostStateDelegate> ssl_host_state_delegate_;
@@ -305,6 +318,8 @@ class AwBrowserContext : public content::BrowserContext,
   //
   // In generally, use GetCookieManager() rather than using this directly.
   std::unique_ptr<CookieManager> cookie_manager_;
+
+  std::unique_ptr<AwHttpCacheManager> http_cache_manager_;
 
   std::unique_ptr<AwPrefetchManager> prefetch_manager_;
   std::unique_ptr<AwPreconnector> preconnector_;

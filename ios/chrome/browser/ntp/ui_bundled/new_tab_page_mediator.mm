@@ -70,7 +70,6 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_consumer.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_image_background_trait.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_trait.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_view_controller.h"
 #import "ios/chrome/browser/ntp/ui_bundled/theme_utils.h"
 #import "ios/chrome/browser/omnibox/model/placeholder_service/placeholder_service.h"
 #import "ios/chrome/browser/omnibox/model/placeholder_service/placeholder_service_observer_bridge.h"
@@ -557,11 +556,9 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
                                                       fromState:previous_state];
               }));
   _discoverFeedVisibilityBrowserAgent->AddObserver(self.feedVisibilityObserver);
-  if (IsNTPBackgroundCustomizationEnabled()) {
-    _backgroundCustomizationServiceObserverBridge =
-        std::make_unique<HomeBackgroundCustomizationServiceObserverBridge>(
-            _backgroundCustomizationService, self);
-  }
+  _backgroundCustomizationServiceObserverBridge =
+      std::make_unique<HomeBackgroundCustomizationServiceObserverBridge>(
+          _backgroundCustomizationService, self);
   [self updateAIMAvailability];
   _mediatorSetUp = YES;
 }
@@ -772,9 +769,7 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
   [traitAccessor setBoolForNewTabPageImageBackgroundTrait:(image != nil)];
   [traitAccessor setObjectForNewTabPageTrait:[NewTabPageTrait defaultValue]];
 
-  UIColor* tintColor = (IsNTPBackgroundCustomizationEnabled() && image)
-                           ? UIColor.whiteColor
-                           : nil;
+  UIColor* tintColor = image ? UIColor.whiteColor : nil;
   [self.logoMediator setLogoTintColor:tintColor];
 
   if (self.webState) {
@@ -982,8 +977,7 @@ void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
 
     [traitAccessor setObjectForNewTabPageTrait:colorPalette];
     [traitAccessor setBoolForNewTabPageImageBackgroundTrait:NO];
-    UIColor* tintColor =
-        IsNTPBackgroundCustomizationEnabled() ? colorPalette.tintColor : nil;
+    UIColor* tintColor = colorPalette.tintColor;
     [self.logoMediator setLogoTintColor:tintColor];
     if (initialLoad) {
       base::UmaHistogramEnumeration(

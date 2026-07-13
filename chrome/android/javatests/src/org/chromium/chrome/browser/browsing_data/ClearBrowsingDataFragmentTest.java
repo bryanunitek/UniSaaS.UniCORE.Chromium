@@ -71,6 +71,7 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
@@ -95,6 +96,7 @@ import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
+import org.chromium.components.browser_ui.settings.ExpandablePreferenceGroup;
 import org.chromium.components.browser_ui.settings.SpinnerPreference;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.components.browsing_data.DeleteBrowsingDataAction;
@@ -897,6 +899,73 @@ public class ClearBrowsingDataFragmentTest {
                         ClearBrowsingDataFragment.getPreferenceKey(DialogOption.CLEAR_TABS));
 
         assertNull(checkboxPreference);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
+    public void testPasswordsCheckboxIsHidded_WhenPasswordRemovalAndroidEnabled() {
+        ClearBrowsingDataFragment preferences =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+        CheckBoxPreference checkboxPreference =
+                preferences.findPreference(
+                        ClearBrowsingDataFragment.getPreferenceKey(DialogOption.CLEAR_PASSWORDS));
+
+        assertNull(checkboxPreference);
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures(ChromeFeatureList.DBD_PASSWORD_REMOVAL_ON_ANDROID)
+    public void testManageOtherGoogleDataSection() {
+        ClearBrowsingDataFragment preferences =
+                (ClearBrowsingDataFragment) startPreferences().getMainFragment();
+
+        ClearBrowsingDataExpandablePreferenceCategory expandablePreference =
+                preferences.findPreference(
+                        ClearBrowsingDataFragment.PREF_MANAGE_OTHER_GOOGLE_DATA_EXPANDABLE);
+
+        assertNotNull(expandablePreference);
+
+        // Manage Other Google Data section is collapsed by default.
+        assertManageOtherGoogleDataSectionState(
+                preferences, expandablePreference, /* isExpanded= */ false);
+
+        clickOnExpandableSection();
+
+        assertManageOtherGoogleDataSectionState(
+                preferences, expandablePreference, /* isExpanded= */ true);
+    }
+
+    private void clickOnExpandableSection() {
+        ClearBrowsingDataFragment fragment = mSettingsActivityTestRule.getFragment();
+        String title =
+                fragment.getString(
+                        R.string.clear_browsing_data_manage_other_google_data_expandable_title);
+        onView(withId(R.id.recycler_view)).perform(RecyclerViewActions.scrollToLastPosition());
+        onView(withText(title)).perform(click());
+    }
+
+    private void assertManageOtherGoogleDataSectionState(
+            ClearBrowsingDataFragment fragment,
+            ExpandablePreferenceGroup section,
+            boolean isExpanded) {
+        assertEquals(isExpanded, section.isExpanded());
+
+        Preference passwordManagerPref =
+                fragment.findPreference(ClearBrowsingDataFragment.PREF_PASSWORD_MANAGER_LINK_OUT);
+        Preference searchHistoryPref =
+                fragment.findPreference(ClearBrowsingDataFragment.PREF_SEARCH_HISTORY_LINK_OUT);
+        Preference myActivityPref =
+                fragment.findPreference(ClearBrowsingDataFragment.PREF_MY_ACTIVITY_LINK_OUT);
+
+        assertNotNull(passwordManagerPref);
+        assertNotNull(searchHistoryPref);
+        assertNotNull(myActivityPref);
+
+        assertEquals(isExpanded, passwordManagerPref.isVisible());
+        assertEquals(isExpanded, searchHistoryPref.isVisible());
+        assertEquals(isExpanded, myActivityPref.isVisible());
     }
 
     /** Wait for the snackbar to show on the main activity post deletion. */

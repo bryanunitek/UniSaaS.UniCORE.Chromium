@@ -7,13 +7,17 @@
 
 #include <memory>
 
-#include "components/browser_apis/tab_drag/adapters/tab_drag_platform_provider.h"
+#include "components/browser_apis/tab_drag/sessions/tab_drag_session_injector.h"
 
 namespace tabs_api {
 
 class TabDragSessionInputAdapter;
+class TabDragSessionListener;
+class TabDragEventRouter;
+class DropTargetRegistry;
+class TabDragWindowRegistry;
 
-class TabDragSessionDesktopInjector : public TabDragPlatformProvider {
+class TabDragSessionDesktopInjector : public TabDragSessionInjector {
  public:
   TabDragSessionDesktopInjector();
   TabDragSessionDesktopInjector(const TabDragSessionDesktopInjector&&) = delete;
@@ -21,11 +25,17 @@ class TabDragSessionDesktopInjector : public TabDragPlatformProvider {
       const TabDragSessionDesktopInjector&) = delete;
   ~TabDragSessionDesktopInjector() override;
 
-  // TabDragPlatformProvider:
-  TabDragSessionInputAdapter& tab_drag_session_input_adapter() override;
+  // TabDragSessionInjector:
+  TabDragWindowRegistry* GetWindowRegistry() override;
+  TabDragSessionInputAdapter& GetInputAdapter() override;
+  TabDragSessionListener& GetSessionListener() override;
+  DropTargetRegistry& GetDropTargetRegistry() override;
 
  private:
+  std::unique_ptr<TabDragWindowRegistry> window_registry_;
   std::unique_ptr<TabDragSessionInputAdapter> adapter_;
+  std::unique_ptr<DropTargetRegistry> registry_;
+  std::unique_ptr<TabDragEventRouter> event_router_;
 };
 
 }  // namespace tabs_api

@@ -35,7 +35,6 @@
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_configuration.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
-#import "ios/chrome/common/ui/util/device_util.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 #import "ui/base/device_form_factor.h"
 
@@ -67,9 +66,9 @@ const CGFloat kCloseButtonPadding = 16.0f;
 @interface OmniboxPopupViewController () <OmniboxPopupActionsRowDelegate,
                                           OmniboxPopupCarouselCellDelegate,
                                           OmniboxPopupRowDelegate,
+                                          SelfSizingTableViewDelegate,
                                           UITableViewDataSource,
-                                          UITableViewDelegate,
-                                          SelfSizingTableViewDelegate>
+                                          UITableViewDelegate>
 
 /// Index path of currently highlighted row. The rows can be highlighted by
 /// tapping and holding on them or by using arrow keys on a hardware keyboard.
@@ -177,9 +176,13 @@ const CGFloat kCloseButtonPadding = 16.0f;
 // Sets the additional vertical content inset for the suggestion list.
 - (void)setAdditionalVerticalContentInset:
     (UIEdgeInsets)additionalVerticalContentInset {
+  CGFloat bottomInset = additionalVerticalContentInset.bottom;
+  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+    bottomInset += kBottomPadding;
+  }
   self.tableView.contentInset = UIEdgeInsetsMake(
       kOmniboxPopupTopPadding + additionalVerticalContentInset.top, 0,
-      additionalVerticalContentInset.bottom, 0);
+      bottomInset, 0);
   [self.tableView
       setContentOffset:CGPointMake(0, -self.tableView.contentInset.top)
               animated:YES];
@@ -835,6 +838,8 @@ const CGFloat kCloseButtonPadding = 16.0f;
   contentConfiguration.text = title;
   contentConfiguration.textProperties.font =
       [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+  contentConfiguration.textProperties.color =
+      [UIColor colorNamed:kTextSecondaryColor];
   contentConfiguration.textProperties.transform =
       UIListContentTextTransformUppercase;
   contentConfiguration.directionalLayoutMargins = NSDirectionalEdgeInsetsMake(
@@ -951,7 +956,11 @@ const CGFloat kCloseButtonPadding = 16.0f;
 #pragma mark - SelfSizingTableViewDelegate
 
 - (void)tableViewContentSizeDidChange:(CGSize)contentSize {
-  self.preferredContentSize = contentSize;
+  CGFloat height = contentSize.height;
+  if (IsComposeboxIpadEnabled()) {
+    height = self.tableView.intrinsicContentSize.height;
+  }
+  self.preferredContentSize = CGSizeMake(contentSize.width, height);
 }
 
 #pragma mark - OmniboxPopupCarouselCellDelegate

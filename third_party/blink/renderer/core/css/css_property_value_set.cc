@@ -22,6 +22,7 @@
  */
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 
+#include "base/numerics/safe_conversions.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
@@ -41,8 +42,7 @@
 namespace blink {
 
 static AdditionalBytes
-AdditionalBytesForImmutableCSSPropertyValueSetWithPropertyCount(
-    unsigned count) {
+AdditionalBytesForImmutableCSSPropertyValueSetWithPropertyCount(size_t count) {
   return AdditionalBytes(sizeof(CSSPropertyValue) * count);
 }
 
@@ -83,14 +83,7 @@ unsigned CSSPropertyValueSet::ComputeHash() const {
     AddIntToHash(hash, property.Value().Hash());
   }
 
-  static_assert((HashTraits<unsigned>::EmptyValue() ^ 0x80000000) !=
-                    HashTraits<unsigned>::DeletedValue(),
-                "We assume below that flipping the top bit will not turn "
-                "EmptyValue into DeletedValue or vice versa");
-  if (hash == HashTraits<unsigned>::EmptyValue() ||
-      hash == HashTraits<unsigned>::DeletedValue()) {
-    hash ^= 0x80000000;
-  }
+  hash = EnsureValidHash(hash);
 
   return hash;
 }
@@ -118,7 +111,7 @@ ImmutableCSSPropertyValueSet::ImmutableCSSPropertyValueSet(
     CSSParserMode css_parser_mode,
     bool contains_query_hand)
     : CSSPropertyValueSet(css_parser_mode,
-                          properties.size(),
+                          base::checked_cast<unsigned>(properties.size()),
                           contains_query_hand) {
   const unsigned array_size = bits_.get<ArraySizeField>();
   if (array_size > 0) {
@@ -687,7 +680,8 @@ MutableCSSPropertyValueSet::SetResult
 MutableCSSPropertyValueSet::AddParsedProperties(
     base::span<CSSPropertyValue> properties) {
   SetResult changed = kUnchanged;
-  property_vector_.reserve(property_vector_.size() + properties.size());
+  property_vector_.reserve(base::checked_cast<wtf_size_t>(
+      property_vector_.size() + properties.size()));
   for (const CSSPropertyValue& property : properties) {
     changed = std::max(changed, SetLonghandProperty(property));
   }
@@ -836,20 +830,6 @@ void MutableCSSPropertyValueSet::RemoveEquivalentProperties(
   for (unsigned i = 0; i < size; ++i) {
     const CSSPropertyValue& property = PropertyAt(i);
     if (style->PropertyMatches(property.PropertyID(), property.Value())) {
-      properties_to_remove.push_back(property.PropertyID());
-    }
-  }
-  // FIXME: This should use mass removal.
-  for (CSSPropertyID id : properties_to_remove) {
-    RemoveProperty(id);
-  }
-}
-
-void MutableCSSPropertyValueSet::RemoveEquivalentProperties(
-    const CSSStyleDeclaration* style) {
-  Vector<CSSPropertyID> properties_to_remove;
-  for (const CSSPropertyValue& property : property_vector_) {
-    if (style->CssPropertyMatches(property.PropertyID(), property.Value())) {
       properties_to_remove.push_back(property.PropertyID());
     }
   }

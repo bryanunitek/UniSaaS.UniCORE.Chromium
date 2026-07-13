@@ -6,6 +6,9 @@
 
 #import <optional>
 
+#import "base/strings/sys_string_conversions.h"
+#import "components/url_formatter/elide_url.h"
+#import "ios/chrome/browser/composebox/menu/coordinator/composebox_menu_shared_tab.h"
 #import "ios/chrome/browser/composebox/menu/ui/composebox_menu_attachment_cell.h"
 #import "ios/chrome/browser/composebox/menu/ui/composebox_menu_attachment_view.h"
 #import "ios/chrome/browser/composebox/menu/ui/composebox_menu_header_view.h"
@@ -26,6 +29,7 @@
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
+#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -200,8 +204,7 @@ UIImage* IconForModel(ComposeboxModelOption option) {
   size.height =
       _collectionView.contentSize.height + _collectionView.contentInset.top;
 
-  if ([UIDevice currentDevice].userInterfaceIdiom !=
-      UIUserInterfaceIdiomPhone) {
+  if (ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_PHONE) {
     return size;
   }
   // Width is controlled by preferredControlSize on phones (see.
@@ -247,6 +250,36 @@ UIImage* IconForModel(ComposeboxModelOption option) {
                 items:attachmentsItems
            identifier:ComposeboxMenuSectionIdentifier::kAttachments];
     [sections addObject:attachmentsSection];
+  }
+
+  // Shared Tabs Section
+  if (_inputState.sharedTabs.count > 0) {
+    NSMutableArray<NSString*>* tabDomains = [[NSMutableArray alloc] init];
+    for (ComposeboxMenuSharedTab* tab in _inputState.sharedTabs) {
+      if (tab.URL.is_valid() && !tab.URL.host().empty()) {
+        std::u16string elidedHost = url_formatter::
+            FormatUrlForDisplayOmitSchemePathTrivialSubdomainsAndMobilePrefix(
+                tab.URL);
+        [tabDomains addObject:base::SysUTF16ToNSString(elidedHost)];
+      }
+    }
+    NSString* subtitle = [tabDomains componentsJoinedByString:@", "];
+
+    ComposeboxMenuItem* sharedTabsItem = [[ComposeboxMenuItem alloc]
+        initWithTitle:l10n_util::GetNSString(
+                          IDS_IOS_COMPOSEBOX_MENU_SHARED_TABS)
+             subtitle:subtitle
+                count:_inputState.sharedTabs.count
+                image:_inputState.sharedTabs.firstObject.favicon
+                 type:ComposeboxMenuItemType::kAttachmentSharedTabs
+             disabled:NO
+              favicon:_inputState.sharedTabs.firstObject.favicon];
+
+    ComposeboxMenuSection* sharedTabsSection = [[ComposeboxMenuSection alloc]
+        initWithTitle:nil
+                items:@[ sharedTabsItem ]
+           identifier:ComposeboxMenuSectionIdentifier::kSharedTabs];
+    [sections addObject:sharedTabsSection];
   }
 
   ComposeboxStrings* strings = _inputState.strings;
@@ -483,8 +516,8 @@ UIImage* IconForModel(ComposeboxModelOption option) {
                                      ComposeboxAttachmentOption::kFile]];
 
   NSMutableArray* attachmentItems =
-      [NSMutableArray arrayWithObjects:currentTabItem, tabsItem, cameraItem,
-                                       galleryItem, filesItem, nil];
+      [NSMutableArray arrayWithObjects:currentTabItem, tabsItem, galleryItem,
+                                       cameraItem, filesItem, nil];
   if (IsComposeboxDriveOptionEnabled()) {
     UIImage* driveSymbol =
         DefaultSymbolWithPointSize(kFolderSymbol, kSymbolActionPointSize);
@@ -492,9 +525,8 @@ UIImage* IconForModel(ComposeboxModelOption option) {
     driveSymbol =
         CustomSymbolWithPointSize(kGoogleDriveSymbol, kSymbolActionPointSize);
 #endif
-    // TODO(crbug.com/515377633): Add string translation.
     ComposeboxMenuItem* driveItem = [[ComposeboxMenuItem alloc]
-        initWithTitle:@"Drive"
+        initWithTitle:l10n_util::GetNSString(IDS_IOS_COMPOSEBOX_DRIVE_ACTION)
                 image:driveSymbol
                  type:ComposeboxMenuItemType::kAttachmentDrive
              disabled:[_inputState isAttachmentDisabled:
@@ -649,6 +681,14 @@ UIImage* IconForModel(ComposeboxModelOption option) {
   UIListContentConfiguration* configuration =
       [cell defaultContentConfiguration];
   configuration.text = item.title;
+  if (item.subtitle.length) {
+    configuration.secondaryText = item.subtitle;
+    configuration.secondaryTextProperties.color =
+        [UIColor colorNamed:kTextSecondaryColor];
+    configuration.secondaryTextProperties.numberOfLines = 1;
+    configuration.secondaryTextProperties.lineBreakMode =
+        NSLineBreakByTruncatingTail;
+  }
   configuration.image = item.image;
   cell.accessibilityLabel = item.title;
   cell.isAccessibilityElement = YES;
@@ -692,15 +732,22 @@ UIImage* IconForModel(ComposeboxModelOption option) {
     isSelected = YES;
   }
 
+  NSMutableArray<UICellAccessory*>* accessories = [[NSMutableArray alloc] init];
   if (isSelected) {
-    UICellAccessoryCheckmark* checkmark =
-        [[UICellAccessoryCheckmark alloc] init];
-    cell.accessories = @[ checkmark ];
+    [accessories addObject:[[UICellAccessoryCheckmark alloc] init]];
     cell.accessibilityTraits |= UIAccessibilityTraitSelected;
   } else {
-    cell.accessories = @[];
     cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
   }
+
+  if (item.type == ComposeboxMenuItemType::kAttachmentSharedTabs) {
+    [accessories addObject:[[UICellAccessoryDisclosureIndicator alloc] init]];
+    UICellAccessoryLabel* labelAccessory = [[UICellAccessoryLabel alloc]
+        initWithText:[NSString
+                         stringWithFormat:@"%lu", (unsigned long)item.count]];
+    [accessories addObject:labelAccessory];
+  }
+  cell.accessories = accessories;
   cell.accessibilityIdentifier =
       AccessibilityIdentifierForMenuItemType(item.type);
 }

@@ -30,6 +30,9 @@ BASE_FEATURE(kUseCECFlagInPolicyData, base::FEATURE_ENABLED_BY_DEFAULT);
 #if BUILDFLAG(IS_ANDROID)
 BASE_FEATURE(kInitializePoliciesForSignedInUserInNewEntryPoints,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAndroidUseAdminsForEnterpriseInfo,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
 // Enables a configurable delay for policy registration.
@@ -82,5 +85,11 @@ BASE_FEATURE(kPolicyPageMojoMigration, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kDeviceSignalsBackfillDisclaimer,
              base::FEATURE_DISABLED_BY_DEFAULT);
+const base::FeatureParam<bool> kClearDeviceSignalsPermissionOnStartup{
+    &kDeviceSignalsBackfillDisclaimer,
+    "clear_device_signals_permission_on_startup", false};
+
+BASE_FEATURE(kURLBlocklistOverridesIncognitoAllowlist,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace policy::features

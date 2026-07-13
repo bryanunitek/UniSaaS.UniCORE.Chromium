@@ -6,11 +6,15 @@
 
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
+#include "base/test/gmock_callback_support.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "base/values.h"
 #include "components/signin/public/base/session_binding_test_utils.h"
 #include "components/unexportable_keys/background_task_origin.h"
+#include "components/unexportable_keys/mock_unexportable_key_service.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
 #include "components/unexportable_keys/unexportable_key_service.h"
 #include "components/unexportable_keys/unexportable_key_service_impl.h"
@@ -26,11 +30,18 @@ namespace signin {
 
 using ::testing::AtLeast;
 using ::testing::NiceMock;
+using ::testing::Pointee;
 using ::testing::Return;
 
 namespace {
-constexpr crypto::SignatureVerifier::SignatureAlgorithm
-    kAcceptableAlgorithms[] = {crypto::SignatureVerifier::ECDSA_SHA256};
+using base::test::RunOnceCallback;
+using base::test::TestFuture;
+using ::testing::_;
+using ::testing::Eq;
+using ::testing::WithArgs;
+
+constexpr std::array kAcceptableAlgorithms = {
+    crypto::SignatureVerifier::ECDSA_SHA256};
 constexpr unexportable_keys::BackgroundTaskPriority kTaskPriority =
     unexportable_keys::BackgroundTaskPriority::kUserBlocking;
 
@@ -77,7 +88,7 @@ class BindingKeyRegistrationTokenHelperTest : public testing::Test {
   }
 
   std::vector<uint8_t> GetWrappedKey(
-      unexportable_keys::UnexportableKeyId key_id) {
+      unexportable_keys::UnexportableSigningKeyId key_id) {
     unexportable_keys::ServiceErrorOr<std::vector<uint8_t>> wrapped_key =
         unexportable_key_service().GetWrappedKey(key_id);
     CHECK(wrapped_key.has_value());
@@ -106,9 +117,9 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, SuccessForTokenBinding) {
       future;
   BindingKeyRegistrationTokenHelper helper(
       unexportable_key_service(), base::ToVector(kAcceptableAlgorithms));
-  helper.GenerateForTokenBinding("test_client_id", "test_auth_code",
-                                 GURL("https://accounts.google.com/Register"),
-                                 future.GetCallback());
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
   RunBackgroundTasks();
   ASSERT_TRUE(future.Get().has_value());
   VerifyResult(future.Get().value());
@@ -127,9 +138,9 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, SuccessForTokenBindingReuseKey) {
   ASSERT_FALSE(wrapped_key.empty());
   BindingKeyRegistrationTokenHelper helper(unexportable_key_service(),
                                            wrapped_key);
-  helper.GenerateForTokenBinding("test_client_id", "test_auth_code",
-                                 GURL("https://accounts.google.com/Register"),
-                                 future.GetCallback());
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
   RunBackgroundTasks();
   ASSERT_TRUE(future.Get().has_value());
   VerifyResult(future.Get().value());
@@ -169,12 +180,12 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, DoubleRegistration) {
       future_2;
   BindingKeyRegistrationTokenHelper helper(
       unexportable_key_service(), base::ToVector(kAcceptableAlgorithms));
-  helper.GenerateForTokenBinding("client_id_1", "auth_code_1",
-                                 GURL("https://accounts.google.com/Register1"),
-                                 future_1.GetCallback());
-  helper.GenerateForTokenBinding("client_id_2", "auth_code_2",
-                                 GURL("https://accounts.google.com/Register2"),
-                                 future_2.GetCallback());
+  helper.GenerateForTokenBinding(
+      "client_id_1", TokenBindingAuthCode("auth_code_1"),
+      GURL("https://accounts.google.com/Register1"), future_1.GetCallback());
+  helper.GenerateForTokenBinding(
+      "client_id_2", TokenBindingAuthCode("auth_code_2"),
+      GURL("https://accounts.google.com/Register2"), future_2.GetCallback());
   RunBackgroundTasks();
   ASSERT_TRUE(future_1.Get().has_value());
   ASSERT_TRUE(future_2.Get().has_value());
@@ -196,9 +207,9 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, Failure) {
       future;
   BindingKeyRegistrationTokenHelper helper(
       unexportable_key_service(), base::ToVector(kAcceptableAlgorithms));
-  helper.GenerateForTokenBinding("test_client_id", "test_auth_code",
-                                 GURL("https://accounts.google.com/Register"),
-                                 future.GetCallback());
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
   RunBackgroundTasks();
   EXPECT_FALSE(future.Get().has_value());
   histogram_tester().ExpectUniqueSample(
@@ -215,9 +226,9 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, FailureReuseKey) {
       future;
   BindingKeyRegistrationTokenHelper helper(unexportable_key_service(),
                                            kInvalidWrappedKey);
-  helper.GenerateForTokenBinding("test_client_id", "test_auth_code",
-                                 GURL("https://accounts.google.com/Register"),
-                                 future.GetCallback());
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
   RunBackgroundTasks();
   EXPECT_FALSE(future.Get().has_value());
   histogram_tester().ExpectUniqueSample(
@@ -234,9 +245,9 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, FailureEmptyAlgorithms) {
   BindingKeyRegistrationTokenHelper helper(
       unexportable_key_service(),
       std::vector<crypto::SignatureVerifier::SignatureAlgorithm>());
-  helper.GenerateForTokenBinding("test_client_id", "test_auth_code",
-                                 GURL("https://accounts.google.com/Register"),
-                                 future.GetCallback());
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
   RunBackgroundTasks();
   ASSERT_FALSE(future.Get().has_value());
   histogram_tester().ExpectUniqueSample(
@@ -264,9 +275,9 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, SignatureFailure) {
       future;
   BindingKeyRegistrationTokenHelper helper(
       unexportable_key_service(), base::ToVector(kAcceptableAlgorithms));
-  helper.GenerateForTokenBinding("test_client_id", "test_auth_code",
-                                 GURL("https://accounts.google.com/Register"),
-                                 future.GetCallback());
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
   RunBackgroundTasks();
   EXPECT_FALSE(future.Get().has_value());
   histogram_tester().ExpectUniqueSample(
@@ -282,9 +293,9 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, DeletionWhileInProgress) {
       future;
   auto helper = std::make_unique<BindingKeyRegistrationTokenHelper>(
       unexportable_key_service(), base::ToVector(kAcceptableAlgorithms));
-  helper->GenerateForTokenBinding("test_client_id", "test_auth_code",
-                                  GURL("https://accounts.google.com/Register"),
-                                  future.GetCallback());
+  helper->GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
   // Destroy the helper before running background tasks.
   helper.reset();
   RunBackgroundTasks();
@@ -317,6 +328,91 @@ TEST_F(BindingKeyRegistrationTokenHelperTest, IsRegistrationKeyReadyFailure) {
 
   RunBackgroundTasks();
   EXPECT_FALSE(helper.IsRegistrationKeyReady());
+}
+
+TEST_F(BindingKeyRegistrationTokenHelperTest,
+       SuccessForTokenBindingWithChallenge) {
+  crypto::ScopedFakeUnexportableKeyProvider scoped_fake_key_provider;
+  base::test::TestFuture<
+      std::optional<BindingKeyRegistrationTokenHelper::Result>>
+      future;
+  BindingKeyRegistrationTokenHelper helper(
+      unexportable_key_service(), base::ToVector(kAcceptableAlgorithms));
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingChallenge("test_challenge"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
+  RunBackgroundTasks();
+  ASSERT_TRUE(future.Get().has_value());
+  VerifyResult(future.Get().value());
+
+  std::optional<base::DictValue> payload =
+      ExtractPayloadFromJwt(future.Get()->registration_token);
+  ASSERT_TRUE(payload.has_value());
+  EXPECT_THAT(payload->FindString("jti"),
+              Pointee(std::string("test_challenge")));
+
+  histogram_tester().ExpectUniqueSample(
+      kTokenBindingResultHistogram,
+      BindingKeyRegistrationTokenHelper::Error::kNone,
+      /*expected_bucket_count=*/1);
+}
+
+TEST_F(BindingKeyRegistrationTokenHelperTest,
+       CustomPriorityRespectedForAllOperations) {
+  // Verifies that the injected custom priority is properly passed to all key
+  // generation, loading, and signing operations.
+  crypto::ScopedFakeUnexportableKeyProvider scoped_fake_key_provider;
+  NiceMock<unexportable_keys::MockUnexportableKeyService> mock_service;
+  mock_service.DelegateToService(unexportable_key_service());
+  constexpr auto kCustomPriority =
+      unexportable_keys::BackgroundTaskPriority::kUserBlocking;
+
+  BindingKeyRegistrationTokenHelper helper(
+      mock_service, base::ToVector(kAcceptableAlgorithms), kCustomPriority);
+
+  EXPECT_CALL(mock_service, GenerateSigningKeySlowlyAsync(
+                                Eq(kAcceptableAlgorithms), kCustomPriority, _));
+  EXPECT_CALL(mock_service, SignSlowlyAsync(_, _, kCustomPriority, _));
+
+  TestFuture<std::optional<BindingKeyRegistrationTokenHelper::Result>> future;
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
+
+  RunBackgroundTasks();
+
+  ASSERT_OK(future.Get());
+}
+
+TEST_F(BindingKeyRegistrationTokenHelperTest,
+       CustomPriorityRespectedForReusedKey) {
+  // Verifies that the injected custom priority is properly passed to key
+  // loading and signing operations when a key is reused.
+  crypto::ScopedFakeUnexportableKeyProvider scoped_fake_key_provider;
+  // Generate a real key to get valid wrapped key bytes for reuse.
+  std::vector<uint8_t> wrapped_key = GetWrappedKey(GenerateNewSigningKey());
+
+  NiceMock<unexportable_keys::MockUnexportableKeyService> mock_service;
+  mock_service.DelegateToService(unexportable_key_service());
+  constexpr auto kCustomPriority =
+      unexportable_keys::BackgroundTaskPriority::kUserBlocking;
+
+  BindingKeyRegistrationTokenHelper helper(mock_service, wrapped_key,
+                                           kCustomPriority);
+
+  EXPECT_CALL(mock_service,
+              FromWrappedSigningKeySlowlyAsync(
+                  base::span<const uint8_t>(wrapped_key), kCustomPriority, _));
+  EXPECT_CALL(mock_service, SignSlowlyAsync(_, _, kCustomPriority, _));
+
+  TestFuture<std::optional<BindingKeyRegistrationTokenHelper::Result>> future;
+  helper.GenerateForTokenBinding(
+      "test_client_id", TokenBindingAuthCode("test_auth_code"),
+      GURL("https://accounts.google.com/Register"), future.GetCallback());
+
+  RunBackgroundTasks();
+
+  ASSERT_OK(future.Get());
 }
 
 }  // namespace signin

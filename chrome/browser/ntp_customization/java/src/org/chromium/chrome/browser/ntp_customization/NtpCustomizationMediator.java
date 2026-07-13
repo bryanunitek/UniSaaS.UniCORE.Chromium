@@ -14,7 +14,6 @@ import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoor
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME_COLLECTIONS;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME_TIP;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.THEME_COLLECTION;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationViewProperties.LAYOUT_TO_DISPLAY;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationViewProperties.LIST_CONTAINER_VIEW_DELEGATE;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationViewProperties.MAIN_BOTTOM_SHEET_FEED_SECTION_SUBTITLE;
@@ -26,10 +25,12 @@ import android.graphics.Bitmap;
 import android.view.View;
 import android.widget.ViewFlipper;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ApplicationStatus;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.TimeUtils;
 import org.chromium.build.annotations.NullMarked;
@@ -38,6 +39,7 @@ import org.chromium.chrome.browser.feed.FeedFeatures;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager.SnackBarState;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeStateProvider;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataThemeCollection;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
@@ -87,7 +89,7 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
     private final Context mContext;
     private final boolean mIsNtpCustomizationSyncEnabled;
     private final Runnable mShowMainBottomSheetRunnable;
-    private @Nullable Profile mProfile;
+    private final @Nullable Profile mProfile;
     private @Nullable Integer mCurrentBottomSheet;
     private boolean mShouldRecreate;
     private @Nullable Bitmap mNewThemeCollectionImage;
@@ -117,7 +119,16 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
         mContext = context;
 
         mIsNtpCustomizationSyncEnabled = NtpCustomizationUtils.isNTPCustomizationSyncEnabled();
-        mListContent = buildListContent(context);
+
+        Profile profile = mProfileSupplier.get();
+        assumeNonNull(profile);
+        mProfile = profile.getOriginalProfile();
+        maybeRegisterTemplateUrlServiceObserver(mProfile);
+
+        // For standalone bottom sheets, mContainerPropertyModel of the main bottom sheet is null
+        // because they do not need it. In these cases, we skip building the list content of the
+        // main bottom sheet.
+        mListContent = mContainerPropertyModel != null ? buildListContent(context) : List.of();
 
         // Initializes the back navigation map.
         mThemeBackNavigationMap.put(SINGLE_THEME_COLLECTION, THEME_COLLECTIONS);
@@ -135,10 +146,14 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
                     public void onSheetClosed(@BottomSheetController.StateChangeReason int reason) {
                         // Pick and save the primary color if a new theme collection image is
                         // selected.
-                        if (NtpCustomizationConfigManager.getInstance().getBackgroundType()
-                                        == THEME_COLLECTION
-                                && mNewThemeCollectionImage != null) {
-                            NtpCustomizationUtils.pickAndSavePrimaryColor(mNewThemeCollectionImage);
+                        NtpCustomizationConfigManager configManager =
+                                NtpCustomizationConfigManager.getInstance();
+                        if (mNewThemeCollectionImage != null
+                                && configManager.getNtpBackgroundData()
+                                        instanceof
+                                        NtpBackgroundDataThemeCollection themeCollectionData) {
+                            saveColorAndImageFilePathForThemeCollectionData(
+                                    mNewThemeCollectionImage, themeCollectionData);
                         }
                         mBottomSheetContent.onSheetClosed();
                         mBottomSheetController.removeObserver(mBottomSheetObserver);
@@ -161,6 +176,23 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
                     }
                 };
         mBottomSheetController.addObserver(mBottomSheetObserver);
+    }
+
+    /**
+     * Saves the primary color of the selected theme collection image and its file path to the
+     * SharedPreference.
+     */
+    private void saveColorAndImageFilePathForThemeCollectionData(
+            Bitmap bitmap, NtpBackgroundDataThemeCollection themeCollectionData) {
+        assert themeCollectionData.getPrimaryColor() == null;
+        @ColorInt Integer primaryColor = NtpCustomizationUtils.pickAndSavePrimaryColor(bitmap);
+
+        if (!mIsNtpCustomizationSyncEnabled) return;
+
+        themeCollectionData.setPrimaryColor(primaryColor);
+        NtpCustomizationConfigManager.getInstance()
+                .maybeSaveUserSelectedBackgroundTypeToSharedPreference(
+                        mContext, themeCollectionData);
     }
 
     /**
@@ -330,17 +362,13 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
      */
     @VisibleForTesting
     List<Integer> buildListContent(Context context) {
-        Profile profile = mProfileSupplier.get();
-        assumeNonNull(profile);
-        mProfile = profile.getOriginalProfile();
-        maybeRegisterTemplateUrlServiceObserver(mProfile);
-
         List<Integer> content = new ArrayList<>();
         content.add(MVT);
 
-        if (!NtpCustomizationUtils.isNtpSimplificationEnabledOnDesktop()) {
+        if (!DeviceInfo.isDesktop()) {
             content.add(NTP_CARDS);
         }
+        assumeNonNull(mProfile);
         if (FeedFeatures.isFeedEnabled(mProfile)) {
             content.add(FEED);
         }
@@ -460,6 +488,8 @@ public class NtpCustomizationMediator implements TemplateUrlServiceObserver {
             dismissBottomSheet(/* animate= */ true);
             return;
         }
+
+        if (mContainerPropertyModel == null) return;
 
         List<Integer> newListContent = buildListContent(mContext);
 

@@ -79,11 +79,13 @@ import org.chromium.chrome.browser.ChromeApplicationImpl;
 import org.chromium.chrome.browser.ChromeKeyboardVisibilityDelegate;
 import org.chromium.chrome.browser.ChromeWindow;
 import org.chromium.chrome.browser.DeferredStartupHandler;
+import org.chromium.chrome.browser.GracefulShutdownService;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.PlayServicesVersionInfo;
 import org.chromium.chrome.browser.TabStateThemeResourceProvider;
 import org.chromium.chrome.browser.WarmupManager;
 import org.chromium.chrome.browser.about_settings.AboutChromeSettings;
+import org.chromium.chrome.browser.actor.ActorMetrics;
 import org.chromium.chrome.browser.actor.ActorPictureInPictureController;
 import org.chromium.chrome.browser.app.appmenu.AppMenuPropertiesDelegateImpl;
 import org.chromium.chrome.browser.app.download.DownloadMessageUiDelegate;
@@ -116,12 +118,10 @@ import org.chromium.chrome.browser.customtabs.PopupCreatorFactory;
 import org.chromium.chrome.browser.desktop_site.DesktopSiteUtils;
 import org.chromium.chrome.browser.device.DeviceClassManager;
 import org.chromium.chrome.browser.devtools.DevToolsWindowAndroid;
-import org.chromium.chrome.browser.dom_distiller.DomDistillerUiUtils;
 import org.chromium.chrome.browser.dom_distiller.ReaderModeManager;
 import org.chromium.chrome.browser.download.DownloadManagerService;
 import org.chromium.chrome.browser.download.DownloadUtils;
 import org.chromium.chrome.browser.download.items.OfflineContentAggregatorNotificationBridgeUiFactory;
-import org.chromium.chrome.browser.enterprise.util.EnterpriseInfo;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabCoordinator;
 import org.chromium.chrome.browser.ephemeraltab.EphemeralTabCoordinatorSupplier;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
@@ -145,6 +145,7 @@ import org.chromium.chrome.browser.keyboard_accessory.ManualFillingComponent;
 import org.chromium.chrome.browser.keyboard_accessory.ManualFillingComponentFactory;
 import org.chromium.chrome.browser.keyboard_accessory.ManualFillingComponentSupplier;
 import org.chromium.chrome.browser.layouts.LayoutManagerAppUtils;
+import org.chromium.chrome.browser.layouts.LayoutStateProvider;
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.media.FullscreenVideoPictureInPictureController;
 import org.chromium.chrome.browser.merchant_viewer.PageInfoStoreInfoController.StoreInfoActionHandler;
@@ -178,6 +179,7 @@ import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.provider.PageContentProviderImpl;
 import org.chromium.chrome.browser.provider.PageContentProviderMetrics;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
+import org.chromium.chrome.browser.screenshot_protection.ScreenshotProtectionController;
 import org.chromium.chrome.browser.selection.SelectionPopupBackPressHandler;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.share.ShareDelegate;
@@ -187,6 +189,7 @@ import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherIm
 import org.chromium.chrome.browser.stylus_handwriting.StylusWritingCoordinator;
 import org.chromium.chrome.browser.tab.RequestDesktopUtils;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabDestroyStatus;
 import org.chromium.chrome.browser.tab.TabHidingType;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabObscuringHandler;
@@ -252,6 +255,7 @@ import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.page_info.PageInfoController.OpenedFromSource;
 import org.chromium.components.policy.CombinedPolicyProvider;
 import org.chromium.components.policy.CombinedPolicyProvider.PolicyChangeListener;
+import org.chromium.components.policy.EnterpriseInfo;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.profile_metrics.BrowserProfileType;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -319,6 +323,9 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
     @SuppressWarnings("HidingField")
     protected final SettableMonotonicObservableSupplier<EdgeToEdgeController>
             mEdgeToEdgeControllerSupplier = ObservableSuppliers.createMonotonic();
+
+    protected final SettableMonotonicObservableSupplier<ScreenshotProtectionController>
+            mScreenshotProtectionControllerSupplier = ObservableSuppliers.createMonotonic();
 
     protected final SettableMonotonicObservableSupplier<ManualFillingComponent>
             mManualFillingComponentSupplier = ObservableSuppliers.createMonotonic();
@@ -488,7 +495,7 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
         mStartupMetricsTracker =
                 new StartupMetricsTracker(
                         mTabModelSelectorSupplier, this::wasPersistentStateRestored);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
             mStartupMetricsTracker.registerApplicationStartInfoListener();
         }
         CachedFlagsSafeMode.getInstance().onStartOrResumeCheckpoint();
@@ -700,7 +707,9 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
                             mBottomContainer,
                             windowAndroid,
                             mChromeActivitySnackbarHelper.getBottomMarginSupplier(),
-                            modalDialogManager);
+                            modalDialogManager,
+                            getFullscreenManager().getPersistentFullscreenModeSupplier());
+
             mSnackbarManagerSupplier.set(snackbarManager);
             mChromeActivitySnackbarHelper.setSnackbarManager(snackbarManager);
             getInsetObserver().addObserver(snackbarManager);
@@ -981,13 +990,18 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
     /** Call the {@link TabModelOrchestrator} to initialize its members. */
     protected abstract void createTabModels();
 
-    /** Call the {@link TabModelOrchestrator} to destroy its members. */
-    protected abstract void destroyTabModels();
+    /**
+     * Call the {@link TabModelOrchestrator} to destroy its members.
+     *
+     * @return The {@link TabDestroyStatus} indicating how tabs were shut down (e.g. SLOW_SHUTDOWN
+     *     if any tab requires deferred destruction for graceful shutdown).
+     */
+    protected abstract @TabDestroyStatus int destroyTabModels();
 
     /**
-     * @return The {@link TabCreator}s owned
-     *         by this {@link ChromeActivity}.  The first item in the Pair is the normal model tab
-     *         creator, and the second is the tab creator for incognito tabs.
+     * @return The {@link TabCreator}s owned by this {@link ChromeActivity}. The first item in the
+     *     Pair is the normal model tab creator, and the second is the tab creator for incognito
+     *     tabs.
      */
     protected abstract Pair<? extends TabCreator, ? extends TabCreator> createTabCreators();
 
@@ -1098,9 +1112,6 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
             @Nullable MultiInstanceManager multiInstanceManager) {
         try (TraceEvent e = TraceEvent.scoped("ChromeActivity.initializeChromeAndroidTask")) {
             var chromeAndroidTaskTracker = ChromeAndroidTaskTrackerFactory.getInstance();
-            if (chromeAndroidTaskTracker == null) {
-                return;
-            }
 
             // 1. Obtain ChromeAndroidTask dependencies.
             var activityWindowAndroid = getWindowAndroid();
@@ -1365,6 +1376,10 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
 
         getManualFillingComponent().onResume();
         checkForDeviceLockOnAutomotive();
+
+        // Log task state if the activity was launched or brought to front via an actor notification
+        // click.
+        ActorMetrics.maybeRecordMetricsFromIntent(getIntent(), mTabModelProfileSupplier.get());
     }
 
     @Override
@@ -1448,7 +1463,8 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
     public @Nullable ActorPictureInPictureController maybeCreateActorPipController() {
         if (getProfileProviderSupplier().get() == null
                 || !GlicEnabling.isProfileEligible(
-                        getProfileProviderSupplier().get().getOriginalProfile())) {
+                        getProfileProviderSupplier().get().getOriginalProfile())
+                || DeviceFormFactor.isNonMultiDisplayContextOnTablet(this)) {
             return null;
         }
 
@@ -1642,6 +1658,9 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
 
         super.onNewIntentWithNative(intent);
         getLaunchCauseMetrics().onReceivedIntent();
+
+        // Log task state if a new intent from an actor notification click is received.
+        ActorMetrics.maybeRecordMetricsFromIntent(intent, mTabModelProfileSupplier.get());
     }
 
     /**
@@ -2019,7 +2038,13 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
             mStartupMetricsTracker = null;
         }
 
-        destroyTabModels();
+        @TabDestroyStatus int status = destroyTabModels();
+        if (ChromeFeatureList.sTabAndroidGracefulShutdown.isEnabled()
+                && status == TabDestroyStatus.SLOW_SHUTDOWN
+                && GracefulShutdownService.isLastActivityDying()) {
+            GracefulShutdownService.maybeStartGracefulShutdown(
+                    ContextUtils.getApplicationContext());
+        }
 
         // set(null) rather than destroy() so that listeners can unlisten to BookmarkModel.
         mBookmarkModelSupplier.set(null);
@@ -2198,6 +2223,16 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
 
         getProfileProviderSupplier().runSyncOrOnAvailable(this::initializeManualFillingComponent);
 
+        if (ChromeFeatureList.sEnableAndroidEnterpriseScreenshotProtection.isEnabled()) {
+            mScreenshotProtectionControllerSupplier.set(
+                    new ScreenshotProtectionController(
+                            this,
+                            getLifecycleDispatcher(),
+                            getTabModelSelector(),
+                            isCustomTab(),
+                            SupplierUtils.upcast(
+                                    mLayoutManagerSupplier, LayoutStateProvider.class)));
+        }
         mTabReparentingControllerSupplier.set(
                 new TabReparentingController(
                         ReparentingDelegateFactory.createReparentingControllerDelegate(
@@ -2372,14 +2407,21 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
     }
 
     /**
-     * TODO: this method no longer needs to be public after InfoBar is deprecated.
-     *
-     * <p>Returns a supplier for the {@link EdgeToEdgeController} that supports drawing to the edge
-     * of the screen.
+     * Returns a supplier for the {@link EdgeToEdgeController} that supports drawing to the edge of
+     * the screen.
      */
     @Override
     public MonotonicObservableSupplier<EdgeToEdgeController> getEdgeToEdgeSupplier() {
         return mEdgeToEdgeControllerSupplier;
+    }
+
+    /**
+     * Returns a supplier of the {@link ScreenshotProtectionController} instance, if enabled from
+     * the EnableAndroidEnterpriseScreenshotProtection flag
+     */
+    public MonotonicObservableSupplier<ScreenshotProtectionController>
+            getScreenshotProtectionController() {
+        return mScreenshotProtectionControllerSupplier;
     }
 
     @Override
@@ -2822,9 +2864,17 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
         int type = Profile.getBrowserProfileTypeFromProfile(getCurrentTabModel().getProfile());
 
         if (id == R.id.preferences_id) {
-            SettingsNavigation settingsNavigation =
-                    SettingsNavigationFactory.createSettingsNavigation();
-            settingsNavigation.startSettings(this);
+            if (ChromeFeatureList.isEnabled(ChromeFeatureList.SETTINGS_IN_TAB)) {
+                LoadUrlParams params =
+                        new LoadUrlParams(UrlConstants.SETTINGS_URL, PageTransition.LINK);
+                // Settings are associated with the on-the-record profile, never incognito.
+                getTabCreator(/* incognito= */ false)
+                        .createNewTab(params, TabLaunchType.FROM_CHROME_UI, getActivityTab());
+            } else {
+                SettingsNavigation settingsNavigation =
+                        SettingsNavigationFactory.createSettingsNavigation();
+                settingsNavigation.startSettings(this);
+            }
             RecordUserAction.record("MobileMenuSettings");
             RecordHistogram.recordEnumeratedHistogram(
                     "Settings.OpenSettingsFromMenu.PerProfileType",
@@ -2894,10 +2944,12 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
         }
 
         if (id == R.id.toggle_bookmarks_bar_menu_id) {
-            BookmarkBarUtils.toggleUserPrefsShowBookmarksBar(
-                    currentTab.getProfile(), /* fromKeyboardShortcut= */ false);
-            RecordUserAction.record("MobileMenuToggleBookmarksBar");
-            return true;
+            if (BookmarkBarUtils.isActivityStateBookmarkBarCompatible(this)) {
+                BookmarkBarUtils.toggleShowBookmarksBar(
+                        currentTab.getProfile(), /* fromKeyboardShortcut= */ false);
+                RecordUserAction.record("MobileMenuToggleBookmarksBar");
+                return true;
+            }
         }
 
         if (id == R.id.back_menu_id) {
@@ -3093,11 +3145,6 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
                         this, profile, url.getSpec(), getModalDialogManager());
             }
 
-            return true;
-        }
-
-        if (id == R.id.reader_mode_prefs_id) {
-            DomDistillerUiUtils.openDialogSettings(currentTab.getWebContents());
             return true;
         }
 

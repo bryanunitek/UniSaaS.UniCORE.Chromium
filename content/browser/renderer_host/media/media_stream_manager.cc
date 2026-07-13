@@ -30,14 +30,12 @@
 #include "base/time/time.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/gpu/gpu_process_host.h"
 #include "content/browser/media/capture/desktop_capture_device_uma_types.h"
 #include "content/browser/media/media_devices_permission_checker.h"
 #include "content/browser/media/media_devices_util.h"
 #include "content/browser/permissions/permission_controller_impl.h"
 #include "content/browser/renderer_host/media/audio_input_device_manager.h"
-#include "content/browser/renderer_host/media/audio_service_listener.h"
 #include "content/browser/renderer_host/media/in_process_video_capture_provider.h"
 #include "content/browser/renderer_host/media/media_capture_devices_impl.h"
 #include "content/browser/renderer_host/media/media_devices_manager.h"
@@ -51,6 +49,7 @@
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -1619,8 +1618,6 @@ MediaStreamManager::MediaStreamManager(
   }
   InitializeMaybeAsync(std::move(video_capture_provider));
 
-  audio_service_listener_ = std::make_unique<AudioServiceListener>();
-
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   if (base::FeatureList::IsEnabled(kReleaseVideoSourceProviderIfNotInUse)) {
     video_capture_hosts_.set_disconnect_handler(base::BindRepeating(
@@ -1646,11 +1643,6 @@ AudioInputDeviceManager* MediaStreamManager::audio_input_device_manager()
   // May be called on any thread, provided that we are not in shutdown.
   DCHECK(audio_input_device_manager_.get());
   return audio_input_device_manager_.get();
-}
-
-AudioServiceListener* MediaStreamManager::audio_service_listener() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return audio_service_listener_.get();
 }
 
 MediaDevicesManager* MediaStreamManager::media_devices_manager() {
@@ -3256,7 +3248,15 @@ void MediaStreamManager::FinalizeRequestFailed(
     }
     case blink::MEDIA_DEVICE_UPDATE: {
       // Fail to change capture source, keep everything unchanged and
-      // bring the previous shared tab to the front.
+      // bring the previous shared tab to the front. Restore the request
+      // state for the still-active devices so that later teardown closes
+      // them as usual.
+      if (blink::IsAudioInputMediaType(request->audio_type())) {
+        request->SetState(request->audio_type(), MEDIA_REQUEST_STATE_DONE);
+      }
+      if (blink::IsVideoInputMediaType(request->video_type())) {
+        request->SetState(request->video_type(), MEDIA_REQUEST_STATE_DONE);
+      }
       DCHECK_EQ(1u, request->stream_devices_set.stream_devices.size());
       const blink::mojom::StreamDevices& devices =
           *request->stream_devices_set.stream_devices[0];

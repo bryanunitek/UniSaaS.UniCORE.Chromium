@@ -47,6 +47,9 @@ BASE_DECLARE_FEATURE(kSyncContextualTask);
 // Enables syncing of Gemini threads across devices.
 BASE_DECLARE_FEATURE(kSyncGeminiThread);
 
+// Enables syncing of Encrypted Tab Context Containers across devices.
+BASE_DECLARE_FEATURE(kSyncEncryptedTabContextContainer);
+
 // Enables syncing of themes across iOS devices.
 BASE_DECLARE_FEATURE(kSyncThemesIos);
 
@@ -97,11 +100,6 @@ BASE_DECLARE_FEATURE(kReplaceSyncPromosWithSigninPromosNewSignin);
 // prefer using this function over checking the feature flags directly.
 bool IsReplaceSyncPromosWithSignInPromosEnabled();
 
-// If enabled, allowlisted priority preferences will be synced even if the
-// preferences user toggle is off. Note that this flag is only meaningful if
-// kEnablePreferencesAccountStorage is enabled.
-BASE_DECLARE_FEATURE(kSyncSupportAlwaysSyncingPriorityPreferences);
-
 // Enables syncing of flight reservations coming from Google Wallet.
 BASE_DECLARE_FEATURE(kSyncWalletFlightReservations);
 
@@ -113,15 +111,6 @@ BASE_DECLARE_FEATURE(kSyncWalletVehicleRegistrations);
 // TODO(crbug.com/443954137): This feature doesn't yet do anything. Implement
 // the local and account data separation behind this feature flag.
 BASE_DECLARE_FEATURE(kSpellcheckSeparateLocalAndAccountDictionaries);
-
-// Normally, if kReplaceSyncPromosWithSignInPromos is disabled,
-// UserSelectableType::kBookmarks is disabled by default upon sign-in. This
-// flag makes the type enabled by default, for manual testing.
-BASE_DECLARE_FEATURE(kEnableBookmarksSelectedTypeOnSigninForTesting);
-
-// If enabled, avoids committing changes containing only favicon URL related
-// change.
-BASE_DECLARE_FEATURE(kSearchEngineAvoidFaviconOnlyCommits);
 
 // Feature flag used for enabling sync (transport mode) for signed-in users that
 // haven't turned on full sync.
@@ -238,6 +227,8 @@ BASE_DECLARE_FEATURE(kAlwaysRegisterSessionsInvalidationsAndroid);
 
 // If enabled, the android.os.Build.FINGERPRINT prefix is uploaded in
 // DeviceInfo.
+// TODO(crbug.com/522788942): Consolidate this with
+// kSyncUseServerDeterminedDeviceName.
 BASE_DECLARE_FEATURE(kSyncUploadAndroidBuildFingerprintPrefix);
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -250,6 +241,18 @@ BASE_DECLARE_FEATURE(kEstimateNewSignInUsersWithFinchAvailablePopulation);
 // values even if they are stale. This ensures that we log the last known cookie
 // sign-in status for short-lived sessions instead of the default OFF value.
 BASE_DECLARE_FEATURE(kSyncFixWebSigninSessionDurationForShortLivedSessions);
+
+// If enabled, simplifies the device naming architecture by using the
+// most user friendly name that can be computed for a device (the so-called
+// "preferred name" in legacy path) as a single source of truth, bypassing the
+// legacy deduplication and name-based local device filtering. This affects Send
+// Tab to Self and Sharing features.
+BASE_DECLARE_FEATURE(kSyncSimplifyDeviceNaming);
+
+// If enabled, uses the server-determined model name (marketing name) as the
+// preferred name (and fallback name) if available. This provides a more
+// recognizable name for the user.
+BASE_DECLARE_FEATURE(kSyncUseServerDeterminedDeviceName);
 
 }  // namespace syncer
 

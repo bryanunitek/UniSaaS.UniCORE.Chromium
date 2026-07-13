@@ -5,20 +5,27 @@
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 
 #import "base/apple/foundation_util.h"
+#import "base/check_deref.h"
 #import "base/ios/crb_protocol_observers.h"
 #import "base/ios/ios_util.h"
 #import "base/logging.h"
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
+#import "ios/chrome/app/profile/profile_init_stage.h"
 #import "ios/chrome/app/profile/profile_state.h"
+#import "ios/chrome/app/profile/profile_state_observer.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_in_progress.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_util.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state_options.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state_prefs.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/incognito_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/layout_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/lens_overlay_state_notifier.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/scene_ui_blocker_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/state/tab_grid_state.h"
+#import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/ui/chrome_overlay_window/chrome_overlay_window.h"
 
 @interface SceneStateObserverList : CRBProtocolObservers <SceneStateObserver>
@@ -29,16 +36,16 @@
 
 #pragma mark - SceneState
 
-@interface SceneState () <SignInInProgressAudience>
+@interface SceneState () <ProfileStateObserver, SignInInProgressAudience>
 
 @end
 
 @implementation SceneState {
-  // Cache the session identifier.
-  std::string _sceneSessionID;
-
   // The AppState passed to the initializer.
   AppState* _appState;
+
+  // Cache the connection informations.
+  SceneStateOptions _sceneStateOptions;
 
   // Container for this object's observers.
   SceneStateObserverList* _observers;
@@ -74,11 +81,8 @@
     _tabGridState = [[TabGridState alloc] init];
     _incognitoState = [[IncognitoState alloc] initWithSceneState:self];
     _layoutState = [[LayoutState alloc] init];
-
-    // AppState might be nil in tests.
-    if (appState) {
-      [self addObserver:appState];
-    }
+    _lensOverlayStateNotifier = [[LensOverlayStateNotifier alloc] init];
+    _prefs = nil;
   }
   return self;
 }
@@ -107,6 +111,22 @@
   return std::make_unique<SigninInProgress>(self);
 }
 
+- (void)connectWithOptions:(SceneStateOptions)options {
+  if (ProfileState* profileState = _sceneStateOptions.profile_state) {
+    [profileState removeObserver:self];
+    _prefs = nil;
+  }
+
+  _sceneStateOptions = std::move(options);
+  ProfileState* profileState = _sceneStateOptions.profile_state;
+  [_observers sceneState:self profileStateConnected:profileState];
+
+  if (profileState) {
+    [profileState addObserver:self];
+    [self createPrefsIfPossible];
+  }
+}
+
 #pragma mark - Setters & Getters.
 
 - (UIWindow*)window {
@@ -119,17 +139,12 @@
   return mainWindow;
 }
 
-- (const std::string&)sceneSessionID {
-  return _sceneSessionID;
+- (std::string_view)sceneSessionID {
+  return _sceneStateOptions.identifier;
 }
 
 - (void)setScene:(UIWindowScene*)scene {
   _scene = scene;
-  if (_scene) {
-    _sceneSessionID = SessionIdentifierForScene(_scene);
-  } else {
-    _sceneSessionID.clear();
-  }
 }
 
 - (void)setActivationLevel:(SceneActivationLevel)newLevel {
@@ -180,9 +195,13 @@
   return _numberOfSigninInProgress > 0;
 }
 
+- (ProfileState*)profileState {
+  return _sceneStateOptions.profile_state;
+}
+
 - (void)setProfileState:(ProfileState*)profileState {
-  _profileState = profileState;
-  [_observers sceneState:self profileStateConnected:_profileState];
+  [self connectWithOptions:{.profile_state = profileState,
+                            .identifier = _sceneStateOptions.identifier}];
 }
 
 #pragma mark - UIBlockerTarget
@@ -194,7 +213,7 @@
 - (id<UIBlockerManager>)uiBlockerManagerForExtent:(UIBlockerExtent)extent {
   switch (extent) {
     case UIBlockerExtent::kProfile:
-      return _profileState;
+      return _sceneStateOptions.profile_state;
     case UIBlockerExtent::kApplication:
       return _appState;
   }
@@ -252,65 +271,6 @@
       [NSString stringWithFormat:@"SceneState %p (%@)", self, activityString];
 }
 
-#pragma mark - Session scoped defaults.
-
-// Helper methods to get/set values that are "per-scene" (such as whether the
-// incognito or regular UI is presented, ...). Those methods store/fetch the
-// values from -userInfo property of UISceneSession for devices that support
-// multi-window or in NSUserDefaults for other device.
-//
-// The reason the values are not always stored in UISceneSession -userInfo is
-// that iOS consider that the "swipe gesture" can mean "close the window" even
-// on device that do not support multi-window (such as iPhone) if multi-window
-// support is enabled. As enabling the support is done in the Info.plist and
-// Chrome does not want to distribute a different app to phones and tablets,
-// this means that on iPhone the scene may be closed by the OS and the session
-// destroyed. On device that support multi-window, the user has the option to
-// re-open the window via a shortcut presented by the OS, but there is no such
-// options for device that do not support multi-window.
-//
-// Finally, the methods also support moving the value from NSUserDefaults to
-// UISceneSession -userInfo as required when Chrome is updated from an old
-// version to one where multi-window is enabled (or when the users upgrade
-// their devices).
-//
-// The heuristic is:
-// -  if the device does not support multi-window, NSUserDefaults is used,
-// -  otherwise, the value is first looked up in UISceneSession -userInfo,
-//    if present, it is used (and any copy in NSUserDefaults is deleted),
-//    if not present, the value is looked in NSUserDefaults.
-
-- (NSObject*)sessionObjectForKey:(NSString*)key {
-  if (base::ios::IsMultipleScenesSupported()) {
-    NSObject* value = [_scene.session.userInfo objectForKey:key];
-    if (value) {
-      NSUserDefaults* userDefaults = [NSUserDefaults standardUserDefaults];
-      if ([userDefaults objectForKey:key]) {
-        [userDefaults removeObjectForKey:key];
-        [userDefaults synchronize];
-      }
-      return value;
-    }
-  }
-
-  NSUserDefaults* userDefaults = [NSUserDefaults standardUserDefaults];
-  return [userDefaults objectForKey:key];
-}
-
-- (void)setSessionObject:(NSObject*)object forKey:(NSString*)key {
-  if (base::ios::IsMultipleScenesSupported()) {
-    NSMutableDictionary<NSString*, id>* userInfo =
-        [NSMutableDictionary dictionaryWithDictionary:_scene.session.userInfo];
-    [userInfo setObject:object forKey:key];
-    _scene.session.userInfo = userInfo;
-    return;
-  }
-
-  NSUserDefaults* userDefaults = [NSUserDefaults standardUserDefaults];
-  [userDefaults setObject:object forKey:key];
-  [userDefaults synchronize];
-}
-
 #pragma mark - SignInInProgressAudience
 
 - (void)signInStarted {
@@ -335,6 +295,45 @@
   }
   _signinUIBlocker.reset();
   [_observers signinDidEnd:self];
+}
+
+#pragma mark - ProfileStateObserver
+
+- (void)profileState:(ProfileState*)profileState
+    didTransitionToInitStage:(ProfileInitStage)nextInitStage
+               fromInitStage:(ProfileInitStage)fromInitStage {
+  if (nextInitStage >= ProfileInitStage::kProfileLoaded) {
+    [self createPrefsIfPossible];
+  }
+}
+
+#pragma mark - Private methods
+
+// Will create the SceneStatePrefs if the object is ready. Can be called
+// when any condition controlling the creation of the object has changed.
+- (void)createPrefsIfPossible {
+  ProfileState* profileState = _sceneStateOptions.profile_state;
+  std::string_view identifier = _sceneStateOptions.identifier;
+  if (identifier.empty() ||
+      profileState.initStage < ProfileInitStage::kProfileLoaded) {
+    return;
+  }
+
+  // During unit tests, the profile or the profile manager may not be
+  // initialized. Avoid crashing by returning early.
+  ProfileIOS* profile = profileState.profile;
+  ProfileManagerIOS* manager = GetApplicationContext()->GetProfileManager();
+  if (!profile || !manager) {
+    return;
+  }
+
+  [profileState removeObserver:self];
+  const std::string& profile_name = profile->GetProfileName();
+  _prefs = [[SceneStatePrefs alloc] initWithProfileManager:manager
+                                               profileName:profile_name
+                                         sessionIdentifier:identifier
+                                              sceneSession:_scene.session];
+  [_incognitoState preferencesDidLoad];
 }
 
 @end

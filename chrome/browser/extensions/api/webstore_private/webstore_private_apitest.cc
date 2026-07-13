@@ -65,6 +65,7 @@
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/supervised_user/supervised_user_extensions_metrics_recorder.h"
 #include "extensions/browser/supervised_user_extensions_delegate.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -729,7 +730,7 @@ class TestSupervisedUserExtensionsDelegateAndroid
         // the extension install dialog, which is then cancelled by the updated
         // scoped_auto_confirm_ value.
         ExtensionInstallPrompt::g_last_prompt_type_for_tests =
-            ExtensionInstallPrompt::EXTENSION_PARENT_APPROVAL_PROMPT;
+            InstallPromptData::EXTENSION_PARENT_APPROVAL_PROMPT;
 
         // Set the auto confirm value to cancel the install dialog.
         scoped_auto_confirm_.reset();
@@ -744,7 +745,7 @@ class TestSupervisedUserExtensionsDelegateAndroid
       case DialogActions::kFullInstall:
         // For this case, all dialogs will be approved.
         ExtensionInstallPrompt::g_last_prompt_type_for_tests =
-            ExtensionInstallPrompt::EXTENSION_PARENT_APPROVAL_PROMPT;
+            InstallPromptData::EXTENSION_PARENT_APPROVAL_PROMPT;
 
         std::move(extension_approval_callback)
             .Run(SupervisedExtensionApprovalResult::kApproved);
@@ -767,7 +768,21 @@ class TestSupervisedUserExtensionsDelegateAndroid
   void RemoveExtensionApproval(
       const extensions::Extension& extension) override {}
   void RecordExtensionEnablementUmaMetrics(bool enabled) const override {}
-
+  bool CanSkipExtensionParentApprovals() override { return false; }
+  void RecordAskParentDialogUmaMetrics(AskParentDialogState state) override {
+    metrics_recorder_.RecordAskParentDialogUmaMetrics(
+        static_cast<
+            SupervisedUserExtensionsMetricsRecorder::AskParentDialogState>(
+            state));
+  }
+  void RecordEnablementUmaMetrics(EnablementState state) override {
+    metrics_recorder_.RecordEnablementUmaMetrics(
+        static_cast<SupervisedUserExtensionsMetricsRecorder::EnablementState>(
+            state));
+  }
+  ExtensionInstallPromptClient::Observer* GetInstallPromptObserver() override {
+    return &metrics_recorder_;
+  }
   // The sequence of dialog action to take. A total of 3 dialogs can be shown in
   // the supervised user extension installation flow:
   // 1. The Ask Parent dialog
@@ -797,6 +812,7 @@ class TestSupervisedUserExtensionsDelegateAndroid
  private:
   std::optional<DialogActions> dialog_actions_;
   std::unique_ptr<ScopedTestDialogAutoConfirm> scoped_auto_confirm_;
+  SupervisedUserExtensionsMetricsRecorder metrics_recorder_;
 };
 
 // Test fixture for installation flows for child accounts on Android.
@@ -894,7 +910,7 @@ IN_PROC_BROWSER_TEST_F(
   // Set the prompt type to ensure we are testing the parent approval install
   // dialog.
   ExtensionInstallPrompt::g_last_prompt_type_for_tests =
-      ExtensionInstallPrompt::UNSET_PROMPT_TYPE;
+      InstallPromptData::UNSET_PROMPT_TYPE;
 
   WebstoreInstallListener listener;
   auto delegate_reset = WebstorePrivateApi::SetDelegateForTesting(&listener);
@@ -911,7 +927,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Verify that the parent approval install dialog was NOT shown.
   EXPECT_NE(ExtensionInstallPrompt::g_last_prompt_type_for_tests,
-            ExtensionInstallPrompt::EXTENSION_PARENT_APPROVAL_PROMPT);
+            InstallPromptData::EXTENSION_PARENT_APPROVAL_PROMPT);
 
   // Verify the Ask Parent Dialog metrics.
   EXPECT_EQ(1, user_action_tester.GetActionCount(
@@ -951,13 +967,13 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserExtensionWebstorePrivateApiTestAndroid,
   // Set the prompt type to ensure we are testing the parent approval install
   // dialog.
   ExtensionInstallPrompt::g_last_prompt_type_for_tests =
-      ExtensionInstallPrompt::UNSET_PROMPT_TYPE;
+      InstallPromptData::UNSET_PROMPT_TYPE;
 
   WebstoreInstallListener listener;
   auto delegate_reset = WebstorePrivateApi::SetDelegateForTesting(&listener);
 
   // The parent approval install dialog
-  // (ExtensionInstallPrompt::EXTENSION_PARENT_APPROVAL_PROMPT) will be shown
+  // (InstallPromptData::EXTENSION_PARENT_APPROVAL_PROMPT) will be shown
   // after the parent authentication dialog. Auto-cancel it.
   set_dialog_actions(TestSupervisedUserExtensionsDelegateAndroid::
                          DialogActions::kDismissExtensionInstallDialog);
@@ -971,7 +987,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserExtensionWebstorePrivateApiTestAndroid,
 
   // Verify that the parent approval install dialog was shown.
   EXPECT_EQ(ExtensionInstallPrompt::g_last_prompt_type_for_tests,
-            ExtensionInstallPrompt::EXTENSION_PARENT_APPROVAL_PROMPT);
+            InstallPromptData::EXTENSION_PARENT_APPROVAL_PROMPT);
 
   // Verify the Ask Parent Dialog metrics.
   EXPECT_EQ(1, user_action_tester.GetActionCount(
@@ -1029,13 +1045,13 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserExtensionWebstorePrivateApiTestAndroid,
   // Set the prompt type to ensure we are testing the parent approval install
   // dialog.
   ExtensionInstallPrompt::g_last_prompt_type_for_tests =
-      ExtensionInstallPrompt::UNSET_PROMPT_TYPE;
+      InstallPromptData::UNSET_PROMPT_TYPE;
 
   WebstoreInstallListener listener;
   auto delegate_reset = WebstorePrivateApi::SetDelegateForTesting(&listener);
 
   // The parent approval install dialog
-  // (ExtensionInstallPrompt::EXTENSION_PARENT_APPROVAL_PROMPT) will be shown
+  // (InstallPromptData::EXTENSION_PARENT_APPROVAL_PROMPT) will be shown
   // after the parent authentication dialog. Auto-accept it.
   set_dialog_actions(
       TestSupervisedUserExtensionsDelegateAndroid::DialogActions::kFullInstall);
@@ -1047,7 +1063,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserExtensionWebstorePrivateApiTestAndroid,
 
   // Verify that the parent approval install dialog was shown.
   EXPECT_EQ(ExtensionInstallPrompt::g_last_prompt_type_for_tests,
-            ExtensionInstallPrompt::EXTENSION_PARENT_APPROVAL_PROMPT);
+            InstallPromptData::EXTENSION_PARENT_APPROVAL_PROMPT);
 
   // Verify the Ask Parent Dialog metrics.
   EXPECT_EQ(1, user_action_tester.GetActionCount(

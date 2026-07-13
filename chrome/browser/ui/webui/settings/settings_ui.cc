@@ -24,16 +24,18 @@
 #include "chrome/browser/compose/compose_enabling.h"
 #include "chrome/browser/contextual_cueing/features.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_context_service.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/history_embeddings/history_embeddings_utils.h"
+#include "chrome/browser/metrics/variations/google_groups_manager_factory.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/password_manager/chrome_password_change_service.h"
 #include "chrome/browser/password_manager/password_change_service_factory.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_tuning_utils.h"
-#include "chrome/browser/personal_context/personal_context_enablement_service_factory.h"
+#include "chrome/browser/personal_context/personal_context_eligibility_service_factory.h"
 #include "chrome/browser/preloading/preloading_features.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_service.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_service_factory.h"
@@ -52,7 +54,6 @@
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/browser/ui/toasts/toast_features.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_utils.h"
 #include "chrome/browser/ui/webui/cr_components/customize_color_scheme_mode/customize_color_scheme_mode_handler.h"
 #include "chrome/browser/ui/webui/extension_control_handler.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
@@ -100,11 +101,14 @@
 #include "chrome/grit/settings_resources_map.h"
 #include "components/account_manager_core/account_manager_facade.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
+#include "components/autofill/core/browser/at_memory/at_memory_enablement_utils.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
+#include "components/autofill/core/browser/integrators/personal_context/personal_context_autofill_util.h"
 #include "components/autofill/core/browser/payments/bnpl_manager.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_utils.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/browsing_data/core/features.h"
 #include "components/commerce/core/commerce_feature_list.h"
 #include "components/commerce/core/feature_utils.h"
@@ -120,7 +124,7 @@
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/performance_manager/public/features.h"
 #include "components/permissions/features.h"
-#include "components/personal_context/core/personal_context_enablement_service.h"
+#include "components/personal_context/core/personal_context_eligibility_service.h"
 #include "components/personal_context/core/personal_context_types.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -360,9 +364,6 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
       (!ShouldDisplayManagedUi(profile) && !profile->IsChild());
   html_source->AddBoolean("showPrivacyGuide", show_privacy_guide);
 
-  html_source->AddBoolean(
-      "showResetProfileBannerV2",
-      base::FeatureList::IsEnabled(features::kShowResetProfileBannerV2));
 
   html_source->AddBoolean("enableHandTrackingContentSetting",
 #if BUILDFLAG(ENABLE_VR)
@@ -574,9 +575,19 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
           autofill::features::kAutofillEnableWalletBranding));
 
   html_source->AddBoolean(
+      "autofillEnableGradientGoogleLogos",
+      base::FeatureList::IsEnabled(
+          autofill::features::kAutofillEnableGradientGoogleLogos));
+
+  html_source->AddBoolean(
       "enableAutofillAiWalletPrivatePasses",
       base::FeatureList::IsEnabled(
           autofill::features::kAutofillAiWalletPrivatePasses));
+
+  html_source->AddBoolean(
+      "enableInlineCueMenuContentSetting",
+      base::FeatureList::IsEnabled(features::kGlicSelectionPrompt) &&
+          features::kGlicSelectionEnableSiteSettings.Get());
 
   // AI
   bool show_glic_section = false;
@@ -624,6 +635,8 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
       {"showSkillsSettingPage",
        base::FeatureList::IsEnabled(features::kSkillsEnabled)},
       {"showIndigoControl", base::FeatureList::IsEnabled(features::kIndigo)},
+      {"showGoogleSearchAiModeWorkspaceControl",
+       base::FeatureList::IsEnabled(features::kGoogleSearchAiModeWorkspace)},
   };
 
   html_source->AddString("aiSuggestionsHelpCenterArticleLink",
@@ -678,18 +691,21 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
       "searchSettingsUpdate",
       base::FeatureList::IsEnabled(switches::kSearchSettingsUpdate));
 
-  personal_context::PersonalContextEnablementService* enablement_service =
-      PersonalContextEnablementServiceFactory::GetForProfile(profile);
+  personal_context::PersonalContextEligibilityService* eligibility_service =
+      PersonalContextEligibilityServiceFactory::GetForProfile(profile);
+  html_source->AddBoolean("showSuggestionsFromGeminiSettings",
+                          autofill::ShouldShowPersonalContextAutofillSetting(
+                              autofill_client, eligibility_service));
   html_source->AddBoolean(
-      "showPersonalContextSettingsLink",
-      enablement_service &&
-          enablement_service->GetEnablementState() ==
-              personal_context::PersonalContextEnablementState::kEnabled);
-  html_source->AddLocalizedString("personalContextSettingsTitle",
-                                  IDS_PERSONAL_CONTEXT_SETTINGS_TITLE);
-  html_source->AddLocalizedString(
-      "personalContextSettingsDescription",
-      IDS_PERSONAL_CONTEXT_SETTINGS_DESCRIPTION_DESKTOP);
+      "isAtMemoryEnabled",
+      autofill::MayPerformAtMemoryAction(
+          autofill::AtMemoryAction::kShowAtMemoryInSettings, autofill_client));
+
+  html_source->AddBoolean(
+      "isAtMemoryTriggerCustomizationAllowed",
+      autofill::MayPerformAtMemoryAction(
+          autofill::AtMemoryAction::kAllowCustomizeAtMemoryShortcut,
+          autofill_client));
 
   html_source->AddString(
       "webuiRefresh2026",
@@ -805,10 +821,10 @@ void SettingsUI::TryShowHatsSurveyWithTimeout() {
 
 #if !BUILDFLAG(IS_CHROMEOS)
 void SettingsUI::CreateThemeColorPickerHandler(
-    mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
-        handler,
     mojo::PendingRemote<theme_color_picker::mojom::ThemeColorPickerClient>
-        client) {
+        client,
+    mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
+        handler) {
   theme_color_picker_handler_ = std::make_unique<ThemeColorPickerHandler>(
       std::move(handler), std::move(client),
       NtpCustomBackgroundServiceFactory::GetForProfile(

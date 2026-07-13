@@ -237,10 +237,10 @@ std::optional<webapps::LaunchParams> MaybeGetLaunchParams(
     return std::nullopt;
   }
   webapps::LaunchParams launch_params;
-  launch_params.app_id = extension->id();
-  launch_params.target_url = url;
-  launch_params.paths = params.launch_files;
-  launch_params.started_new_navigation = true;
+  launch_params.set_app_id(extension->id());
+  launch_params.set_target_url(url);
+  launch_params.set_paths(params.launch_files);
+  launch_params.set_started_new_navigation(true);
   return launch_params;
 }
 
@@ -530,7 +530,8 @@ WebContents* NavigateApplicationWindow(Browser* browser,
                                        const apps::AppLaunchParams& params,
                                        const GURL& url,
                                        WindowOpenDisposition disposition) {
-  const Extension* const extension = GetExtension(browser->profile(), params);
+  const Extension* const extension =
+      GetExtension(browser->GetProfile(), params);
   ui::PageTransition transition =
       (extension ? ui::PAGE_TRANSITION_AUTO_BOOKMARK
                  : ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
@@ -571,7 +572,7 @@ WebContents* OpenApplicationWindow(Profile* profile,
   WebContents* web_contents = NavigateApplicationWindow(
       browser, params, url, WindowOpenDisposition::NEW_FOREGROUND_TAB);
 
-  browser->window()->Show();
+  browser->GetWindow()->Show();
   return web_contents;
 }
 

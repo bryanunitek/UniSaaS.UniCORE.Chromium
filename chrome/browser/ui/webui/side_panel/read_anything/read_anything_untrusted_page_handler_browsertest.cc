@@ -31,6 +31,7 @@
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/read_anything/read_anything.mojom-shared.h"
 #include "chrome/common/read_anything/read_anything.mojom.h"
@@ -147,6 +148,10 @@ class MockPage : public read_anything::mojom::UntrustedPage {
   MOCK_METHOD(void,
               OnReadabilityDistillationStateChanged,
               (read_anything::mojom::ReadAnythingDistillationState state),
+              (override));
+  MOCK_METHOD(void,
+              OnMainFrameSameDocumentNavigation,
+              (const GURL& url),
               (override));
 
   mojo::Receiver<read_anything::mojom::UntrustedPage> receiver_{this};
@@ -405,6 +410,8 @@ class ReadAnythingUntrustedPageHandlerTest
   void OnLinksEnabledChanged(bool enabled) {
     handler_->OnLinksEnabledChanged(enabled);
   }
+
+  void OnTranslationRequested() { handler_->OnTranslationRequested(); }
 
   void OnImagesEnabledChanged(bool enabled) {
     handler_->OnImagesEnabledChanged(enabled);
@@ -987,6 +994,26 @@ IN_PROC_BROWSER_TEST_P(
       }));
 
   handler_ = CreateHandler();
+}
+
+IN_PROC_BROWSER_TEST_P(ReadAnythingUntrustedPageHandlerTest,
+                       Activate_RestoresSettingsFromPrefs) {
+  handler_ = CreateHandler();
+  page_.receiver_.FlushForTesting();
+
+  // Change a preference.
+  PrefService* prefs = browser()->profile()->GetPrefs();
+  prefs->SetInteger(prefs::kAccessibilityReadAnythingColorInfo,
+                    static_cast<int>(read_anything::mojom::Colors::kDark));
+
+  // Re-activating the handler should restore settings.
+  EXPECT_CALL(page_, OnSettingsRestoredFromPrefs(
+                         _, _, _, _, _, _, read_anything::mojom::Colors::kDark,
+                         _, _, _, _, _, _))
+      .Times(1);
+
+  Activate(true);
+  page_.receiver_.FlushForTesting();
 }
 
 IN_PROC_BROWSER_TEST_P(ReadAnythingUntrustedPageHandlerTest,
@@ -2045,6 +2072,34 @@ IN_PROC_BROWSER_TEST_P(
   }
 }
 
+class ReadAnythingUntrustedPageHandlerTranslateEntryPointTest
+    : public ReadAnythingUntrustedPageHandlerTest {
+ public:
+  ReadAnythingUntrustedPageHandlerTranslateEntryPointTest()
+      : ReadAnythingUntrustedPageHandlerTest(
+            {features::kReadAnythingTranslateEntryPoint}) {}
+};
+
+IN_PROC_BROWSER_TEST_P(ReadAnythingUntrustedPageHandlerTranslateEntryPointTest,
+                       OnTranslationRequested) {
+  // Navigate to a simple page and set up the handler.
+  ASSERT_TRUE(embedded_test_server()->Start());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/simple.html")));
+  translate::TranslateManager::SetIgnoreMissingKeyForTesting(true);
+
+  handler_ = CreateHandler();
+  TranslateBubbleController* controller =
+      TranslateBubbleController::From(browser());
+  EXPECT_TRUE(!controller || !controller->GetTranslateBubble());
+
+  OnTranslationRequested();
+
+  controller = TranslateBubbleController::From(browser());
+  ASSERT_NE(controller, nullptr);
+  EXPECT_NE(controller->GetTranslateBubble(), nullptr);
+}
+
 class ReadAnythingUntrustedPageHandlerDistillerTest
     : public ReadAnythingUntrustedPageHandlerTest {
  public:
@@ -2125,8 +2180,14 @@ IN_PROC_BROWSER_TEST_P(ReadAnythingUntrustedPageHandlerDistillerTest,
   handler_->OnActiveAXTreeIDChanged();
 }
 
+// TODO(crbug.com/531483974): Failing on ChromiumOS Msan.
+#if BUILDFLAG(IS_CHROMEOS) && defined(MEMORY_SANITIZER)
+#define MAYBE_DistillationPopulatesContent DISABLED_DistillationPopulatesContent
+#else
+#define MAYBE_DistillationPopulatesContent DistillationPopulatesContent
+#endif
 IN_PROC_BROWSER_TEST_P(ReadAnythingUntrustedPageHandlerDistillerTest,
-                       DistillationPopulatesContent) {
+                       MAYBE_DistillationPopulatesContent) {
   ASSERT_TRUE(embedded_test_server()->Start());
   handler_ = CreateHandler();
 
@@ -2238,6 +2299,24 @@ IN_PROC_BROWSER_TEST_P(ReadAnythingUntrustedPageHandlerDistillerTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
 }
 
+IN_PROC_BROWSER_TEST_P(ReadAnythingUntrustedPageHandlerDistillerTest,
+                       RequestReadabilityDistillation_TriggersDistillation) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  handler_ = CreateHandler();
+
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL(embedded_test_server()->GetURL("/simple.html")),
+      WindowOpenDisposition::CURRENT_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+
+  EXPECT_CALL(page_, OnReadabilityDistillationStateChanged(
+                         read_anything::mojom::ReadAnythingDistillationState::
+                             kDistillationInProgress))
+      .Times(testing::AtLeast(1));
+
+  handler_->RequestReadabilityDistillation();
+}
+
 // In order to test that Readability isn't used in automated tests,
 // an embedded_test_server needs to be set up in SetUpOnMainThread.
 // Since this isn't needed for the rest of the tests, this is handled
@@ -2287,6 +2366,11 @@ IN_PROC_BROWSER_TEST_P(ReadAnythingUntrustedPageHandlerAutomationTest,
 INSTANTIATE_TEST_SUITE_P(All,
                          ReadAnythingUntrustedPageHandlerTest,
                          testing::Bool());
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    ReadAnythingUntrustedPageHandlerTranslateEntryPointTest,
+    testing::Bool());
 
 INSTANTIATE_TEST_SUITE_P(All,
                          ReadAnythingUntrustedPageHandlerDistillerTest,

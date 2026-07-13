@@ -12,11 +12,12 @@
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_non_2d_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkSurface.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 
 namespace blink {
@@ -91,6 +92,8 @@ void BlitToCanvas(cc::PaintCanvas& canvas,
                   SkISize dest_size,
                   const StaticBitmapImageTransform::Params& options) {
   cc::PaintFlags paint;
+  paint.setTargetedHdrHeadroom(
+      cc::PaintFlags::TargetedHdrHeadroom::kDisableEverything);
   paint.setBlendMode(SkBlendMode::kSrc);
   if (options.flip_y) {
     if (source_orientation.UsesWidthAsHeight()) {
@@ -267,7 +270,7 @@ scoped_refptr<StaticBitmapImage> StaticBitmapImageTransform::ApplyWithBlit(
   const auto source_orientation = GetSourceOrientation(source, options);
   if (source_paint_image.IsTextureBacked() &&
       source->ContextProviderWrapper()) {
-    auto resource_provider = CanvasNon2DResourceProviderSharedImage::Create(
+    auto resource_provider = CanvasNon2DResourceProvider::Create(
         gfx::Size(dest_size.width(), dest_size.height()), dest_format,
         dest_alpha_type, dest_color_space, dest_hdr_metadata,
         source->ContextProviderWrapper(), source->GetSharedImage()->usage());

@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/webcodecs/video_frame.h"
 
 #include <algorithm>
+#include <array>
 
 #include "base/containers/span_reader.h"
 #include "base/functional/callback_helpers.h"
@@ -152,6 +153,38 @@ TEST_F(VideoFrameTest, ConstructorWithTimestamp) {
   frame_default->close();
 }
 
+TEST_F(VideoFrameTest, CreateFromVideoFrameWithTimestampOverride) {
+  V8TestingScope scope;
+
+  scoped_refptr<media::VideoFrame> media_frame = CreateBlackMediaVideoFrame(
+      base::Microseconds(1000), media::PIXEL_FORMAT_I420,
+      gfx::Size(112, 208) /* coded_size */,
+      gfx::Size(100, 200) /* visible_size */);
+
+  VideoFrame* frame_with_ts = MakeGarbageCollected<VideoFrame>(
+      media_frame, scope.GetExecutionContext(), "source_id", nullptr,
+      base::Microseconds(2000));
+
+  auto* source = MakeGarbageCollected<V8CanvasImageSource>(frame_with_ts);
+  auto* init = VideoFrameInit::Create();
+
+  // Creating a VideoFrame from another VideoFrame should bring over the
+  // overridden timestamp.
+  VideoFrame* new_frame = VideoFrame::Create(scope.GetScriptState(), source,
+                                             init, scope.GetExceptionState());
+  ASSERT_TRUE(new_frame);
+  EXPECT_EQ(2000, new_frame->timestamp());
+
+  // Also verify explicit override works.
+  init->setTimestamp(3000);
+  VideoFrame* new_frame_override = VideoFrame::Create(
+      scope.GetScriptState(), source, init, scope.GetExceptionState());
+  ASSERT_TRUE(new_frame_override);
+  EXPECT_EQ(3000, new_frame_override->timestamp());
+
+  frame_with_ts->close();
+}
+
 TEST_F(VideoFrameTest, ConstructorOddSize) {
   V8TestingScope scope;
 
@@ -159,7 +192,7 @@ TEST_F(VideoFrameTest, ConstructorOddSize) {
   const auto kOddUVSize = gfx::Size(std::ceil(kOddSize.width() / 2.0),
                                     std::ceil(kOddSize.height() / 2.0));
   const size_t allocation_size =
-      kOddSize.Area64() * 2 + kOddUVSize.Area64() * 2;
+      static_cast<size_t>(kOddSize.Area64() * 2 + kOddUVSize.Area64() * 2);
 
   auto* array_buffer = DOMArrayBuffer::Create(allocation_size, 1);
 
@@ -168,8 +201,8 @@ TEST_F(VideoFrameTest, ConstructorOddSize) {
 
   std::string media_frame_hash;
   {
-    const size_t kYAPlaneByteSize = kOddSize.Area64();
-    const size_t kUVPlaneByteSize = kOddUVSize.Area64();
+    const size_t kYAPlaneByteSize = static_cast<size_t>(kOddSize.Area64());
+    const size_t kUVPlaneByteSize = static_cast<size_t>(kOddUVSize.Area64());
     auto src_media_frame = media::VideoFrame::WrapExternalYuvaData(
         media::PIXEL_FORMAT_I420A, kOddSize, gfx::Rect(kOddSize), kOddSize,
         kOddSize.width(), kOddUVSize.width(), kOddUVSize.width(),
@@ -264,6 +297,56 @@ TEST_F(VideoFrameTest, CopyToRGB) {
       ASSERT_EQ(b, 0) << " B x: " << x << " y: " << y;
     }
   }
+
+  blink_frame->close();
+}
+
+TEST_F(VideoFrameTest, CopyToRGBXFromBuffer) {
+  V8TestingScope scope;
+  auto* src_buffer = DOMArrayBuffer::Create(4, 1);
+  src_buffer->ByteSpan().copy_from(std::to_array<uint8_t>({10, 20, 30, 40}));
+
+  auto* init = VideoFrameBufferInit::Create();
+  init->setTimestamp(0);
+  init->setCodedWidth(1);
+  init->setCodedHeight(1);
+  init->setFormat(V8VideoPixelFormat::Enum::kRGBX);
+  init->setDisplayWidth(1);
+  init->setDisplayHeight(1);
+
+  VideoFrame* blink_frame = VideoFrame::Create(
+      scope.GetScriptState(),
+      MakeGarbageCollected<V8AllowSharedBufferSource>(src_buffer), init,
+      scope.GetExceptionState());
+  ASSERT_TRUE(blink_frame);
+
+  VideoFrameCopyToOptions* options = VideoFrameCopyToOptions::Create();
+  options->setFormat(V8VideoPixelFormat::Enum::kRGBX);
+
+  uint32_t buffer_size =
+      blink_frame->allocationSize(options, scope.GetExceptionState());
+  ASSERT_EQ(buffer_size, 4u);
+  auto* dst_buffer = DOMArrayBuffer::Create(buffer_size, 1);
+  std::ranges::fill(dst_buffer->ByteSpan(), 0xff);
+  AllowSharedBufferSource* destination =
+      MakeGarbageCollected<AllowSharedBufferSource>(dst_buffer);
+
+  auto promise = blink_frame->copyTo(scope.GetScriptState(), destination,
+                                     options, scope.GetExceptionState());
+
+  ScriptPromiseTester tester(scope.GetScriptState(), promise);
+  tester.WaitUntilSettled();
+  ASSERT_TRUE(tester.IsFulfilled());
+
+  base::SpanReader<const uint8_t> reader(dst_buffer->ByteSpan());
+  uint8_t r, g, b, a;
+  ASSERT_TRUE(reader.ReadU8BigEndian(r));
+  ASSERT_TRUE(reader.ReadU8BigEndian(g));
+  ASSERT_TRUE(reader.ReadU8BigEndian(b));
+  ASSERT_TRUE(reader.ReadU8BigEndian(a));
+  EXPECT_EQ(r, 10);
+  EXPECT_EQ(g, 20);
+  EXPECT_EQ(b, 30);
 
   blink_frame->close();
 }

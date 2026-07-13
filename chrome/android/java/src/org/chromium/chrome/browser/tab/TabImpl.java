@@ -106,6 +106,8 @@ import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.SelectionPopupController;
+import org.chromium.content_public.browser.ViewEventSink;
+import org.chromium.content_public.browser.ViewFocusChangeSuppression;
 import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsAccessibility;
@@ -133,7 +135,7 @@ import java.util.Objects;
  * class is not intended to be extended.
  */
 @NullMarked
-class TabImpl implements Tab {
+class TabImpl implements Tab, TabInternal {
     /** Used for logging. */
     private static final String TAG = "Tab";
 
@@ -305,6 +307,7 @@ class TabImpl implements Tab {
             ObservableSuppliers.createNonNull(false);
 
     private boolean mIsDestroyed;
+    private boolean mFocusChangesSuppressed;
 
     private int mThemeColor;
     private int mWebContentBackgroundColor;
@@ -792,6 +795,20 @@ class TabImpl implements Tab {
         }
     }
 
+    private @Nullable PdfInfo getPdfInfoForLoadUrl(LoadUrlParams params) {
+        boolean isPdf =
+                PdfUtils.shouldOpenPdfInline(isIncognito())
+                        && PdfUtils.isPdfNavigation(params.getUrl(), params);
+        PdfInfo pdfInfo = null;
+        if (isPdf) {
+            boolean preferReused =
+                    (params.getTransitionType() & PageTransition.CORE_MASK) == PageTransition.TYPED;
+            pdfInfo = PdfInfo.initReuse(preferReused);
+            params.setIsPdf(true);
+        }
+        return pdfInfo;
+    }
+
     @Override
     public LoadUrlResult loadUrl(LoadUrlParams params) {
         try {
@@ -799,14 +816,8 @@ class TabImpl implements Tab {
             // TODO(tedchoc): When showing the android NTP, delay the call to
             // TabImplJni.get().loadUrl until the android view has entirely rendered.
             if (!mIsNativePageCommitPending) {
-                boolean isPdf =
-                        PdfUtils.shouldOpenPdfInline(isIncognito())
-                                && PdfUtils.isPdfNavigation(params.getUrl(), params);
                 mIsNativePageCommitPending =
-                        maybeShowNativePage(params.getUrl(), false, isPdf ? new PdfInfo() : null);
-                if (isPdf) {
-                    params.setIsPdf(true);
-                }
+                        maybeShowNativePage(params.getUrl(), false, getPdfInfoForLoadUrl(params));
             }
 
             if ("chrome://java-crash/".equals(params.getUrl())) {
@@ -1113,9 +1124,35 @@ class TabImpl implements Tab {
         return mIsDestroyed;
     }
 
+    @Override
+    public void setFocusChangeSuppressed(boolean suppressed) {
+        if (mFocusChangesSuppressed == suppressed) return;
+
+        mFocusChangesSuppressed = suppressed;
+
+        if (getWebContents() == null || getView() == null) return;
+
+        var viewSuppression = ViewFocusChangeSuppression.from(getWebContents());
+
+        if (suppressed) {
+            ViewEventSink sink = ViewEventSink.from(getWebContents());
+            sink.onWindowFocusChanged(true);
+            sink.onViewFocusChanged(true);
+        }
+
+        viewSuppression.setSuppressed(suppressed);
+
+        if (!suppressed) {
+            ViewEventSink sink = ViewEventSink.from(getWebContents());
+            sink.onWindowFocusChanged(getView().hasWindowFocus());
+            sink.onViewFocusChanged(getView().hasFocus());
+        }
+    }
+
     private void updateWebContentsVisibility() {
         var webContents = getWebContents();
         if (webContents == null) return;
+
         if (mIsHidden) {
             webContents.updateWebContentsVisibility(Visibility.HIDDEN);
         } else if (!mIsDetachedFromActivity
@@ -1243,13 +1280,14 @@ class TabImpl implements Tab {
         TabImplJni.get().getMemoryUsageBytes(mNativeTabAndroid, callback);
     }
 
+    @CalledByNative
     @Override
-    public void destroy() {
-        destroyInternal(/* deleteNativeWebContents= */ true);
+    public @TabDestroyStatus int destroy() {
+        return destroyInternal(/* deleteNativeWebContents= */ true);
     }
 
     @CalledByNative
-    private void destroyInternal(boolean deleteNativeWebContents) {
+    private @TabDestroyStatus int destroyInternal(boolean deleteNativeWebContents) {
         ThreadUtils.assertOnUiThread();
 
         // Ensure the tab signals to C++ it was removed from the TabModel. This should be a no-op
@@ -1274,16 +1312,19 @@ class TabImpl implements Tab {
         for (TabObserver observer : mObservers) observer.onDestroyed(this);
         boolean abortNavigationsFromTabClosures =
                 ChromeFeatureList.isEnabled(ChromeFeatureList.ABORT_NAVIGATIONS_FROM_TAB_CLOSURES);
+        @TabDestroyStatus int status = TabDestroyStatus.NO_SHUTDOWN;
         if (abortNavigationsFromTabClosures) {
             mUserDataHost.destroy();
-            destroyWebContents(deleteNativeWebContents);
+            status = destroyWebContents(deleteNativeWebContents);
         }
 
         mObservers.clear();
         if (!abortNavigationsFromTabClosures) mUserDataHost.destroy();
         mTabViewManager.destroy();
         hideNativePage(false, null);
-        if (!abortNavigationsFromTabClosures) destroyWebContents(deleteNativeWebContents);
+        if (!abortNavigationsFromTabClosures) {
+            status = destroyWebContents(deleteNativeWebContents);
+        }
         if (mWebContentsState != null) {
             mWebContentsState.destroy();
             mWebContentsState = null;
@@ -1297,6 +1338,7 @@ class TabImpl implements Tab {
             TabImplJni.get().destroy(mNativeTabAndroid);
             assert mNativeTabAndroid == 0;
         }
+        return status;
     }
 
     /**
@@ -1502,7 +1544,9 @@ class TabImpl implements Tab {
             // Avoid an empty title by updating the title here. This could happen if restoring from
             // a WebContents that has no renderer and didn't force a reload. This happens on
             // background tab creation from Recent Tabs (TabRestoreService).
-            updateTitle();
+            if (TextUtils.isEmpty(mTitle)) {
+                updateTitle();
+            }
 
             if (!createWebContents && webContents.shouldShowLoadingUI()) {
                 didStartPageLoad(webContents.getVisibleUrl());
@@ -1796,8 +1840,8 @@ class TabImpl implements Tab {
             boolean isPdf,
             boolean isRendererInitiated,
             @Nullable Origin initiatorOrigin) {
-        mIsNativePageCommitPending = false;
-        boolean isReload = (transitionType & PageTransition.CORE_MASK) == PageTransition.RELOAD;
+        transitionType &= PageTransition.CORE_MASK;
+        boolean isReload = transitionType == PageTransition.RELOAD;
         // Set isPdf param based on the url. This is because the isPdf param in NavigationHandle is
         // not set in some cases (e.g. Chrome restart or navigate backward to pdf page). When the
         // pdf file is downloaded to media store, we should set isPdf param and open pdf page
@@ -1805,7 +1849,10 @@ class TabImpl implements Tab {
         isPdf |=
                 PdfUtils.shouldOpenPdfInline(isIncognito())
                         && PdfUtils.isDownloadedPdf(url.getSpec());
-        if (!maybeShowNativePage(url.getSpec(), isReload, isPdf ? new PdfInfo() : null)) {
+        boolean preferReuse = transitionType == PageTransition.TYPED || mIsNativePageCommitPending;
+        var pdfInfo = isPdf ? PdfInfo.initReuse(preferReuse) : null;
+        mIsNativePageCommitPending = false;
+        if (!maybeShowNativePage(url.getSpec(), isReload, pdfInfo)) {
             // This is restricted to HTTP(S) URLs specifically, as these are the only schemes that
             // necessitate a PDF re-download.
             String downloadUrl = PdfUtils.getPdfReDownloadUrl(url.getSpec());
@@ -1835,14 +1882,15 @@ class TabImpl implements Tab {
         if (!UrlConstants.CHROME_SCHEME.equals(scheme)) return false;
 
         String host = url.getHost();
-        if (UrlConstants.SETTINGS_HOST.equals(host)) {
-            // TODO(crbug.com/456164910): Use the URL path to open deeplinks into Settings.
-            SettingsNavigationFactory.createSettingsNavigation()
-                    .startSettings(assumeNonNull(getActivity()));
-            goBack(); // Keep showing the previous contents in the tab.
-            return true;
-        }
-        return false;
+        if (!UrlConstants.SETTINGS_HOST.equals(host)) return false;
+
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.SETTINGS_IN_TAB)) return false;
+
+        // TODO(crbug.com/456164910): Use the URL path to open deeplinks into Settings.
+        SettingsNavigationFactory.createSettingsNavigation()
+                .startSettings(assumeNonNull(getActivity()));
+        goBack(); // Keep showing the previous contents in the tab.
+        return true;
     }
 
     /**
@@ -1932,10 +1980,15 @@ class TabImpl implements Tab {
 
         mPendingNativePageHost = nativePageHost;
         mIsAlreadyCreatingNativePage = true;
-        NativePage candidateForReuse = forceReload ? null : getNativePage();
+
+        // Prefer reusing the NativePage when loading pdf.
+        boolean loadPdf = PdfUtils.isReuseFragmentEnabled() && pdfInfo != null;
+        NativePage candidateForReuse = forceReload && !loadPdf ? null : getNativePage();
+
         assumeNonNull(mDelegateFactory);
         NativePage nativePage =
                 mDelegateFactory.createNativePage(url, candidateForReuse, this, pdfInfo);
+
         mIsAlreadyCreatingNativePage = false;
         mPendingNativePageHost = null;
 
@@ -2084,8 +2137,9 @@ class TabImpl implements Tab {
     /**
      * @return The native pointer representing the native side of this {@link TabImpl} object.
      */
+    @Override
     @CalledByNative
-    private long getNativePtr() {
+    public long getNativePtr() {
         return mNativeTabAndroid;
     }
 
@@ -2122,17 +2176,6 @@ class TabImpl implements Tab {
     @CalledByNative
     private static @Nullable TabImpl getJavaObject(long nativePtr) {
         return sTabMap.get(nativePtr);
-    }
-
-    @CalledByNative
-    private static long @Nullable [] getAllNativePtrs(Tab @Nullable [] tabsArray) {
-        if (tabsArray == null) return null;
-
-        long[] tabsPtrArray = new long[tabsArray.length];
-        for (int i = 0; i < tabsArray.length; i++) {
-            tabsPtrArray[i] = ((TabImpl) tabsArray[i]).getNativePtr();
-        }
-        return tabsPtrArray;
     }
 
     @CalledByNative
@@ -2216,6 +2259,11 @@ class TabImpl implements Tab {
             if (oldWebContents != null) {
                 assumeNonNull(getWebContentsAccessibility(oldWebContents))
                         .setObscuredByAnotherView(false);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM
+                        && mSensitiveContentClientObserver != null) {
+                    SensitiveContentClient.fromWebContents(oldWebContents)
+                            .removeObserver(mSensitiveContentClientObserver);
+                }
             }
 
             ContentUtils.setUserAgentOverride(
@@ -2255,6 +2303,12 @@ class TabImpl implements Tab {
             }
             TabHelpers.initWebContentsHelpers(this);
             notifyContentChanged();
+
+            if (mFocusChangesSuppressed) {
+                ViewFocusChangeSuppression suppression =
+                        ViewFocusChangeSuppression.from(webContents);
+                suppression.setSuppressed(true);
+            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM
                     && ChromeFeatureList.isEnabled(SensitiveContentFeatures.SENSITIVE_CONTENT)
@@ -2762,8 +2816,8 @@ class TabImpl implements Tab {
      *
      * @param deleteNativeWebContents Whether or not to delete the native WebContents pointer.
      */
-    private void destroyWebContents(boolean deleteNativeWebContents) {
-        if (mWebContents == null) return;
+    private @TabDestroyStatus int destroyWebContents(boolean deleteNativeWebContents) {
+        if (mWebContents == null) return TabDestroyStatus.NO_SHUTDOWN;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM
                 && ChromeFeatureList.isEnabled(SensitiveContentFeatures.SENSITIVE_CONTENT)
@@ -2795,11 +2849,15 @@ class TabImpl implements Tab {
             mWebContentsDelegate = null;
         }
 
+        @TabDestroyStatus int status = TabDestroyStatus.NO_SHUTDOWN;
         assert mNativeTabAndroid != 0;
         if (deleteNativeWebContents) {
             // Destruction of the native WebContents will call back into Java to destroy the Java
             // WebContents.
-            TabImplJni.get().destroyWebContents(mNativeTabAndroid);
+            status = TabImplJni.get().destroyWebContents(mNativeTabAndroid);
+            if (status == TabDestroyStatus.SLOW_SHUTDOWN) {
+                contentsToDestroy.setTopLevelNativeWindow(null);
+            }
         } else {
             // This branch is to not delete the WebContents, but just to release the WebContent from
             // the Tab and clear the WebContents for two different cases a) The WebContents will be
@@ -2818,6 +2876,7 @@ class TabImpl implements Tab {
                     /* windowAndroid= */ null,
                     WebContents.createDefaultInternalsHolder());
         }
+        return status;
     }
 
     public @UserAgentOverrideOption int calculateUserAgentOverrideOption(@Nullable GURL url) {
@@ -3147,7 +3206,8 @@ class TabImpl implements Tab {
                 TabWebContentsDelegateAndroidImpl delegate,
                 ContextMenuPopulatorFactory contextMenuPopulatorFactory);
 
-        void destroyWebContents(long nativeTabAndroid);
+        @JniType("tabs::TabDestroyStatus")
+        int destroyWebContents(long nativeTabAndroid);
 
         void releaseWebContents(long nativeTabAndroid);
 

@@ -10,6 +10,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -28,6 +29,7 @@ import org.chromium.base.ApplicationStatus;
 import org.chromium.base.Callback;
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.CommandLine;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
@@ -53,6 +55,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.ActivityTabProvider.ActivityTabTabObserver;
+import org.chromium.chrome.browser.ChromeActivitySessionTracker;
 import org.chromium.chrome.browser.ChromeInactivityTracker;
 import org.chromium.chrome.browser.ChromeInactivityTracker.InactivityObserver;
 import org.chromium.chrome.browser.SwipeRefreshHandler;
@@ -61,6 +64,7 @@ import org.chromium.chrome.browser.actor.ui.ActorOverlayCoordinator;
 import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.back_press.BackPressManager;
 import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
+import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.BookmarkOpener;
 import org.chromium.chrome.browser.bookmarks.BookmarkOpenerImpl;
@@ -76,6 +80,7 @@ import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
 import org.chromium.chrome.browser.collaboration.messaging.MessagingBackendServiceFactory;
 import org.chromium.chrome.browser.compositor.CompositorViewHolder;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
+import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelper.LeadingButtonDelegate;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperManager;
 import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulator;
 import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulatorFactory;
@@ -109,12 +114,15 @@ import org.chromium.chrome.browser.gesturenav.HistoryNavigationCoordinator;
 import org.chromium.chrome.browser.gesturenav.NavigationSheet;
 import org.chromium.chrome.browser.gesturenav.TabbedSheetDelegate;
 import org.chromium.chrome.browser.glic.GlicEnabling;
+import org.chromium.chrome.browser.glic.GlicHelper;
 import org.chromium.chrome.browser.glic.GlicKeyedService.GlicInvocationSource;
 import org.chromium.chrome.browser.glic.GlicKeyedServiceHandler;
 import org.chromium.chrome.browser.glic.GlicMetrics;
 import org.chromium.chrome.browser.glic.GlicNavigationUtils;
+import org.chromium.chrome.browser.glic.GlicPrefNames;
 import org.chromium.chrome.browser.glic.GlicPromoCoordinator;
 import org.chromium.chrome.browser.glic.GlicUiCoordinator;
+import org.chromium.chrome.browser.glic.GlicUtils;
 import org.chromium.chrome.browser.history.HistoryManagerUtils;
 import org.chromium.chrome.browser.hub.HubManager;
 import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthCoordinatorFactory;
@@ -132,6 +140,7 @@ import org.chromium.chrome.browser.multiwindow.MultiInstanceIphController;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.PersistedInstanceType;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
+import org.chromium.chrome.browser.multiwindow.TabbedCrashRecoveryDelegate;
 import org.chromium.chrome.browser.night_mode.WebContentsDarkModeMessageController;
 import org.chromium.chrome.browser.notifications.permissions.NotificationPermissionController;
 import org.chromium.chrome.browser.notifications.permissions.NotificationPermissionController.RationaleDelegate;
@@ -153,6 +162,8 @@ import org.chromium.chrome.browser.open_in_app.TabbedOpenInAppEntryPoint;
 import org.chromium.chrome.browser.pdf.PdfPageIphController;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.chrome.browser.preferences.PrefServiceUtil;
+import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerFactory;
 import org.chromium.chrome.browser.privacy.settings.PrivacySettings;
 import org.chromium.chrome.browser.privacy_sandbox.PrivacySandbox3pcdRollbackMessageController;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -162,6 +173,7 @@ import org.chromium.chrome.browser.readaloud.ReadAloudIphController;
 import org.chromium.chrome.browser.readaloud.ReadAloudMetrics.ReasonForStoppingPlayback;
 import org.chromium.chrome.browser.safe_browsing.AdvancedProtectionCoordinator;
 import org.chromium.chrome.browser.search_engines.choice_screen.ChoiceDialogCoordinator;
+import org.chromium.chrome.browser.selection.ChromeSelectionDropdownMenuDelegate;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.share.link_to_text.LinkToTextIphController;
 import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
@@ -186,6 +198,7 @@ import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeatures;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherUtils;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
@@ -198,9 +211,11 @@ import org.chromium.chrome.browser.tabwindow.WindowId;
 import org.chromium.chrome.browser.tasks.tab_management.FaviconResolver;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupFaviconCluster;
 import org.chromium.chrome.browser.tasks.tab_management.TabGroupListFaviconResolverFactory;
+import org.chromium.chrome.browser.tasks.tab_management.TabSearchOverlayCoordinator;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiUtils;
 import org.chromium.chrome.browser.tasks.tab_management.UndoGroupSnackbarController;
 import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabListCoordinator;
+import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabsActionDelegate;
 import org.chromium.chrome.browser.tasks.tab_management.vertical_tabs.VerticalTabsSideUiCoordinator;
 import org.chromium.chrome.browser.toolbar.ToolbarButtonInProductHelpController;
 import org.chromium.chrome.browser.toolbar.ToolbarFeatures;
@@ -209,12 +224,14 @@ import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarBehavior;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarPrefs;
+import org.chromium.chrome.browser.toolbar.top.ToolbarControlContainer;
 import org.chromium.chrome.browser.ui.RootUiCoordinator;
 import org.chromium.chrome.browser.ui.actions.ActionRegistry;
 import org.chromium.chrome.browser.ui.actions.ActionUtils;
 import org.chromium.chrome.browser.ui.app_rating.AppRatingPromoController;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuBlocker;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuDelegate;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarActionEligibility;
 import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
 import org.chromium.chrome.browser.ui.bottombar.BottomBarHostManager;
 import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
@@ -226,6 +243,7 @@ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerFactory;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
 import org.chromium.chrome.browser.ui.edge_to_edge.TopInsetProvider;
+import org.chromium.chrome.browser.ui.enterprise_signals_disclaimer.EnterpriseSignalsDisclaimerCoordinator;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.side_panel.AndroidSidePanelEnabledFn;
 import org.chromium.chrome.browser.ui.side_panel.SidePanelCoordinatorAndroid;
@@ -261,6 +279,7 @@ import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
+import org.chromium.components.prefs.PrefChangeRegistrar;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
@@ -300,6 +319,12 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
     private static final String TAG = "TabbedRootUiCoord";
     private static boolean sDisableTopControlsAnimationForTesting;
     private final RootUiTabObserver mRootUiTabObserver;
+    private final SettableNonNullObservableSupplier<Boolean> mIsVerticalTabsActiveSupplier =
+            ObservableSuppliers.createNonNull(false);
+    private final SettableNonNullObservableSupplier<Boolean> mIsGlicPinnedSupplier =
+            ObservableSuppliers.createNonNull(false);
+    private @Nullable PrefChangeRegistrar mPrefChangeRegistrar;
+    private @Nullable OnSharedPreferenceChangeListener mVerticalTabsPreferenceListener;
     private @Nullable TabbedSystemUiCoordinator mSystemUiCoordinator;
     private @Nullable TabGroupSyncController mTabGroupSyncController;
     private final OneshotSupplierImpl<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier =
@@ -357,6 +382,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
     private CharSequence mApplicationLabel;
     private @Nullable TipsOptInCoordinator mTipsOptInCoordinator;
     private @Nullable GlicPromoCoordinator mGlicPromoCoordinator;
+    private @Nullable EnterpriseSignalsDisclaimerCoordinator
+            mEnterpriseSignalsDisclaimerCoordinator;
     private boolean mPromosEvaluatedForCurrentForeground;
     private final OneshotSupplier<ChromeInactivityTracker> mInactivityTrackerSupplier;
     private final InactivityObserver mInactivityObserver;
@@ -374,6 +401,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
     private @Nullable GlicUiCoordinator mGlicUiCoordinator;
     private @Nullable ForcedSigninController mForcedSigninController;
     private @Nullable VerticalTabsSideUiCoordinator mVerticalTabsSideUiCoordinator;
+    private @Nullable TabSearchOverlayCoordinator mTabSearchOverlayCoordinator;
+    private final VerticalTabsActionDelegate mVerticalTabsActionDelegate;
 
     // Activity tab observer that updates the current tab used by various UI components.
     private class RootUiTabObserver extends ActivityTabTabObserver {
@@ -390,7 +419,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
 
         @Override
         public void onTitleUpdated(Tab tab) {
-            setActivityTitle(tab, /* isTabSwitcher= */ false);
+            setActivityTitle(tab, /* isHub= */ false);
         }
 
         private void swapToTab(@Nullable Tab tab) {
@@ -401,7 +430,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
             }
             mTab = tab;
 
-            if (tab != null) {
+            if (tab != null && !tab.isDestroyed()) {
                 var swipeHandler = SwipeRefreshHandler.from(tab);
                 swipeHandler.setNavigationCoordinator(mHistoryNavigationCoordinator);
                 if (UiAndroidFeatureList.sReportBottomOverscrolls.isEnabled()) {
@@ -409,7 +438,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             new BottomOverscrollHandler(mBrowserControlsManager));
                 }
             }
-            setActivityTitle(tab, /* isTabSwitcher= */ false);
+            setActivityTitle(tab, /* isHub= */ false);
         }
 
         @Override
@@ -477,6 +506,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
      * @param bookmarkManagerOpenerSupplier Supplies {@link BookmarkManagerOpener}.
      * @param xrSpaceModeObservableSupplier Supplies current XR space mode status. True for XR full
      *     space mode, false otherwise.
+     * @param verticalTabsActionDelegate Delegate to handle actions from the vertical tabs UI.
      */
     public TabbedRootUiCoordinator(
             AppCompatActivity activity,
@@ -532,7 +562,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
             MonotonicObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier,
             NonNullObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
             OneshotSupplier<ChromeInactivityTracker> inactivityTrackerSupplier,
-            @Nullable BottomBarHostManager bottomBarHostManager) {
+            @Nullable BottomBarHostManager bottomBarHostManager,
+            VerticalTabsActionDelegate verticalTabsActionDelegate) {
         super(
                 activity,
                 onOmniboxFocusChangedListener,
@@ -589,6 +620,13 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                 bottomBarHostManager);
 
         if (BottomBarConfigUtils.isBottomBarEnabled(activity)) {
+            BottomBarActionEligibility.setCountrySupplier(
+                    () -> {
+                        String country =
+                                ChromeActivitySessionTracker.getInstance()
+                                        .getVariationsLatestCountry();
+                        return country != null ? country : "";
+                    });
             mActionRegistry = new ActionRegistry();
             ActionUtils.registerBottomBarActions(mActionRegistry);
         }
@@ -618,10 +656,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                 new LayoutStateProvider.LayoutStateObserver() {
                     @Override
                     public void onStartedShowing(int layoutType) {
-                        if (layoutType == LayoutType.TAB_SWITCHER) {
+                        if (layoutType == LayoutType.HUB) {
                             assert mHistoryNavigationCoordinator != null;
                             mHistoryNavigationCoordinator.reset();
-                            setActivityTitle(/* tab= */ null, /* isTabSwitcher= */ true);
+                            setActivityTitle(/* tab= */ null, /* isHub= */ true);
                         }
                     }
                 };
@@ -631,6 +669,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
         mSystemBarColorHelperSupplier = systemBarColorHelperSupplier;
         mManualFillingComponentSupplier = manualFillingComponentSupplier;
         mInactivityTrackerSupplier = inactivityTrackerSupplier;
+        mVerticalTabsActionDelegate = verticalTabsActionDelegate;
 
         DataSharingTabGroupsDelegate dataSharingTabGroupsDelegate =
                 createDataSharingTabGroupsDelegate();
@@ -645,7 +684,13 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                     assumeNonNull(identityManager);
                     @Nullable AccountInfo primaryAccountInfo =
                             identityManager.getPrimaryAccountInfo();
-                    assert primaryAccountInfo != null;
+                    if (primaryAccountInfo == null) {
+                        // Can happen in case of a race condition between a sign-out (because the
+                        // primary account got removed from the device) and the user interacting
+                        // with the collaboration coordinator.
+                        successCallback.onResult(false);
+                        return;
+                    }
                     AccountManagerFacadeProvider.getInstance()
                             .updateCredentials(
                                     primaryAccountInfo.getId(), mActivity, successCallback);
@@ -731,8 +776,13 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
     }
 
     @Override
-    @SuppressWarnings("NullAway")
+    @SuppressWarnings({"NullAway", "UseSharedPreferencesManagerFromChromeCheck"})
     public void onDestroy() {
+        if (mVerticalTabsPreferenceListener != null) {
+            ContextUtils.getAppSharedPreferences()
+                    .unregisterOnSharedPreferenceChangeListener(mVerticalTabsPreferenceListener);
+            mVerticalTabsPreferenceListener = null;
+        }
         if (mOpenInAppEntryPoint != null) {
             mOpenInAppEntryPoint.destroy();
             mOpenInAppEntryPoint = null;
@@ -865,6 +915,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
         if (mGlicPromoCoordinator != null) {
             mGlicPromoCoordinator.destroy();
         }
+        if (mEnterpriseSignalsDisclaimerCoordinator != null) {
+            mEnterpriseSignalsDisclaimerCoordinator.destroy();
+            mEnterpriseSignalsDisclaimerCoordinator = null;
+        }
 
         if (mInactivityTrackerSupplier.get() != null) {
             mInactivityTrackerSupplier.get().removeObserver(mInactivityObserver);
@@ -952,8 +1006,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
     @Override
     @EnsuresNonNull("mToolbarManager")
     protected void initializeToolbar() {
+        ToolbarControlContainer controlContainer = mActivity.findViewById(R.id.control_container);
         if (OpenInAppUtils.isOpenInAppAvailable()) {
-            View controlContainer = mActivity.findViewById(R.id.control_container);
             assert controlContainer != null;
 
             ViewGroup omniboxChipContainer =
@@ -964,8 +1018,12 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
 
         assert mFindToolbarManager != null;
         super.initializeToolbar();
+        if (controlContainer != null) {
+            controlContainer.setIsVerticalTabsActiveSupplier(mIsVerticalTabsActiveSupplier);
+        }
 
-        if (AndroidSidePanelEnabledFn.isEnabled()) {
+        if (AndroidSidePanelEnabledFn.isEnabled()
+                || VerticalTabUtils.isVerticalTabsEligible(mActivity)) {
             mToolbarManager.setSideUiStateProviderSupplier(mSideUiStateProviderSupplier);
         }
     }
@@ -1064,7 +1122,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             mActivityTabProvider.asObservable(), omniboxChipManager, mActivity);
         }
 
-        if (AndroidSidePanelEnabledFn.isEnabled()) {
+        if (AndroidSidePanelEnabledFn.isEnabled()
+                || VerticalTabUtils.isVerticalTabsEligible(mActivity)) {
             mCompositorViewHolderSupplier
                     .asNonNull()
                     .get()
@@ -1220,7 +1279,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
 
         initiateTabBottomSheetManagers();
 
-        if (GlicEnabling.isEnabledByFlags() && mTabBottomSheetManager != null) {
+        if (GlicEnabling.isEnabledByFlags()
+                && (mTabBottomSheetManager != null || AndroidSidePanelEnabledFn.isEnabled())) {
             GlicNavigationUtils.setLauncher(SigninAndHistorySyncActivityLauncherImpl::get);
             ViewStub actorOverlayStub = mActivity.findViewById(R.id.actor_overlay_stub);
             mGlicUiCoordinator =
@@ -1236,7 +1296,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             mBackPressManager,
                             mLayoutManagerSupplier,
                             actorOverlayStub,
-                            assertNonNull(getBottomSheetController()),
                             mActivityLifecycleDispatcher,
                             mSideUiStateProviderSupplier.get());
         }
@@ -1246,6 +1305,15 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                         mActivity,
                         mProfileSupplier.asNonNull().get().getOriginalProfile(),
                         SigninAndHistorySyncActivityLauncherImpl.get());
+
+        // TODO(b/512836948): This is temporary for testing purposes. A proper way to launch and
+        // control the dialog shall be introduced later on.
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.ANDROID_DEVICE_SIGNALS_DISCLAIMER)) {
+            mEnterpriseSignalsDisclaimerCoordinator =
+                    new EnterpriseSignalsDisclaimerCoordinator(
+                            mActivity, assertNonNull(getBottomSheetController()));
+            mEnterpriseSignalsDisclaimerCoordinator.show();
+        }
     }
 
     @Override
@@ -1274,7 +1342,18 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                 (MonotonicObservableSupplier<Integer>) mTabStripVisibilitySupplier,
                 (preventClose, invocationSource) -> toggleGlic(preventClose, invocationSource),
                 mChromeAndroidTaskSupplier,
-                mBrowserControlsManager);
+                mBrowserControlsManager,
+                mIsVerticalTabsActiveSupplier,
+                mIsGlicPinnedSupplier);
+    }
+
+    /** Returns the {@link LeadingButtonDelegate} for the tab strip's leading button. */
+    public LeadingButtonDelegate getLeadingButtonDelegate() {
+        return () -> {
+            if (mTabSearchOverlayCoordinator != null) {
+                mTabSearchOverlayCoordinator.show();
+            }
+        };
     }
 
     @Override
@@ -1282,9 +1361,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
         super.initProfileDependentFeatures(currentlySelectedProfile);
         Profile originalProfile = currentlySelectedProfile.getOriginalProfile();
 
-        if (ChromeFeatureList.sChromeNativeUrlOverriding.isEnabled()) {
-            ExtensionsUrlOverrideRegistryManagerFactory.getForProfile(originalProfile);
-        }
+        ExtensionsUrlOverrideRegistryManagerFactory.getForProfile(originalProfile);
 
         if (TabGroupSyncFeatures.isTabGroupSyncEnabled(originalProfile)) {
             var tabGroupSyncService = TabGroupSyncServiceFactory.getForProfile(originalProfile);
@@ -1502,6 +1579,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                         || RequestDesktopUtils.maybeShowDefaultEnableGlobalSettingMessage(
                                 profile, mMessageDispatcher, mActivity);
 
+        if (mBottomBarHostManager != null) {
+            mBottomBarHostManager.onStartupPromoFlowFinished(didTriggerPromo);
+        }
+
         if (didTriggerPromo) {
             TrackerFactory.getTrackerForProfile(profile)
                     .notifyEvent(EventConstants.ANDROID_STARTUP_PROMO_SHOWN);
@@ -1536,9 +1617,9 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
             if (ChromeFeatureList.sGestureUserEducationBackSwipe.isEnabled()
                     && !DeviceInfo.isAutomotive()
                     && !DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity)
-                    && UiUtils.isGestureNavigationMode(mActivity.getWindow())
                     && TrackerFactory.getTrackerForProfile(profile)
-                            .wouldTriggerHelpUi(FeatureConstants.GESTURE_USER_EDUCATION)) {
+                            .wouldTriggerHelpUi(FeatureConstants.GESTURE_USER_EDUCATION)
+                    && UiUtils.isGestureNavigationMode(mActivity.getWindow())) {
                 mGestureUserEducationIphController =
                         new GestureUserEducationIphController(
                                 mActivity.findViewById(R.id.compositor_view_holder),
@@ -1644,6 +1725,11 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
 
     @VisibleForTesting
     boolean maybeShowGlicPromo() {
+        if (CommandLine.getInstance().hasSwitch(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
+                || CommandLine.getInstance().hasSwitch(ChromeSwitches.DISABLE_STARTUP_PROMOS)) {
+            return false;
+        }
+
         Profile profile = mProfileSupplier.get();
         if (profile == null
                 || mActivity == null
@@ -1880,7 +1966,13 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             mWindowAndroid,
                             mActivityLifecycleDispatcher,
                             mSnackbarManagerSupplier.asNonNull().get(),
-                            contextMenuPopulatorFactory);
+                            contextMenuPopulatorFactory,
+                            new ChromeSelectionDropdownMenuDelegate(),
+                            mActivityTabProvider.asObservable(),
+                            mTabModelSelectorSupplier,
+                            PriceDropNotificationManagerFactory.create(
+                                    mProfileSupplier.asNonNull().get()),
+                            new BookmarkManagerOpenerImpl());
         }
         if (TabBottomSheetUtils.isTabBottomSheetEnabled()) {
             mTabBottomSheetManager =
@@ -1889,7 +1981,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             mWindowAndroid,
                             assertNonNull(getBottomSheetController()),
                             mLayoutStateProviderOneShotSupplier,
-                            SupplierUtils.asNonNull(mCompositorViewHolderSupplier).get());
+                            SupplierUtils.asNonNull(mCompositorViewHolderSupplier).get(),
+                            getOmniboxFocusStateSupplier());
             Callback<ReadAloudController> callback =
                     mCallbackController.makeCancelable(
                             (ReadAloudController readAloudController) -> {
@@ -2043,7 +2136,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                 TabListFaviconProvider tabListFaviconProvider =
                         new TabListFaviconProvider(
                                 mActivity,
-                                false,
+                                TabListMode.GRID,
                                 R.dimen.default_favicon_corner_radius,
                                 TabFavicon::getBitmap);
                 FaviconResolver faviconResolver =
@@ -2091,6 +2184,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                 mActivity.findViewById(R.id.side_ui_left_anchor_container_stub);
         ViewStub sideUiEndAnchorContainerStub =
                 mActivity.findViewById(R.id.side_ui_right_anchor_container_stub);
+        ViewStub webContentHairlineContainerStub =
+                mActivity.findViewById(R.id.side_ui_web_content_hairline_container_stub);
 
         NonNullObservableSupplier<Integer> stripBottomPxSupplier = null;
         assumeNonNull(mLayoutManager);
@@ -2104,9 +2199,11 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                 SideUiCoordinatorFactory.create(
                         mActivity,
                         mActivityLifecycleDispatcher,
+                        mBrowserControlsManager,
                         anchorContainerParent,
                         sideUiStartAnchorContainerStub,
                         sideUiEndAnchorContainerStub,
+                        webContentHairlineContainerStub,
                         stripBottomPxSupplier);
         if (mSideUiCoordinator == null) {
             return;
@@ -2154,8 +2251,6 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             mWindowAndroid),
                     SidePanelRegistryBridgeFactory::createWindowScopedBridge);
 
-            mSidePanelContainerCoordinator.init(sidePanelCoordinatorAndroid);
-
             // TODO(crbug.com/489548570): Remove SidePanelDevFeature when it's not needed.
             mSidePanelDevFeature =
                     SidePanelDevFeatureFactory.create(
@@ -2163,7 +2258,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             mSidePanelContainerCoordinator,
                             mWindowAndroid,
                             mActivityTabProvider);
+
+            mSidePanelContainerCoordinator.init(sidePanelCoordinatorAndroid, mSidePanelDevFeature);
         }
+
         if (VerticalTabUtils.isVerticalTabsEligible(mActivity)) {
             mVerticalTabsSideUiCoordinator =
                     new VerticalTabsSideUiCoordinator(
@@ -2172,9 +2270,21 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             new VerticalTabListCoordinator(
                                     mActivity,
                                     assumeNonNull(mTabModelSelectorSupplier.get()),
-                                    assumeNonNull(mProfileSupplier.get())));
+                                    assumeNonNull(mProfileSupplier.get()),
+                                    mVerticalTabsActionDelegate,
+                                    mWindowAndroid,
+                                    assumeNonNull(mMultiInstanceManager),
+                                    assumeNonNull(mSnackbarManagerSupplier.get()),
+                                    getDesktopWindowStateManager(),
+                                    mShareDelegateSupplier,
+                                    mDataSharingTabManager,
+                                    mIsVerticalTabsActiveSupplier),
+                            mIsVerticalTabsActiveSupplier);
             mSideUiCoordinator.registerSideUiContainer(mVerticalTabsSideUiCoordinator);
         }
+
+        mSideUiStateProviderSupplier.onAvailable(
+                provider -> maybeInitializeVerticalTabs(currentlySelectedProfile));
         mSideUiStateProviderSupplier.set(mSideUiCoordinator);
 
         // TODO(crbug.com/510890983): Add render tests for the secondary container adjustment.
@@ -2182,36 +2292,100 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
         mSecondaryUiContainerMarginAdjuster = new ViewMarginAdjusterForSideUi(secondaryUiContainer);
         mSideUiCoordinator.addObserver(mSecondaryUiContainerMarginAdjuster);
 
-        // Restore the user's saved tab layout preference upon browser cold launch.
-        if (VerticalTabUtils.isVerticalTabsEligible(mActivity)) {
-            boolean useVerticalLayoutOnLaunch =
-                    ChromeSharedPreferences.getInstance()
-                            .readBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, false);
-
-            if (useVerticalLayoutOnLaunch) {
-                var transitionCoordinator =
-                        assumeNonNull(mToolbarManager).getTabStripTransitionCoordinator();
-                assumeNonNull(transitionCoordinator).suppressTabStrip(true);
-                assumeNonNull(mVerticalTabsSideUiCoordinator).setVisible(true);
-            }
+        if (ChromeFeatureList.sTabSearchForAL.isEnabled()) {
+            mTabSearchOverlayCoordinator =
+                    new TabSearchOverlayCoordinator(
+                            mActivity,
+                            anchorContainerParent,
+                            mWindowAndroid,
+                            mProfileSupplier,
+                            assumeNonNull(mSnackbarManagerSupplier.get()),
+                            mModalDialogManagerSupplier,
+                            mActivityLifecycleDispatcher,
+                            mTabModelSelectorSupplier,
+                            mEdgeToEdgeManager.getEdgeToEdgeSystemBarColorHelper());
         }
+    }
+
+    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
+    private void maybeInitializeVerticalTabs(Profile profile) {
+        if (!VerticalTabUtils.isVerticalTabsEligible(mActivity)) return;
+
+        // Restore the user's saved tab layout preference upon browser cold launch.
+        boolean useVerticalLayoutOnLaunch =
+                ChromeSharedPreferences.getInstance()
+                        .readBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, false);
+
+        mIsVerticalTabsActiveSupplier.addSyncObserver(
+                active -> {
+                    var transitionCoordinator =
+                            assumeNonNull(mToolbarManager).getTabStripTransitionCoordinator();
+                    assumeNonNull(transitionCoordinator).suppressTabStrip(active);
+                });
+
+        var transitionCoordinator =
+                assumeNonNull(mToolbarManager).getTabStripTransitionCoordinator();
+        if (transitionCoordinator != null) {
+            transitionCoordinator.addObserver(
+                    success -> {
+                        if (!success) return;
+
+                        boolean active = VerticalTabUtils.isVerticalTabsEnabled(mActivity);
+                        assumeNonNull(mVerticalTabsSideUiCoordinator).setVisible(active);
+                    });
+        }
+
+        mVerticalTabsPreferenceListener =
+                (prefs, key) -> {
+                    if (TextUtils.equals(key, ChromePreferenceKeys.VERTICAL_TABS_ENABLED)) {
+                        boolean shouldShowVerticalTabs =
+                                VerticalTabUtils.isVerticalTabsEnabled(mActivity);
+                        if (shouldShowVerticalTabs) {
+                            var transitionCoord =
+                                    assumeNonNull(mToolbarManager)
+                                            .getTabStripTransitionCoordinator();
+                            assumeNonNull(transitionCoord).suppressTabStrip(true);
+                        } else {
+                            assumeNonNull(mVerticalTabsSideUiCoordinator).setVisible(false);
+                        }
+                    }
+                };
+        ContextUtils.getAppSharedPreferences()
+                .registerOnSharedPreferenceChangeListener(mVerticalTabsPreferenceListener);
+
+        if (useVerticalLayoutOnLaunch) {
+            assumeNonNull(mVerticalTabsSideUiCoordinator).setVisible(true);
+        }
+
+        // Set up vertical tabs + pinned Glic visibility interaction.
+        if (profile != null && GlicEnabling.isEnabledForProfile(profile)) {
+            mIsGlicPinnedSupplier.set(GlicUtils.isButtonPinnedToTabStrip(profile));
+            mPrefChangeRegistrar = PrefServiceUtil.createFor(profile);
+            mPrefChangeRegistrar.addObserver(
+                    GlicPrefNames.GLIC_PINNED_TO_TABSTRIP,
+                    () -> mIsGlicPinnedSupplier.set(GlicUtils.isButtonPinnedToTabStrip(profile)));
+        }
+
+        var toolbar = assumeNonNull(getToolbarManagerSupplier().get()).getTopToolbarCoordinator();
+        toolbar.observeGlicVerticalTabs(
+                mIsVerticalTabsActiveSupplier, mIsGlicPinnedSupplier, mIncognitoStateProvider);
     }
 
     /** Toggle the visibility between horizontal tab strip and vertical tab list. */
     public void toggleTabStrip() {
-        var transitionCoordinator =
-                assumeNonNull(mToolbarManager).getTabStripTransitionCoordinator();
-        // TODO(crbug.com/509226293):
-        //    - Coordinate horizontal/vertical tab animation.
         boolean shouldShowVerticalTabs =
                 !ChromeSharedPreferences.getInstance()
                         .readBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, false);
-
         ChromeSharedPreferences.getInstance()
                 .writeBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, shouldShowVerticalTabs);
 
-        assumeNonNull(transitionCoordinator).suppressTabStrip(shouldShowVerticalTabs);
-        assumeNonNull(mVerticalTabsSideUiCoordinator).setVisible(shouldShowVerticalTabs);
+        if (shouldShowVerticalTabs) {
+            Profile profile = mProfileSupplier.get();
+            if (profile != null) {
+                TrackerFactory.getTrackerForProfile(profile)
+                        .notifyEvent(EventConstants.ANDROID_VERTICAL_TABS_PROMO_USED);
+            }
+        }
     }
 
     private void destroySideUi() {
@@ -2244,6 +2418,20 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
             mSideUiCoordinator.destroy();
             mSideUiCoordinator = null;
         }
+
+        if (mVerticalTabsSideUiCoordinator != null) {
+            mVerticalTabsSideUiCoordinator.destroy();
+            mVerticalTabsSideUiCoordinator = null;
+        }
+        if (mPrefChangeRegistrar != null) {
+            mPrefChangeRegistrar.destroy();
+            mPrefChangeRegistrar = null;
+        }
+
+        if (mTabSearchOverlayCoordinator != null) {
+            mTabSearchOverlayCoordinator.destroy();
+            mTabSearchOverlayCoordinator = null;
+        }
     }
 
     public @Nullable SidePanelContainerCoordinator getSidePanelContainerCoordinatorForTesting() {
@@ -2263,6 +2451,16 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
     @Override
     protected boolean supportsEdgeToEdge() {
         return EdgeToEdgeUtils.isEdgeToEdgeBottomChinEnabled(mActivity);
+    }
+
+    @Override
+    protected boolean shouldSuppressTabStripAtStart() {
+        return VerticalTabUtils.isVerticalTabsEnabled(mActivity);
+    }
+
+    @Override
+    protected boolean isBottomSheetAsBrowserControlsEnabled() {
+        return ChromeFeatureList.sBottomSheetAsBrowserControls.isEnabled();
     }
 
     public @Nullable StatusIndicatorCoordinator getStatusIndicatorCoordinatorForTesting() {
@@ -2285,6 +2483,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
         return mGlicUiCoordinator != null
                 ? mGlicUiCoordinator.getActorOverlayCoordinatorForTesting() // IN-TEST
                 : null;
+    }
+
+    public @Nullable GlicUiCoordinator getGlicUiCoordinatorForTesting() {
+        return mGlicUiCoordinator;
     }
 
     public @Nullable TabBottomSheetManager getTabBottomSheetManagerForTesting() {
@@ -2310,6 +2512,11 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
      * @return whether a prompt or promo is actually displayed.
      */
     private boolean maybeShowRequiredPromptsAndPromos(Profile profile, boolean intentWithEffect) {
+        if (TabbedCrashRecoveryDelegate.getInstance()
+                .maybeShowCrashRecoveryDialog(mModalDialogManagerSupplier, mActivity)) {
+            return true;
+        }
+
         if (ChoiceDialogCoordinator.maybeShow(
                 mActivity, mModalDialogManagerSupplier.get(), mActivityLifecycleDispatcher)) {
             return true;
@@ -2417,6 +2624,10 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
             UserEducationUtils.recordOptionalPromoType(OptionalPromoType.PWA_RESTORE_PROMO);
             return true;
         }
+
+        if (mBottomBarHostManager != null && mBottomBarHostManager.maybeShowPromoDialog(profile)) {
+            return true;
+        }
         if (FullscreenSigninPromoLauncher.launchPromoIfNeeded(
                 mActivity,
                 profile,
@@ -2479,7 +2690,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                             mTopControlsStacker,
                             mActivityTabProvider.asObservable(),
                             getTopUiThemeColorProvider(),
-                            mSideUiStateProviderSupplier);
+                            mSideUiStateProviderSupplier,
+                            mTabObscuringHandlerSupplier.get());
             if (mBookmarkBarVisibilityProvider != null) {
                 mBookmarkBarVisibilityProvider.addObserver(mBookmarkBarCoordinator);
             }
@@ -2565,15 +2777,8 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
             return true;
         } else if (id == R.id.toggle_bookmark_bar) {
             if (BookmarkBarUtils.isActivityStateBookmarkBarCompatible(mActivity)) {
-                if (DeviceInfo.isDesktop()) {
-                    // Desktop uses the synced UserPref.
-                    BookmarkBarUtils.toggleUserPrefsShowBookmarksBar(
-                            mProfileSupplier.asNonNull().get(), /* fromKeyboardShortcut= */ true);
-                } else {
-                    // Tablet uses the local shared pref (but interacts with policy via Profile).
-                    BookmarkBarUtils.toggleDevicePrefShowBookmarksBar(
-                            mProfileSupplier.asNonNull().get(), /* fromKeyboardShortcut= */ true);
-                }
+                BookmarkBarUtils.toggleShowBookmarksBar(
+                        mProfileSupplier.asNonNull().get(), /* fromKeyboardShortcut= */ true);
                 return true;
             }
         } else if (id == R.id.close_window) {
@@ -2614,15 +2819,24 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
             return true;
         }
 
-        return GlicKeyedServiceHandler.toggleGlic(
-                profile, mChromeAndroidTaskSupplier.get(), preventClose, invocationSource);
+        boolean success =
+                GlicKeyedServiceHandler.toggleGlic(
+                        profile,
+                        mChromeAndroidTaskSupplier.get(),
+                        mActivity,
+                        preventClose,
+                        invocationSource);
+        if (!success) {
+            GlicHelper.showUnavailableSnackbar(mActivity);
+        }
+        return success;
     }
 
     /* package */ KeyboardFocusRowManager getKeyboardFocusRowManagerForTesting() {
         return mKeyboardFocusRowManager;
     }
 
-    private void setActivityTitle(@Nullable Tab tab, boolean isTabSwitcher) {
+    private void setActivityTitle(@Nullable Tab tab, boolean isHub) {
         // Do not update title after Activity destruction.
         if (mActivity == null) {
             return;
@@ -2635,7 +2849,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                                 .getString(R.string.accessibility_default_app_label)
                         : mApplicationLabel.toString();
         String subTitle;
-        if (isTabSwitcher) {
+        if (isHub) {
             subTitle =
                     mActivity.getResources().getString(R.string.accessibility_tab_switcher_title);
         } else if (tab != null) {
@@ -2670,6 +2884,16 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
                     result -> {
                         mTrackerInitializedOneshotSupplier.set(true);
                     });
+        }
+    }
+
+    /**
+     * Shows the tab search overlay if it has been initialized. This overlay provides a floating
+     * container anchored on the left with an embedded search UI as a side panel.
+     */
+    public void showTabSearchOverlay() {
+        if (mTabSearchOverlayCoordinator != null) {
+            mTabSearchOverlayCoordinator.show();
         }
     }
 

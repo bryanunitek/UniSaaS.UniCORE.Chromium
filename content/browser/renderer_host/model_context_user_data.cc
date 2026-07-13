@@ -46,12 +46,7 @@ bool IsScriptToolRequestedByOrigin(
 }
 
 bool IsWebMCPEnabled(RenderFrameHost& rfh) {
-  // In the renderer, the WebMCP feature is implied by WebMCPTesting (in
-  // runtime_enabled_features.json5). Since this implication does not propagate
-  // automatically to the browser's base::FeatureList, we must explicitly check
-  // both features here to prevent renderer termination (bad IPC message).
-  return (base::FeatureList::IsEnabled(blink::features::kWebMCP) ||
-          base::FeatureList::IsEnabled(blink::features::kWebMCPTesting)) &&
+  return base::FeatureList::IsEnabled(blink::features::kWebMCP) &&
          rfh.IsFeatureEnabled(network::mojom::PermissionsPolicyFeature::kTools);
 }
 
@@ -103,10 +98,12 @@ void ModelContextUserData::BindModelContext(
 }
 
 void ModelContextUserData::RegisterScriptTool(
-    blink::mojom::ScriptToolPtr tool) {
+    blink::mojom::ScriptToolPtr tool,
+    RegisterScriptToolCallback callback) {
   if (!IsWebMCPEnabled(render_frame_host())) {
     bad_message::ReceivedBadMessage(render_frame_host().GetProcess(),
                                     bad_message::RFHI_WEBMCP_NOT_ENABLED);
+    std::move(callback).Run();
     return;
   }
 
@@ -120,6 +117,7 @@ void ModelContextUserData::RegisterScriptTool(
     bad_message::ReceivedBadMessage(
         render_frame_host().GetProcess(),
         bad_message::RFHI_WEBMCP_REGISTER_DUPLICATE_TOOL_NAME);
+    std::move(callback).Run();
     return;
   }
 
@@ -128,6 +126,7 @@ void ModelContextUserData::RegisterScriptTool(
       bad_message::ReceivedBadMessage(
           render_frame_host().GetProcess(),
           bad_message::RFHI_WEBMCP_EXPOSED_UNTRUSTWORTHY_ORIGIN);
+      std::move(callback).Run();
       return;
     }
   }
@@ -142,12 +141,14 @@ void ModelContextUserData::RegisterScriptTool(
     bad_message::ReceivedBadMessage(
         render_frame_host().GetProcess(),
         bad_message::RFHI_WEBMCP_INVALID_TOOL_OWNER);
+    std::move(callback).Run();
     return;
   }
 
   std::vector<url::Origin> exposed_origins = tool->exposed_origins;
   script_tools_.push_back(std::move(tool));
   NotifyToolChange(exposed_origins);
+  std::move(callback).Run();
 }
 
 void ModelContextUserData::UnregisterScriptTool(const std::string& name) {
@@ -244,10 +245,16 @@ void ModelContextUserData::GetScriptTools(
     return RenderFrameHost::FrameIterationAction::kContinue;
   });
 
+  std::ranges::sort(all_tools, [](const blink::mojom::ScriptToolPtr& a,
+                                  const blink::mojom::ScriptToolPtr& b) {
+    return a->name < b->name;
+  });
+
   std::move(callback).Run(std::move(all_tools));
 }
 
 void ModelContextUserData::ExecuteRemoteScriptTool(
+    const base::UnguessableToken& invocation_id,
     const blink::FrameToken& tool_owner_frame_token,
     const url::Origin& expected_target_origin,
     const std::string& name,
@@ -334,12 +341,6 @@ void ModelContextUserData::ExecuteRemoteScriptTool(
 
   // At this point, it is safe to invoke the tool in the target renderer pointed
   // to by `target_data`.
-  //
-  // TODO(http://b/485810761): Right now `invocation_id` is only used to
-  // identify pending execution requests in the browser process. Plumb this up
-  // to the renderer for use by DevTools.
-  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
-
   ModelContextPageUserData* page_data =
       ModelContextPageUserData::GetOrCreateForPage(target_rfh->GetPage());
   ModelContextPageUserData::PendingScriptToolExecution execution;
@@ -351,7 +352,7 @@ void ModelContextUserData::ExecuteRemoteScriptTool(
   page_data->AddPendingScriptToolExecution(invocation_id, std::move(execution));
 
   target_data->model_context_remote_->ExecuteScriptTool(
-      name, input_arguments,
+      invocation_id, name, input_arguments,
       base::BindOnce(
           [](base::WeakPtr<ModelContextPageUserData> page_data,
              base::UnguessableToken invocation_id,

@@ -185,11 +185,14 @@ test("components_unittests") {
 
   deps = [
     "//base",
-    "//components/accessibility_annotator/core:unit_tests",
+    "//components/accessibility_annotator/core/annotation_reducer:unit_tests",
+    "//components/accessibility_annotator/core/content_annotator:unit_tests",
+    "//components/accessibility_annotator/core/storage:unit_tests",
     "//components/account_settings:unit_tests",
     "//components/activity_reporter:unit_tests",
     "//components/actor/core:unit_tests",
     "//components/affiliations/core/browser:unit_tests",
+    "//components/affiliations/core/browser/domain_matching:unit_tests",
     "//components/aggregation_service:unit_tests",
     "//components/apdu:unit_tests",
     "//components/application_locale_storage:unit_tests",
@@ -205,6 +208,7 @@ test("components_unittests") {
     "//components/bookmarks/common:unit_tests",
     "//components/bookmarks/managed:unit_tests",
     "//components/breadcrumbs/core:unit_tests",
+    "//components/browser_actuator:unit_tests",
     "//components/browser_sync:unit_tests",
     "//components/browsing_data/core:unit_tests",
     "//components/captive_portal/core:unit_tests",
@@ -227,6 +231,7 @@ test("components_unittests") {
     "//components/contextual_tasks:unit_tests",
     "//components/country_codes:unit_tests",
     "//components/crash/core/common:unit_tests",
+    "//components/critical_actions/core/browser:unit_tests",
     "//components/cross_device/logging:unit_tests",
     "//components/crx_file:unit_tests",
     "//components/data_sharing:unit_tests",
@@ -278,6 +283,7 @@ test("components_unittests") {
     "//components/open_from_clipboard:unit_tests",
     "//components/openscreen_platform:unittests",
     "//components/optimization_guide/core:unit_tests",
+    "//components/origin_gating/core:unit_tests",
     "//components/os_crypt/async/browser:unit_tests",
     "//components/os_crypt/async/common:unit_tests",
     "//components/os_crypt/common:unit_tests",
@@ -361,6 +367,7 @@ test("components_unittests") {
     "//components/subresource_filter/core/browser:unit_tests",
     "//components/subresource_filter/core/common:unit_tests",
     "//components/subresource_filter/tools:unit_tests",
+    "//components/subscription_eligibility:unit_tests",
     "//components/sync:unit_tests",
     "//components/sync_bookmarks:unit_tests",
     "//components/sync_device_info:unit_tests",
@@ -389,6 +396,7 @@ test("components_unittests") {
     "//components/url_pattern:unit_tests",
     "//components/url_pattern_index:unit_tests",
     "//components/user_data_importer/utility:unit_tests",
+    "//components/user_education/product_messaging:unit_tests",
     "//components/user_prefs:unit_tests",
     "//components/variations:unit_tests",
     "//components/variations/field_trial_config:unit_tests",
@@ -619,6 +627,7 @@ test("components_unittests") {
       "//components/password_manager/core/common:unit_tests",
       "//components/password_manager/ios:unit_tests",
       "//components/previous_session_info:unit_tests",
+      "//components/private_ai/ios:unit_tests",
       "//components/safe_browsing/ios/browser:unit_tests",
       "//components/security_state/ios:unit_tests",
       "//components/shared_highlighting/ios:unit_tests",
@@ -779,7 +788,7 @@ test("components_unittests") {
     ]
   }
 
-  if (!is_ios && !is_fuchsia && !is_castos) {
+  if (!is_fuchsia && !is_castos) {
     deps += [ "//components/private_ai:unit_tests" ]
   }
 
@@ -795,7 +804,10 @@ test("components_unittests") {
     # guest_contents is a supporting component for any solution that embeds
     # unowned inner WebContents. As it is for embedding WebContents, only
     # add the deps when use_blink is true.
-    deps += [ "//components/guest_contents/browser:unit_tests" ]
+    deps += [
+      "//components/guest_contents/browser:unit_tests",
+      "//components/surface_embed/renderer:unit_tests",
+    ]
   }
 
   if (enable_guest_view) {
@@ -913,6 +925,7 @@ test("components_unittests") {
     deps += [
       "//components/safe_browsing/content/renderer:throttles_unittest",
       "//components/safe_browsing/content/renderer/phishing_classifier:unit_tests",
+      "//components/safe_browsing/core/browser:client_side_detection_service_base_unittest",
       "//components/safe_browsing/core/browser:ping_manager_unittest",
       "//components/safe_browsing/core/browser:user_population_unittest",
       "//components/safe_browsing/core/browser:verdict_cache_manager_unittest",
@@ -963,6 +976,7 @@ test("components_unittests") {
       "//components/enterprise/platform_auth:unit_tests",
       "//components/remote_cocoa/app_shim:unit_tests",
       "//components/remote_cocoa/common:unit_tests",
+      "//components/wifi:unit_tests",
     ]
   }
 
@@ -985,6 +999,7 @@ test("components_unittests") {
       "//components/component_updater:unit_tests",
       "//components/component_updater/installer_policies:unit_tests",
       "//components/crash/core/app:unit_tests",
+      "//components/dom_distiller/ios:unit_tests",
       "//components/embedder_support:unit_tests",
       "//components/feed/core/v2/public/ios:feed_ios_unit_tests",
       "//components/history_clusters/core:unit_tests",
@@ -1000,6 +1015,7 @@ test("components_unittests") {
       "//components/password_manager/core/common:unit_tests",
       "//components/password_manager/ios:unit_tests",
       "//components/previous_session_info:unit_tests",
+      "//components/private_ai/ios:unit_tests",
       "//components/safe_browsing/ios/browser:unit_tests",
       "//components/search:unit_tests",
       "//components/security_state/ios:unit_tests",
@@ -1026,7 +1042,12 @@ test("components_unittests") {
   }
 
   fuzztests = [
+    "ActorContainerConfigFuzzTest.CanParseAnyProto",
     "AndroidAppDescriptionToolsFuzzTest.MaintainsSingleActivityInvariant",
+    "CBORReaderFuzzTest.ReadAndWriteIsIdempotentAndDoesNotCrash",
+    "CBORReaderFuzzTest.ReadValidAndTruncatedCBORDoesNotCrash",
+    "CBORReaderFuzzTest.ReadValidCBORWithConfigDoesNotCrash",
+    "CBORReaderFuzzTest.ReadWithConfigDoesNotCrash",
     "CurrencyFormatterFuzzTest.FormatDoesNotCrash",
     "FilterDataTest.Matches",
     "OsRegistrationTest.Parses",
@@ -1114,6 +1135,7 @@ if (is_android) {
         "//components/test/android/browsertests_apk/AndroidManifest.xml.jinja2"
     output =
         "${target_gen_dir}/components_browsertests_manifest/AndroidManifest.xml"
+    variables = [ "library_name=components_browsertests__library" ]
   }
 
   android_resources("components_browsertests_resources") {
@@ -1142,6 +1164,7 @@ if (use_blink) {
       "dom_distiller/content/browser/test/test_util.cc",
       "dom_distiller/content/browser/test/test_util.h",
       "dom_distiller/content/browser/test/viewer_js_browsertest.cc",
+      "optimization_guide/content/browser/page_content_image_extractor_browsertest.cc",
       "optimization_guide/content/browser/page_content_metadata_observer_browsertest.cc",
       "optimization_guide/content/browser/page_content_proto_provider_browsertest.cc",
       "optimization_guide/content/renderer/page_text_agent_browsertest.cc",
@@ -1276,6 +1299,7 @@ if (use_blink) {
       sources += [
         "pdf/browser/pdf_document_helper_browsertest.cc",
         "pdf/renderer/pdf_accessibility_tree_browsertest.cc",
+        "pdf/renderer/pdf_view_web_plugin_client_browsertest.cc",
       ]
       deps += [
         "//components/pdf/browser",
@@ -1449,8 +1473,8 @@ if (use_blink) {
     if (safe_browsing_mode == 1 || is_ios) {
       sources += [ "safe_browsing/core/browser/db/v4_store_perftest.cc" ]
       deps += [
+        "//components/safe_browsing/core/browser/db:sb_store",
         "//components/safe_browsing/core/browser/db:v4_protocol_manager_util",
-        "//components/safe_browsing/core/browser/db:v4_store",
         "//components/safe_browsing/core/browser/db:v4_test_util",
         "//crypto",
       ]

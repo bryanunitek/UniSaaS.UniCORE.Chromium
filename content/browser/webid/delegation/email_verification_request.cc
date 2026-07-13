@@ -30,10 +30,12 @@
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom.h"
 #include "url/origin.h"
 
-using blink::mojom::EmailVerificationRequestResult;
-
 namespace content::webid {
 
+using AccountsOrError = EmailVerificationRequest::AccountsOrError;
+using JwksResultOrError = EmailVerificationRequest::JwksResultOrError;
+using TokenResultOrError = EmailVerificationRequest::TokenResultOrError;
+using WellKnownOrError = EmailVerificationRequest::WellKnownOrError;
 using blink::mojom::EmailVerificationRequestResult;
 
 std::optional<std::string> GetDomainFromEmail(const std::string& email) {
@@ -665,6 +667,7 @@ void EmailVerificationRequest::MaybeAddDevToolsIssue(
     case EmailVerificationRequestResult::kJwksInvalidResponse:
     case EmailVerificationRequestResult::
         kTokenVerificationSdJwtUnsupportedHeaderAlg:
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtInvalidTyp:
     case EmailVerificationRequestResult::kTokenVerificationSdJwtMissingIss:
     case EmailVerificationRequestResult::kTokenVerificationSdJwtMissingIat:
     case EmailVerificationRequestResult::kTokenVerificationSdJwtMissingCnf:

@@ -5,12 +5,14 @@
 #include "net/http/http_network_transaction.h"
 
 #include <deque>
+#include <optional>
 #include <queue>
 #include <set>
 #include <utility>
 #include <vector>
 
 #include "base/base64url.h"
+#include "base/byte_size.h"
 #include "base/compiler_specific.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
@@ -108,6 +110,11 @@ const size_t kMaxRetryAttempts = 2;
 // Max number of `retry_attempts_on_connection_errors_` for connection errors,
 // after which we give up and crash early.
 const size_t kMaxRetryAttemptsOnConnectionErrors = 50;
+
+// The threshold of connection error retry attempts at which we switch to
+// asynchronous retry.
+const size_t kAsyncRetryThresholdOnConnectionErrors =
+    kMaxRetryAttemptsOnConnectionErrors / 2;
 
 // Max number of calls to RestartWith* allowed for a single connection. A single
 // HttpNetworkTransaction should not signal very many restartable errors, but it
@@ -340,6 +347,19 @@ HttpNetworkTransaction::HttpNetworkTransaction(RequestPriority priority,
       priority_(priority) {}
 
 HttpNetworkTransaction::~HttpNetworkTransaction() {
+  if (retry_attempts_on_connection_errors_ > 0) {
+    base::UmaHistogramExactLinear(
+        "Net.NetworkTransaction.RetryAttemptsOnConnectionErrors",
+        retry_attempts_on_connection_errors_,
+        kMaxRetryAttemptsOnConnectionErrors + 1);
+    base::UmaHistogramExactLinear(
+        base::StrCat(
+            {"Net.NetworkTransaction.RetryAttemptsOnConnectionErrors.",
+             NegotiatedProtocolToHistogramSuffix(negotiated_protocol_)}),
+        retry_attempts_on_connection_errors_,
+        kMaxRetryAttemptsOnConnectionErrors + 1);
+  }
+
 #if BUILDFLAG(ENABLE_REPORTING)
   // If no error or success report has been generated yet at this point, then
   // this network transaction was prematurely cancelled.
@@ -1680,7 +1700,7 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
   // Note: This will report a success for a redirect even if an error is
   // encountered later while draining the body.
   int response_code = response_.headers->response_code();
-  std::optional<base::ByteCount> content_length =
+  std::optional<base::ByteSize> content_length =
       response_.headers->GetContentLength();
   if ((response_code >= 400 && response_code < 600) ||
       response_code == HTTP_NO_CONTENT || response_code == HTTP_RESET_CONTENT ||
@@ -1924,6 +1944,14 @@ void HttpNetworkTransaction::GenerateNetworkErrorLoggingReport(int rv) {
   } else {
     details.server_ip = IPAddress();
   }
+  // Also report any other addresses that were contacted, so that the downgrade
+  // step can take all of them into account when the resolved address list
+  // contained more than one address.
+  for (const auto& attempt : connection_attempts_) {
+    if (attempt.endpoint.address() != details.server_ip) {
+      details.other_server_ips.push_back(attempt.endpoint.address());
+    }
+  }
   // HttpResponseHeaders::response_code() returns 0 if response code couldn't
   // be parsed, which is also how NEL represents the same.
   if (response_.headers) {
@@ -2100,8 +2128,26 @@ int HttpNetworkTransaction::HandleIOError(int error) {
             kMaxRetryAttemptsOnConnectionErrors) {
           base::UmaHistogramBoolean(
               "Net.NetworkTransaction.TooManyRetriesOnConnectionErrors", true);
+          base::UmaHistogramBoolean(
+              base::StrCat(
+                  {"Net.NetworkTransaction.TooManyRetriesOnConnectionErrors.",
+                   NegotiatedProtocolToHistogramSuffix(negotiated_protocol_)}),
+              true);
           return ERR_TOO_MANY_RETRIES;
         }
+
+        base::UmaHistogramSparse(
+            "Net.NetworkTransaction.RetryOnConnectionErrors", -error);
+        base::UmaHistogramSparse(
+            base::StrCat(
+                {"Net.NetworkTransaction.RetryOnConnectionErrors.",
+                 NegotiatedProtocolToHistogramSuffix(negotiated_protocol_)}),
+            -error);
+
+        if (retry_attempts_on_connection_errors_ == 0) {
+          initial_connection_error_ = error;
+        }
+
         retry_attempts_on_connection_errors_++;
         net_log_.AddEventWithNetErrorCode(
             NetLogEventType::HTTP_TRANSACTION_RESTART_AFTER_ERROR, error);
@@ -2120,12 +2166,41 @@ int HttpNetworkTransaction::HandleIOError(int error) {
         if (base::FeatureList::IsEnabled(
                 features::kAsyncRetryOnTooManyConnectionErrors) &&
             // For performance reasons, we initially retry synchronously.
-            // However, after a threshold of attempts
-            // (= kMaxRetryAttemptsOnConnectionErrors / 2), we switch to
-            // asynchronous retry to break potential priority starvation loops
-            // as described above.
+            // However, after a threshold of attempts, we switch to asynchronous
+            // retry to break potential priority starvation loops as described
+            // above.
             retry_attempts_on_connection_errors_ >=
-                kMaxRetryAttemptsOnConnectionErrors / 2) {
+                kAsyncRetryThresholdOnConnectionErrors) {
+          base::UmaHistogramBoolean(
+              "Net.NetworkTransaction.AsyncRetryOnTooManyConnectionErrors."
+              "Every",
+              true);
+          base::UmaHistogramBoolean(
+              base::StrCat(
+                  {"Net.NetworkTransaction.AsyncRetryOnTooManyConnectionErrors."
+                   "Every.",
+                   NegotiatedProtocolToHistogramSuffix(negotiated_protocol_)}),
+              true);
+          if (retry_attempts_on_connection_errors_ ==
+              kAsyncRetryThresholdOnConnectionErrors) {
+            base::UmaHistogramBoolean(
+                kAsyncRetryOnTooManyConnectionErrorsFirstHistogram, true);
+            base::UmaHistogramBoolean(
+                base::StrCat(
+                    {kAsyncRetryOnTooManyConnectionErrorsFirstHistogram, ".",
+                     NegotiatedProtocolToHistogramSuffix(
+                         negotiated_protocol_)}),
+                true);
+            base::UmaHistogramSparse(
+                "Net.NetworkTransaction.InitialErrorOnAsyncRetry",
+                -initial_connection_error_);
+            base::UmaHistogramSparse(
+                base::StrCat(
+                    {"Net.NetworkTransaction.InitialErrorOnAsyncRetry.",
+                     NegotiatedProtocolToHistogramSuffix(
+                         negotiated_protocol_)}),
+                -initial_connection_error_);
+          }
           // Use WeakPtr to prevent a potential dangling pointer crash. See
           // http://crbug.com/506964502 for more details.
           base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -2430,13 +2505,14 @@ bool HttpNetworkTransaction::ContentEncodingsValid() const {
 
 void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
   // Only record the first time the stream request completes.
-  if (num_restarts_ > 0) {
+  if (num_restarts_ > 0 || retry_attempts_ > 0 ||
+      retry_attempts_on_connection_errors_ > 0) {
     return;
   }
 
   base::TimeDelta elapsed = base::TimeTicks::Now() - start_timeticks_;
   base::UmaHistogramTimes(
-      base::StrCat({"Net.NetworkTransaction.StreamRequestCompleteTime3.",
+      base::StrCat({"Net.NetworkTransaction.StreamRequestCompleteTime4.",
                     IsGoogleHostWithAlpnH3(url_.host()) ? "GoogleHost." : "",
                     result == OK ? "Success" : "Failure"}),
       elapsed);
@@ -2445,7 +2521,7 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
     CHECK(stream_);
     base::UmaHistogramEnumeration(
         base::StrCat({
-            "Net.NetworkTransaction.NegotiatedProtocol2",
+            "Net.NetworkTransaction.NegotiatedProtocol3",
             IsGoogleHostWithAlpnH3(url_.host()) ? ".GoogleHost" : "",
         }),
         negotiated_protocol_);
@@ -2454,7 +2530,7 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
     int get_endpoint_result = stream_->GetRemoteEndpoint(&endpoint);
     if (get_endpoint_result == OK) {
       base::UmaHistogramEnumeration(
-          "Net.NetworkTransaction.StreamAddressFamily2", endpoint.GetFamily(),
+          "Net.NetworkTransaction.StreamAddressFamily3", endpoint.GetFamily(),
           static_cast<AddressFamily>(ADDRESS_FAMILY_LAST + 1));
     }
 
@@ -2464,8 +2540,8 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
         create_stream_end_time_ - create_stream_start_time_;
 
     const std::string_view histogram_base_name =
-        ForWebSocketHandshake() ? "CreateWebSocketStreamTime3"
-                                : "CreateHttpStreamTime3";
+        ForWebSocketHandshake() ? "CreateWebSocketStreamTime4"
+                                : "CreateHttpStreamTime4";
     const std::string_view host_suffix =
         IsGoogleHostWithAlpnH3(url_.host()) ? ".GoogleHost" : "";
     const std::string_view protocol_suffix =
@@ -2484,7 +2560,7 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
     if (stream_request_completion_details_->session_source.has_value()) {
       base::UmaHistogramEnumeration(
           base::StrCat(
-              {"Net.NetworkTransaction.SessionSource3.", protocol_suffix}),
+              {"Net.NetworkTransaction.SessionSource4.", protocol_suffix}),
           *stream_request_completion_details_->session_source);
     }
 
@@ -2505,12 +2581,12 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
       };
       base::UmaHistogramTimes(
           base::StrCat({"Net.NetworkTransaction.", protocol_suffix,
-                        "StreamCreationTime2.",
+                        "StreamCreationTime3.",
                         is_existing() ? "Existing" : "New"}),
           create_time);
     }
   } else {
-    base::UmaHistogramSparse("Net.NetworkTransaction.StreamRequestErrorCode3",
+    base::UmaHistogramSparse("Net.NetworkTransaction.StreamRequestErrorCode4",
                              -result);
   }
 }

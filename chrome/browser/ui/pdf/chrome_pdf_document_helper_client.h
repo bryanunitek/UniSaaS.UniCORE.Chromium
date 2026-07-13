@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_PDF_CHROME_PDF_DOCUMENT_HELPER_CLIENT_H_
 
 #include <string>
+#include <vector>
 
 #include "base/callback_list.h"
 #include "base/memory/weak_ptr.h"
@@ -25,19 +26,19 @@ class ChromePDFDocumentHelperClient : public pdf::PDFDocumentHelperClient {
  private:
   // pdf::PDFDocumentHelperClient:
   void OnDocumentLoadComplete(
-      content::RenderFrameHost* render_frame_host) override;
-  void UpdateContentRestrictions(content::RenderFrameHost* render_frame_host,
+      content::RenderFrameHost& render_frame_host) override;
+  void UpdateContentRestrictions(content::RenderFrameHost& render_frame_host,
                                  int content_restrictions) override;
   void OnSaveURL() override;
-  void SetPluginCanSave(content::RenderFrameHost* render_frame_host,
+  void SetPluginCanSave(content::RenderFrameHost& render_frame_host,
                         bool can_save) override;
-  void OnSearchifyStarted(content::RenderFrameHost* render_frame_host) override;
-
-  // Holds subscriptions for TabInterface callbacks.
-  std::vector<base::CallbackListSubscription> tab_subscriptions_;
+  void OnSearchifyStarted(content::RenderFrameHost& render_frame_host) override;
 
   void OnPdfTextExtracted(content::GlobalRenderFrameHostId render_frame_host_id,
                           const std::u16string& text);
+
+  // Holds subscriptions for TabInterface callbacks.
+  std::vector<base::CallbackListSubscription> tab_subscriptions_;
 
   base::WeakPtrFactory<ChromePDFDocumentHelperClient> weak_factory_{this};
 };

@@ -8,11 +8,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
-namespace base::i18n::internal {
+#include "base/containers/span.h"
 
-// TODO(crbug.com/517510055): implement the inversion once Extensions is
-// available in `LanguageTag`.
+namespace base::i18n_internal {
+
 // Converts a legacy ICU locale code (e.g., "en_US@currency=USD") to a BCP47
 // language tag (e.g., "en-US-u-cu-usd").
 //
@@ -33,6 +34,14 @@ namespace base::i18n::internal {
 std::optional<std::string> ConvertLegacyCodeToBcp47IfNecessary(
     std::string_view code);
 
-}  // namespace base::i18n::internal
+// Converts a span of BCP47 language tag unicode extension keywords (e.g.,
+// "cu-usd") back to a legacy ICU locale code (e.g., "currency=USD").
+//
+// See https://www.rfc-editor.org/info/rfc6067/ for the
+// BCP47 Unicode locale extension specification.
+std::string ConvertBcp47UnicodeKeywordsToLegacyCode(
+    base::span<const std::pair<std::string, std::string>> keywords);
+
+}  // namespace base::i18n_internal
 
 #endif  // BASE_I18N_INTERNAL_LEGACY_ICU_CONVERTER_H_

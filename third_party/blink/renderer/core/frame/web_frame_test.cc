@@ -75,6 +75,7 @@
 #include "third_party/blink/public/common/widget/device_emulation_params.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom-blink.h"
 #include "third_party/blink/public/mojom/blob/data_element.mojom-blink.h"
+#include "third_party/blink/public/mojom/dom/dom_node_id.mojom-blink.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/find_in_page.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
@@ -253,8 +254,9 @@ namespace blink {
 namespace {
 
 const ScrollPaintPropertyNode* GetScrollNode(const LayoutObject& scroller) {
-  if (auto* properties = scroller.FirstFragment().PaintProperties())
+  if (auto* properties = scroller.FirstFragment().PaintProperties()) {
     return properties->Scroll();
+  }
   return nullptr;
 }
 
@@ -294,8 +296,9 @@ void ExecuteScriptsInMainWorld(
     mojom::blink::UserActivationOption user_gesture =
         mojom::blink::UserActivationOption::kDoNotActivate) {
   Vector<WebScriptSource> sources;
-  for (auto script : scripts)
+  for (auto script : scripts) {
     sources.push_back(WebScriptSource(script));
+  }
   frame->RequestExecuteScript(
       DOMWrapperWorld::kMainWorldId, sources, user_gesture,
       mojom::blink::EvaluationTiming::kSynchronous,
@@ -487,10 +490,13 @@ class WebFrameTest : public PageTestBase {
       node_count += std::ranges::count_if(
           markers_in_node, [start_offset, end_offset, &node, &start_container,
                             &end_container](const DocumentMarker* marker) {
-            if (node == start_container && marker->EndOffset() <= start_offset)
+            if (node == start_container &&
+                marker->EndOffset() <= start_offset) {
               return false;
-            if (node == end_container && marker->StartOffset() >= end_offset)
+            }
+            if (node == end_container && marker->StartOffset() >= end_offset) {
               return false;
+            }
             return true;
           });
     }
@@ -590,8 +596,9 @@ class ScriptExecutionCallbackHelper final {
       ADD_FAILURE() << "Expected a single result, but found nullopt";
       return String();
     }
-    if (const std::string* str = result_->GetIfString())
+    if (const std::string* str = result_->GetIfString()) {
       return String(*str);
+    }
 
     ADD_FAILURE() << "Type mismatch (not string)";
     return String();
@@ -1029,8 +1036,9 @@ class CapabilityDelegationMessageListener final : public NativeEventListener {
   }
 
   bool DelegateCapability() {
-    if (delegated_capability_ == mojom::blink::DelegatedCapability::kNone)
+    if (delegated_capability_ == mojom::blink::DelegatedCapability::kNone) {
       return false;
+    }
     delegated_capability_ = mojom::blink::DelegatedCapability::kNone;
     return true;
   }
@@ -1329,8 +1337,9 @@ class CSSCallbackWebFrameClient
 
   HashSet<String>& MatchedSelectors() {
     auto it = matched_selectors_.find(Frame());
-    if (it != matched_selectors_.end())
+    if (it != matched_selectors_.end()) {
       return it->value;
+    }
 
     auto add_result = matched_selectors_.insert(Frame(), HashSet<String>());
     return add_result.stored_value->value;
@@ -1380,8 +1389,9 @@ class WebFrameCSSCallbackTest : public testing::Test {
 
   const HashSet<String>& MatchedSelectors() {
     auto it = client_.matched_selectors_.find(frame_);
-    if (it != client_.matched_selectors_.end())
+    if (it != client_.matched_selectors_.end()) {
       return it->value;
+    }
 
     auto add_result =
         client_.matched_selectors_.insert(frame_, HashSet<String>());
@@ -2807,12 +2817,14 @@ TEST_F(WebFrameTest, pageScaleFactorDoesntShrinkFrameView) {
   int viewport_height_minus_scrollbar = viewport_height;
 
   if (view->LayoutViewport()->VerticalScrollbar() &&
-      !view->LayoutViewport()->VerticalScrollbar()->IsOverlayScrollbar())
+      !view->LayoutViewport()->VerticalScrollbar()->IsOverlayScrollbar()) {
     viewport_width_minus_scrollbar -= 15;
+  }
 
   if (view->LayoutViewport()->HorizontalScrollbar() &&
-      !view->LayoutViewport()->HorizontalScrollbar()->IsOverlayScrollbar())
+      !view->LayoutViewport()->HorizontalScrollbar()->IsOverlayScrollbar()) {
     viewport_height_minus_scrollbar -= 15;
+  }
 
   web_view_helper.GetWebView()->SetPageScaleFactor(2);
 
@@ -6987,8 +6999,9 @@ class StubbornTextCheckClient : public WebTextCheckClient {
   void Kick(int misspelling_start_offset,
             int misspelling_length,
             WebTextDecorationType type) {
-    if (!completion_)
+    if (!completion_) {
       return;
+    }
     std::vector<WebTextCheckingResult> results;
     if (misspelling_start_offset >= 0 && misspelling_length > 0) {
       results.emplace_back(type, misspelling_start_offset, misspelling_length);
@@ -7140,6 +7153,14 @@ class FakeMainLocalFrameHost : public mojom::blink::LocalMainFrameHost {
   void RequestClose() override {}
   void SetWindowRect(const ::gfx::Rect& bounds,
                      SetWindowRectCallback callback) override {
+    std::move(callback).Run();
+  }
+  void MoveWindowTo(const ::gfx::Point& origin,
+                    MoveWindowToCallback callback) override {
+    std::move(callback).Run();
+  }
+  void ResizeWindowTo(const ::gfx::Size& size,
+                      ResizeWindowToCallback callback) override {
     std::move(callback).Run();
   }
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -7361,16 +7382,18 @@ class TestScrolledFrameClient : public frame_test_helpers::TestWebFrameClient {
 
   // WebLocalFrameClient:
   void DidChangeScrollOffset() override {
-    if (Frame()->Parent())
+    if (Frame()->Parent()) {
       return;
+    }
     EXPECT_FALSE(did_scroll_frame_);
     LocalFrameView* view = To<WebLocalFrameImpl>(Frame())->GetFrameView();
     // LocalFrameView can be scrolled in
     // LocalFrameView::SetFixedVisibleContentRect which is called from
     // LocalFrame::CreateView (before the frame is associated with the the
     // view).
-    if (view)
+    if (view) {
       did_scroll_frame_ = true;
+    }
   }
 
  private:
@@ -9130,8 +9153,9 @@ class WebFrameSwapTestClient : public frame_test_helpers::TestWebFrameClient {
     void DidChangeFrameOwnerProperties(
         const blink::FrameToken& child_frame_token,
         mojom::blink::FrameOwnerPropertiesPtr properties) override {
-      if (parent_)
+      if (parent_) {
         parent_->DidChangeFrameOwnerProperties(std::move(properties));
+      }
     }
 
     bool did_propagate_display_none_ = false;
@@ -9376,8 +9400,9 @@ class SwapMainFrameWhenTitleChangesWebFrameClient
 
   // frame_test_helpers::TestWebFrameClient:
   void DidReceiveTitle(const WebString& title) override {
-    if (title.IsEmpty())
+    if (title.IsEmpty()) {
       return;
+    }
 
     if (!Frame()->Parent()) {
       frame_test_helpers::SwapRemoteFrame(Frame(),
@@ -11200,7 +11225,7 @@ TEST_F(WebFrameTest, CopyTextInImageDocument) {
   Node* text = document->createTextNode("copy me");
   document->body()->appendChild(text);
   document->GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder().SelectAllChildren(*text).Build(),
+      SelectionInDomTree::Builder().SelectAllChildren(*text).Build(),
       SetSelectionOptions());
 
   // Setup a mock clipboard host.
@@ -11905,8 +11930,9 @@ class TestResourcePriorityWebFrameClient
   }
 
   void VerifyAllRequests() {
-    for (const auto& request : expected_requests_)
+    for (const auto& request : expected_requests_) {
       EXPECT_TRUE(request.value->seen);
+    }
   }
 
  private:
@@ -14104,12 +14130,18 @@ class TestUpdateFaviconURLLocalFrameHost : public FakeLocalFrameHost {
 
   // FakeLocalFrameHost:
   void UpdateFaviconURL(
-      Vector<blink::mojom::blink::FaviconURLPtr> favicon_urls) override {
-    did_notify_ = true;
+      Vector<blink::mojom::blink::FaviconURLPtr> favicon_urls,
+      blink::mojom::blink::FaviconUpdateReason reason) override {
+    last_reason_ = reason;
   }
 
-  bool did_notify_ = false;
+  std::optional<blink::mojom::blink::FaviconUpdateReason> last_reason_;
 };
+
+constexpr char kPageWithFaviconHTML[] =
+    "<html><head>"
+    "<link rel='icon' href='http://www.google.com/favicon.ico'>"
+    "</head></html>";
 
 // Ensure the render view sends favicon url update events correctly.
 TEST_F(WebFrameTest, FaviconURLUpdateEvent) {
@@ -14125,16 +14157,13 @@ TEST_F(WebFrameTest, FaviconURLUpdateEvent) {
 
   // An event should be sent when a favicon url exists.
   frame->GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(
-      "<html>"
-      "<head>"
-      "<link rel='icon' href='http://www.google.com/favicon.ico'>"
-      "</head>"
-      "</html>");
+      kPageWithFaviconHTML);
   RunPendingTasks();
 
-  EXPECT_TRUE(frame_host.did_notify_);
+  EXPECT_EQ(frame_host.last_reason_,
+            blink::mojom::blink::FaviconUpdateReason::kLinkElementChange);
 
-  frame_host.did_notify_ = false;
+  frame_host.last_reason_.reset();
 
   // An event should not be sent if no favicon url exists. This is an assumption
   // made by some of Chrome's favicon handling.
@@ -14145,7 +14174,51 @@ TEST_F(WebFrameTest, FaviconURLUpdateEvent) {
       "</html>");
   RunPendingTasks();
 
-  EXPECT_FALSE(frame_host.did_notify_);
+  EXPECT_FALSE(frame_host.last_reason_.has_value());
+  web_view_helper.Reset();
+}
+
+// Ensure media feature changes send kMediaQueryChange as the reason.
+TEST_F(WebFrameTest, FaviconURLUpdateReasonMediaQueryChange) {
+  TestUpdateFaviconURLLocalFrameHost frame_host;
+  frame_test_helpers::TestWebFrameClient web_frame_client;
+  frame_host.Init(web_frame_client.GetRemoteNavigationAssociatedInterfaces());
+  frame_test_helpers::WebViewHelper web_view_helper;
+  web_view_helper.Initialize(&web_frame_client);
+  RunPendingTasks();
+
+  LocalFrame* frame = web_view_helper.GetWebView()->MainFrameImpl()->GetFrame();
+
+  frame->GetDocument()->documentElement()->SetInnerHTMLWithoutTrustedTypes(
+      kPageWithFaviconHTML);
+  RunPendingTasks();
+  frame_host.last_reason_.reset();
+
+  frame->GetDocument()->GetMediaQueryMatcher();
+  frame->GetDocument()->EvaluateMediaQueryList();
+  RunPendingTasks();
+
+  EXPECT_EQ(frame_host.last_reason_,
+            blink::mojom::blink::FaviconUpdateReason::kMediaQueryChange);
+  web_view_helper.Reset();
+}
+
+// Ensure loading a page with a favicon sends kPageLoad as the reason.
+TEST_F(WebFrameTest, FaviconURLUpdateReasonPageLoad) {
+  TestUpdateFaviconURLLocalFrameHost frame_host;
+  frame_test_helpers::TestWebFrameClient web_frame_client;
+  frame_host.Init(web_frame_client.GetRemoteNavigationAssociatedInterfaces());
+
+  frame_test_helpers::WebViewHelper web_view_helper;
+  web_view_helper.Initialize(&web_frame_client);
+
+  frame_test_helpers::LoadHTMLString(
+      web_view_helper.GetWebView()->MainFrameImpl(), kPageWithFaviconHTML,
+      url_test_helpers::ToKURL("http://example.com/"));
+  RunPendingTasks();
+
+  EXPECT_EQ(frame_host.last_reason_,
+            blink::mojom::blink::FaviconUpdateReason::kPageLoad);
   web_view_helper.Reset();
 }
 
@@ -14158,7 +14231,8 @@ class TestFocusedElementChangedLocalFrameHost : public FakeLocalFrameHost {
   void FocusedElementChanged(bool is_editable_element,
                              bool is_richly_editable_element,
                              const gfx::Rect& bounds_in_frame_widget,
-                             blink::mojom::FocusType focus_type) override {
+                             blink::mojom::FocusType focus_type,
+                             mojom::blink::DOMNodeIdPtr dom_node_id) override {
     did_notify_ = true;
   }
 

@@ -30,13 +30,16 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/callback_utils.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
-#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_install_command_helper.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/non_installed_bundle_inspection_context.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/isolated_web_apps/jobs/prepare_install_info_job.h"
+#include "chrome/browser/web_applications/isolated_web_apps/key_rotation_util.h"
 #include "chrome/browser/web_applications/isolated_web_apps/remove_isolated_web_app_data.h"
+#include "chrome/browser/web_applications/isolated_web_apps/storage_util.h"
+#include "chrome/browser/web_applications/isolated_web_apps/trust_and_signature_verifier.h"
 #include "chrome/browser/web_applications/jobs/finalize_update_job.h"
+#include "chrome/browser/web_applications/jobs/finalizer_delegate.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_install_finalizer.h"
@@ -53,16 +56,53 @@
 #include "components/webapps/isolated_web_apps/types/iwa_version.h"
 #include "components/webapps/isolated_web_apps/types/storage_location.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/storage_partition.h"
 
 namespace web_app {
+
+namespace {
+
+class UpdateIsolationDataDelegate : public FinalizerDelegate {
+ public:
+  UpdateIsolationDataDelegate() = default;
+  ~UpdateIsolationDataDelegate() override = default;
+
+  void ConfigureCustomFields(WebApp* web_app,
+                             const WebAppInstallInfo& web_app_info) override {
+    CHECK(web_app->isolation_data().has_value());
+    const std::optional<IsolationData::PendingUpdateInfo>& pending_update_info =
+        web_app->isolation_data()->pending_update_info();
+    CHECK(pending_update_info.has_value())
+        << "Isolated Web Apps can only be updated if "
+           "`IsolationData::PendingUpdateInfo` is set.";
+    CHECK_EQ(web_app_info.isolated_web_app_version(),
+             pending_update_info->version);
+
+    IsolationData::Builder builder(pending_update_info->location,
+                                   pending_update_info->version);
+    builder.PersistFieldsForUpdate(*web_app->isolation_data());
+
+    if (web_app_info.iwa_update_manifest_url &&
+        !pending_update_info->location.dev_mode()) {
+      builder.SetUpdateManifestUrl(*web_app_info.iwa_update_manifest_url);
+    }
+
+    if (pending_update_info->integrity_block_data) {
+      builder.SetIntegrityBlockData(*pending_update_info->integrity_block_data);
+    }
+
+    web_app->SetIsolationData(std::move(builder).Build());
+  }
+};
+
+}  // namespace
 
 IsolatedWebAppApplyUpdateCommand::IsolatedWebAppApplyUpdateCommand(
     IsolatedWebAppUrlInfo url_info,
     Profile& profile,
     std::unique_ptr<ScopedKeepAlive> optional_keep_alive,
     std::unique_ptr<ScopedProfileKeepAlive> optional_profile_keep_alive,
-    base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)> callback,
-    std::unique_ptr<IsolatedWebAppInstallCommandHelper> command_helper)
+    base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)> callback)
     : WebAppCommand<AppLock, IsolatedWebAppApplyUpdateCommandResult>(
           "IsolatedWebAppApplyUpdateCommand",
           AppLockDescription(url_info.app_id()),
@@ -72,8 +112,7 @@ IsolatedWebAppApplyUpdateCommand::IsolatedWebAppApplyUpdateCommand(
       url_info_(std::move(url_info)),
       profile_(profile),
       optional_keep_alive_(std::move(optional_keep_alive)),
-      optional_profile_keep_alive_(std::move(optional_profile_keep_alive)),
-      command_helper_(std::move(command_helper)) {
+      optional_profile_keep_alive_(std::move(optional_profile_keep_alive)) {
   CHECK(optional_profile_keep_alive_ == nullptr ||
         &profile_.get() == optional_profile_keep_alive_->profile());
 
@@ -129,7 +168,8 @@ void IsolatedWebAppApplyUpdateCommand::CheckIfUpdateIsStillPending(
 
 void IsolatedWebAppApplyUpdateCommand::CheckTrustAndSignatures(
     base::OnceClosure next_step_callback) {
-  command_helper_->CheckTrustAndSignatures(
+  web_app::CheckTrustAndSignatures(
+      url_info_.web_bundle_id(),
       IwaSourceWithMode::FromStorageLocation(profile().GetPath(),
                                              pending_update_info().location),
       IwaUpdateOperation{}, &profile(),
@@ -196,7 +236,8 @@ void IsolatedWebAppApplyUpdateCommand::HandleKeyRotationOrDowngradeIfNecessary(
 
 void IsolatedWebAppApplyUpdateCommand::CreateStoragePartition(
     base::OnceClosure next_step_callback) {
-  command_helper_->CreateStoragePartitionIfNotPresent(profile());
+  profile().GetStoragePartition(url_info_.storage_partition_config(&profile()),
+                                /*can_create=*/true);
   std::move(next_step_callback).Run();
 }
 
@@ -235,7 +276,8 @@ void IsolatedWebAppApplyUpdateCommand::FinalizeUpdate(
   }
 
   install_update_job_ = std::make_unique<FinalizeUpdateJob>(
-      lock_.get(), lock_.get(), *provider, install_info);
+      lock_.get(), lock_.get(), *provider, install_info,
+      std::make_unique<UpdateIsolationDataDelegate>());
   install_update_job_->Start(
       base::BindOnce(&IsolatedWebAppApplyUpdateCommand::OnFinalized,
                      weak_factory_.GetWeakPtr()));

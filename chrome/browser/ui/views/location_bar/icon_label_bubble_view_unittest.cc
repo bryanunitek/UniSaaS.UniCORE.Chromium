@@ -4,11 +4,12 @@
 
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
 
+#include "chrome/browser/ui/views/location_bar/slide_and_crossfade_icon_label_bubble_layout_strategy.h"
+#include "chrome/browser/ui/views/location_bar/standard_icon_label_bubble_layout_strategy.h"
+
 #include <optional>
 
-#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/layout_constants.h"
@@ -18,7 +19,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/base_event_utils.h"
-#include "ui/events/gesture_detection/gesture_configuration.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/animation/animation_test_api.h"
 #include "ui/gfx/geometry/rect.h"
@@ -29,7 +29,6 @@
 #include "ui/views/animation/test/ink_drop_host_test_api.h"
 #include "ui/views/animation/test/test_ink_drop.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/image_view.h"
 #include "ui/views/layout/flex_layout_types.h"
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/widget/widget_utils.h"
@@ -51,9 +50,16 @@ const int kNumberOfSteps = 300;
 
 class TestIconLabelBubbleView : public IconLabelBubbleView {
  public:
+  using IconLabelBubbleView::AddLayerToRegion;
   using IconLabelBubbleView::AnimateIn;
   using IconLabelBubbleView::AnimateOut;
+  using IconLabelBubbleView::animation_style;
+  using IconLabelBubbleView::GetAnimationValue;
+  using IconLabelBubbleView::GetCrossfadeImageView;
+  using IconLabelBubbleView::image_container_view;
+  using IconLabelBubbleView::RemoveLayerFromRegions;
   using IconLabelBubbleView::ResetSlideAnimation;
+  using IconLabelBubbleView::UpdateAnimationProgress;
 
   enum State {
     GROWING,
@@ -924,4 +930,52 @@ TEST_F(IconLabelBubbleViewAnimationTest, WidthDecreasesDuringAnimateOut) {
       std::ref(last_width), std::ref(animation_step_count)));
 
   view()->AwaitAnimateOut();
+}
+
+TEST_F(IconLabelBubbleViewTest, SlideAndCrossfadeAnimationConfiguredAndDriven) {
+  view()->SetBounds(0, 0, 200, 24);
+  view()->SetCrossfadeImage(
+      ui::ImageModel::FromImage(gfx::test::CreateImage(16, 16)));
+
+  // Verify trailing icon is present and visible.
+  ASSERT_NE(view()->GetCrossfadeImageView(), nullptr);
+  EXPECT_TRUE(view()->GetCrossfadeImageView()->GetVisible());
+
+  // Leading icon container layer is created.
+  views::View* image_container = view()->image_container_view();
+  ASSERT_NE(image_container, nullptr);
+  ASSERT_NE(image_container->layer(), nullptr);
+
+  // Leading icon is fully opaque when slide animation is collapsed (0.0).
+  view()->ResetSlideAnimation(false);
+  view()->UpdateAnimationProgress();
+  EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 1.0f);
+
+  // Leading icon is fully transparent when slide animation is expanded (1.0).
+  view()->ResetSlideAnimation(true);
+  view()->UpdateAnimationProgress();
+  EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 0.0f);
+}
+
+TEST_F(IconLabelBubbleViewTest, LayerRecreationOnInkDropRegionsChange) {
+  view()->SetBounds(0, 0, 200, 24);
+  view()->SetCrossfadeImage(
+      ui::ImageModel::FromImage(gfx::test::CreateImage(16, 16)));
+  view()->ResetSlideAnimation(true);
+  view()->UpdateAnimationProgress();
+
+  views::View* image_container = view()->image_container_view();
+  ASSERT_NE(image_container, nullptr);
+  EXPECT_NE(image_container->layer(), nullptr);
+  EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 0.0f);
+
+  // Simulate hover events which trigger AddLayerToRegion /
+  // RemoveLayerFromRegions.
+  ui::Layer dummy_layer;
+  view()->AddLayerToRegion(&dummy_layer, views::LayerRegion::kAbove);
+  view()->RemoveLayerFromRegions(&dummy_layer);
+
+  // Verify layer is preserved and opacity is synced back.
+  EXPECT_NE(image_container->layer(), nullptr);
+  EXPECT_FLOAT_EQ(image_container->layer()->opacity(), 0.0f);
 }

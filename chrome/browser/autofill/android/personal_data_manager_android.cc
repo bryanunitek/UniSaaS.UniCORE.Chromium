@@ -13,6 +13,7 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
@@ -76,23 +77,21 @@ using ::base::android::ToJavaIntArray;
 
 // Logs whether the alternative name in a new profile contains a separator.
 void RecordAlternativeNameSeparatorUsage(
-    const autofill::AutofillProfile& profile,
-    const autofill::AutofillProfile* existing_profile) {
+    const AutofillProfile& profile,
+    const AutofillProfile* existing_profile) {
   const std::u16string existing_alternative_name =
       existing_profile
-          ? existing_profile->GetInfo(autofill::ALTERNATIVE_FULL_NAME,
+          ? existing_profile->GetInfo(ALTERNATIVE_FULL_NAME,
                                       g_browser_process->GetApplicationLocale())
           : std::u16string();
 
-  const std::u16string saved_alternative_name =
-      profile.GetInfo(autofill::ALTERNATIVE_FULL_NAME,
-                      g_browser_process->GetApplicationLocale());
+  const std::u16string saved_alternative_name = profile.GetInfo(
+      ALTERNATIVE_FULL_NAME, g_browser_process->GetApplicationLocale());
 
   if (!saved_alternative_name.empty() &&
       saved_alternative_name != existing_alternative_name) {
-    const bool has_name_separator =
-        re2::RE2::PartialMatch(base::UTF16ToUTF8(saved_alternative_name),
-                               autofill::kCjkNameSeparatorsRe);
+    const bool has_name_separator = re2::RE2::PartialMatch(
+        base::UTF16ToUTF8(saved_alternative_name), kCjkNameSeparatorsRe);
     base::UmaHistogramBoolean(
         "Autofill.Settings.EditedAlternativeNameContainsASeparator",
         has_name_separator);
@@ -255,7 +254,7 @@ std::string PersonalDataManagerAndroid::SetProfile(
       g_browser_process->GetApplicationLocale());
 
   const bool use_existing_profile = !guid.empty();
-  const autofill::AutofillProfile* existing_profile = nullptr;
+  const AutofillProfile* existing_profile = nullptr;
   if (use_existing_profile) {
     existing_profile = address_data_manager().GetProfileByGUID(guid);
   }

@@ -15,6 +15,7 @@
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_command_line.h"
@@ -61,7 +62,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "content/public/test/test_utils.h"
 #include "services/viz/privileged/mojom/compositing/features.mojom-features.h"
 #include "ui/aura/window.h"
 #include "ui/events/event_utils.h"
@@ -141,7 +141,7 @@ class AutotestPrivateApiTest : public ExtensionApiTest {
     ExtensionApiTest::SetUpOnMainThread();
     // Turn on testing mode so we don't kill the browser.
     AutotestPrivateAPI::GetFactoryInstance()
-        ->Get(browser()->profile())
+        ->Get(browser()->GetProfile())
         ->set_test_mode(true);
   }
 
@@ -209,7 +209,7 @@ IN_PROC_BROWSER_TEST_P(AutotestPrivateApiTestWithContextType,
 #endif
 IN_PROC_BROWSER_TEST_P(AutotestPrivateApiTestWithContextType,
                        MAYBE_AutotestPrivateArcEnabled) {
-  ArcAppListPrefs* const prefs = ArcAppListPrefs::Get(browser()->profile());
+  ArcAppListPrefs* const prefs = ArcAppListPrefs::Get(browser()->GetProfile());
   ASSERT_TRUE(prefs);
 
   arc::ArcSessionManager::Get()->SetArcSessionRunnerForTesting(
@@ -376,7 +376,7 @@ class AutotestPrivateApiOverviewTest
     AutotestPrivateApiTest::SetUpOnMainThread();
 
     // Create one additional browser window to make total of 2 windows.
-    CreateBrowser(browser()->profile());
+    CreateBrowser(browser()->GetProfile());
 
     // Enters tablet overview mode.
     ash::ShellTestApi().SetTabletModeEnabledForTest(true);
@@ -486,8 +486,10 @@ class AutotestPrivateWithPolicyApiTest
     policy.Set(policy::key::kAllowDinosaurEasterEgg,
                policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
                policy::POLICY_SOURCE_CLOUD, base::Value(true), nullptr);
+    provider_.SetupPolicyServiceForPolicyUpdates(
+        g_browser_process->policy_service());
     provider_.UpdateChromePolicy(policy);
-    base::RunLoop().RunUntilIdle();
+    provider_.SetupPolicyServiceForPolicyUpdates(nullptr);
   }
 
  protected:
@@ -751,11 +753,11 @@ IN_PROC_BROWSER_TEST_P(AutotestPrivateApiTestWithContextType,
       ash::personalization_app::mojom::AmbientTheme::kFloatOnBy;
   ash::personalization_app::mojom::AmbientTheme default_theme =
       ash::AmbientUiSettings::ReadFromPrefService(
-          *browser()->profile()->GetPrefs())
+          *browser()->GetProfile()->GetPrefs())
           .theme();
   ASSERT_NE(kTestTheme, default_theme);
   ash::AmbientUiSettings(kTestTheme)
-      .WriteToPrefService(*browser()->profile()->GetPrefs());
+      .WriteToPrefService(*browser()->GetProfile()->GetPrefs());
 
   base::ListValue suite_args;
   suite_args.Append(base::Value(ash::ambient::prefs::kAmbientUiSettings));
@@ -765,7 +767,7 @@ IN_PROC_BROWSER_TEST_P(AutotestPrivateApiTestWithContextType,
       << message_;
   // Value read back should be the default.
   EXPECT_EQ(ash::AmbientUiSettings::ReadFromPrefService(
-                *browser()->profile()->GetPrefs())
+                *browser()->GetProfile()->GetPrefs())
                 .theme(),
             default_theme);
 }

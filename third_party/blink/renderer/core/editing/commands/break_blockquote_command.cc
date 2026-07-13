@@ -99,7 +99,7 @@ static HTMLQuoteElement* TopBlockquoteOf(const Position& start) {
   // exceptions to this, see |doApply|).
   const Position& position = MostForwardCaretPosition(start);
   return To<HTMLQuoteElement>(
-      HighestEnclosingNodeOfType(position, IsMailHTMLBlockquoteElement));
+      HighestEnclosingNodeOfType(position, IsMailHtmlBlockquoteElement));
 }
 
 void BreakBlockquoteCommand::DoApply(EditingState* editing_state) {
@@ -154,7 +154,7 @@ void BreakBlockquoteCommand::DoApply(EditingState* editing_state) {
     if (editing_state->IsAborted())
       return;
     SetEndingSelection(SelectionForUndoStep::From(
-        SelectionInDOMTree::Builder()
+        SelectionInDomTree::Builder()
             .Collapse(Position::BeforeNode(*break_element))
             .Build()));
     if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
@@ -178,7 +178,7 @@ void BreakBlockquoteCommand::DoApply(EditingState* editing_state) {
   // need to break the quote.
   if (is_last_vis_pos_in_node) {
     SetEndingSelection(SelectionForUndoStep::From(
-        SelectionInDOMTree::Builder()
+        SelectionInDomTree::Builder()
             .Collapse(Position::BeforeNode(*break_element))
             .Build()));
     if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
@@ -200,7 +200,7 @@ void BreakBlockquoteCommand::DoApply(EditingState* editing_state) {
   // Adjust the position so we don't split at the beginning of a quote.
   while (IsFirstVisiblePositionInNode(CreateVisiblePosition(pos),
                                       To<HTMLQuoteElement>(EnclosingNodeOfType(
-                                          pos, IsMailHTMLBlockquoteElement)))) {
+                                          pos, IsMailHtmlBlockquoteElement)))) {
     pos = PreviousPositionOf(pos, PositionMoveType::kGraphemeCluster);
   }
 
@@ -228,7 +228,7 @@ void BreakBlockquoteCommand::DoApply(EditingState* editing_state) {
   // If there's nothing inside topBlockquote to move, we're finished.
   if (!start_node->IsDescendantOf(top_blockquote)) {
     SetEndingSelection(SelectionForUndoStep::From(
-        SelectionInDOMTree::Builder()
+        SelectionInDomTree::Builder()
             .Collapse(FirstPositionInOrBeforeNode(*start_node))
             .Build()));
     if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
@@ -318,7 +318,7 @@ void BreakBlockquoteCommand::DoApply(EditingState* editing_state) {
 
   // Put the selection right before the break.
   SetEndingSelection(SelectionForUndoStep::From(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .Collapse(Position::BeforeNode(*break_element))
           .Build()));
   if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {

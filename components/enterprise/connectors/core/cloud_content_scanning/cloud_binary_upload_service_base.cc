@@ -504,6 +504,12 @@ void CloudBinaryUploadServiceBase::RecordRequestMetrics(
       case PRINT:
         request_type = "Print";
         break;
+      case DATA_COPIED:
+        request_type = "ClipboardCopy";
+        break;
+      case NETWORK_REQUEST:
+        request_type = "NetworkRequest";
+        break;
       case ANALYSIS_CONNECTOR_UNSPECIFIED:
         break;
     }

@@ -37,6 +37,7 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_host_registry.h"
+#include "extensions/browser/host_access_request_helper.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
@@ -49,7 +50,6 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/button/toggle_button.h"
-#include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
 
 namespace {
@@ -239,7 +239,7 @@ void ExtensionsMenuMainPageViewInteractiveUITest::ClickSiteSettingToggle() {
   DCHECK(main_page());
 
   extensions::PermissionsManagerWaiter waiter(
-      PermissionsManager::Get(browser()->profile()));
+      PermissionsManager::Get(browser()->GetProfile()));
   ClickButton(main_page()->GetSiteSettingsToggleForTesting());
   waiter.WaitForUserPermissionsSettingsChange();
 
@@ -279,6 +279,10 @@ void ExtensionsMenuMainPageViewInteractiveUITest::ShowUi(
 // updated.
 IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
                        SiteAccessToggle_RunAction) {
+  auto cooldown_reset =
+      extensions::HostAccessRequestsHelper::SetCooldownForTesting(
+          base::TimeDelta());
+
   ASSERT_TRUE(embedded_test_server()->Start());
 
   auto extension =
@@ -300,7 +304,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
 
   // Verify user site setting is "customize by extension" (default) and
   // the extension has "on click" site access.
-  auto* permissions_manager = PermissionsManager::Get(browser()->profile());
+  auto* permissions_manager = PermissionsManager::Get(browser()->GetProfile());
   ASSERT_EQ(permissions_manager->GetUserSiteSetting(url::Origin::Create(urlA)),
             PermissionsManager::UserSiteSetting::kCustomizeByExtension);
   ASSERT_EQ(permissions_manager->GetUserSiteAccess(*extension.get(), urlA),
@@ -330,7 +334,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
   // responsible for granting the requested host permissions - see
   // https://source.chromium.org/chromium/chromium/src/+/main:extensions/browser/permissions/active_tab_permission_granter.cc;l=148-178;drc=409b77a78792667eb4583c52aa9faf7fa321f4b8
   extensions::PermissionsManagerWaiter waiter(
-      extensions::PermissionsManager::Get(browser()->profile()));
+      extensions::PermissionsManager::Get(browser()->GetProfile()));
   ClickButton(menu_entry->action_button_for_testing());
   waiter.WaitForActiveTabPermissionGranted(extension_id);
 
@@ -456,7 +460,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
 
   // Add a site access request for extension A on the (active) first tab.
   // Verify extension A site access request is visible on the menu.
-  auto* permissions_manager = PermissionsManager::Get(browser()->profile());
+  auto* permissions_manager = PermissionsManager::Get(browser()->GetProfile());
   permissions_manager->AddHostAccessRequest(tab1_web_contents, tab1_id,
                                             *extensionA);
   EXPECT_TRUE(requests_section->GetVisible());
@@ -1129,7 +1133,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
   extension_dir.WriteFile(FILE_PATH_LITERAL("script.js"),
                           "console.log('injected!');");
   scoped_refptr<const extensions::Extension> extension =
-      extensions::ChromeTestExtensionLoader(browser()->profile())
+      extensions::ChromeTestExtensionLoader(browser()->GetProfile())
           .LoadExtension(extension_dir.UnpackedPath());
 
   RunTestSequence(

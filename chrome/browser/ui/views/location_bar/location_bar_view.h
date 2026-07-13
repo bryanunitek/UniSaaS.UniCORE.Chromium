@@ -53,6 +53,16 @@
 #include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 #endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 
+namespace actions {
+class ActionItem;
+class ActionInvocationContext;
+}  // namespace actions
+
+namespace omnibox {
+enum ToolMode : int;
+enum ModelMode : int;
+}  // namespace omnibox
+
 class CommandUpdater;
 class ContentSettingBubbleModelDelegate;
 class IntentChipButton;
@@ -232,6 +242,7 @@ class LocationBarView
   bool IsVisible() const override;
   bool IsDrawn() const override;
   bool IsFullscreen() const override;
+  bool IsMouseHovered() const override;
   void InvalidateLayout() override;
   gfx::Rect Bounds() const override;
   gfx::Rect BoundsInScreen() const override;
@@ -287,6 +298,7 @@ class LocationBarView
   static int GetAvailableDecorationTextHeight();
 
   void OnOmniboxFocused();
+  void OpenOmniboxPopup();
   void OnOmniboxBlurred();
 
   // Called when omnibox view receives mouse notifications relevant to hover.
@@ -321,6 +333,8 @@ class LocationBarView
 
   SkColor GetBackgroundColorForTesting() const { return background_color_; }
 
+  OmniboxPopupUI* GetOmniboxPopupUI();
+
  private:
   FRIEND_TEST_ALL_PREFIXES(SecurityIndicatorTest, CheckIndicatorText);
   FRIEND_TEST_ALL_PREFIXES(TouchLocationBarViewBrowserTest,
@@ -353,17 +367,18 @@ class LocationBarView
   // Updates the background on a theme change, or dropdown state change.
   void RefreshBackground();
 
-  // Updates the visibility state of the Content Blocked icons to reflect what
-  // is actually blocked on the current page. Returns true if the visibility
-  // of at least one of the views in |content_setting_views_| changed.
+  // Updates the visibility state of the content setting icons to reflect what
+  // is blocked or actively in use on the current page. Returns true if the
+  // visibility of at least one of the views in `content_setting_views_`
+  // changed.
   bool RefreshContentSettingViews();
 
   // Updates the visibility state of the PageActionIconViews to reflect what
   // actions are available on the current page.
   void RefreshPageActionIconViews();
 
-  // Updates the visibility state of the AIM page action icon view.
-  void RefreshAiModePageActionIconView();
+  // Updates the visibility state of the AIM page action.
+  void RefreshAiModePageAction();
 
   // Updates PageActionContainerView's action controller to the active tab's
   // controller. At the same time, the page actions visibility will be set based
@@ -502,8 +517,6 @@ class LocationBarView
   // be shown to the user.
   bool HasAllowedInputs();
 
-  OmniboxPopupUI* GetOmniboxPopupUI();
-
   content::WebContents* GetWrappedWebContents();
 
 #if BUILDFLAG(IS_MAC)
@@ -640,6 +653,27 @@ class LocationBarView
   bool in_popup_state_transition_ = false;
 
   void OnMiddleClickPaste(base::TimeTicks event_timestamp, std::u16string text);
+
+  void RegisterOmniboxActions();
+
+  // Helper functions for omnibox actions.
+  static void AddFileOrImageToOmnibox(Browser* browser,
+                                      bool is_image,
+                                      actions::ActionItem* item,
+                                      actions::ActionInvocationContext context);
+  static void SetOmniboxToolModeAndOpenAi(
+      Browser* browser,
+      omnibox::ToolMode tool_mode,
+      actions::ActionItem* item,
+      actions::ActionInvocationContext context);
+  static void SetOmniboxModelModeAndOpenAi(
+      Browser* browser,
+      omnibox::ModelMode model_mode,
+      actions::ActionItem* item,
+      actions::ActionInvocationContext context);
+  static void ExecutePasteAndGo(Browser* browser,
+                                actions::ActionItem* item,
+                                actions::ActionInvocationContext context);
 
   base::WeakPtrFactory<LocationBarView> weak_factory_{this};
 };

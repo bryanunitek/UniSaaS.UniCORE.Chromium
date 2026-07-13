@@ -47,8 +47,12 @@ namespace {
 
 constexpr std::string_view kTokenBindingNamespace = "TokenBinding";
 
+// We do not want to delay token binding key operations by having them
+// run at the same background priority as the spare key pool generation
+// tasks. Therefore, when the spare key pool is enabled, we elevate new
+// key generation to `kUserVisible`.
 constexpr unexportable_keys::BackgroundTaskPriority kTokenBindingPriority =
-    unexportable_keys::BackgroundTaskPriority::kBestEffort;
+    unexportable_keys::BackgroundTaskPriority::kUserVisible;
 
 base::expected<std::string, TokenBindingHelper::Error> CreateAssertionToken(
     const std::string& header_and_payload,
@@ -139,12 +143,13 @@ void TokenBindingHelper::MaybeInitializeRegistrationTokenHelper(
     // binding key.
     registration_token_helper_ =
         std::make_unique<signin::BindingKeyRegistrationTokenHelper>(
-            *unexportable_key_service_,
-            std::move(wrapped_binding_key_to_reuse));
+            *unexportable_key_service_, std::move(wrapped_binding_key_to_reuse),
+            kTokenBindingPriority);
   } else {
     registration_token_helper_ =
         std::make_unique<signin::BindingKeyRegistrationTokenHelper>(
-            *unexportable_key_service_, base::ToVector(supported_algorithms));
+            *unexportable_key_service_, base::ToVector(supported_algorithms),
+            kTokenBindingPriority);
   }
 }
 
@@ -169,14 +174,16 @@ bool TokenBindingHelper::IsRegistrationKeyReady() const {
 void TokenBindingHelper::GenerateBindingKeyRegistrationToken(
     base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
         supported_algorithms,
-    std::string_view auth_code,
+    const std::variant<signin::TokenBindingAuthCode,
+                       signin::TokenBindingChallenge>& auth_code_or_challenge,
     base::OnceCallback<void(
         std::optional<signin::BindingKeyRegistrationTokenResult>)> callback) {
   MaybeInitializeRegistrationTokenHelper(supported_algorithms);
   CHECK(registration_token_helper_);
 
   registration_token_helper_->GenerateForTokenBinding(
-      GaiaUrls::GetInstance()->oauth2_chrome_client_id(), auth_code,
+      GaiaUrls::GetInstance()->oauth2_chrome_client_id(),
+      auth_code_or_challenge,
       GURL("https://accounts.google.com/accountmanager"), std::move(callback));
 }
 
@@ -284,7 +291,8 @@ void TokenBindingHelper::PerformTokenBindingUpgrade(
   // `base::Unretained()` is safe because `this` owns
   // `registration_token_helper_`.
   GenerateBindingKeyRegistrationToken(
-      supported_algorithms, challenge,
+      supported_algorithms,
+      signin::TokenBindingChallenge(std::string(challenge)),
       base::BindOnce(&TokenBindingHelper::OnUpgradeRegistrationTokenGenerated,
                      base::Unretained(this), account_id));
 }
@@ -391,13 +399,13 @@ void TokenBindingHelper::SignAssertionToken(
 void TokenBindingHelper::OnGetAllKeysForGarbageCollection(
     absl::flat_hash_set<std::vector<uint8_t>> known_wrapped_keys_in_db,
     unexportable_keys::ServiceErrorOr<
-        std::vector<unexportable_keys::UnexportableKeyId>>
+        std::vector<unexportable_keys::UnexportableSigningKeyId>>
         all_key_ids_or_error) {
   if (!all_key_ids_or_error.has_value() || all_key_ids_or_error->empty()) {
     return;
   }
 
-  std::vector<unexportable_keys::UnexportableKeyId>& all_key_ids =
+  std::vector<unexportable_keys::UnexportableSigningKeyId>& all_key_ids =
       *all_key_ids_or_error;
 
   static constexpr std::string_view kGarbageCollectionHistogramPrefix =
@@ -418,14 +426,16 @@ void TokenBindingHelper::OnGetAllKeysForGarbageCollection(
 
   // Filter out keys from the response that are still used or were generated
   // after the current Chrome session started.
-  std::erase_if(all_key_ids, [&](unexportable_keys::UnexportableKeyId key_id) {
-    unexportable_keys::ServiceErrorOr<std::vector<uint8_t>> wrapped_key =
-        unexportable_key_service_->GetWrappedKey(key_id);
-    return !wrapped_key.has_value() ||
-           known_wrapped_keys.contains(*wrapped_key) ||
-           unexportable_key_service_->GetCreationTime(key_id).value_or(
-               base::Time::Now()) >= base::Process::Current().CreationTime();
-  });
+  std::erase_if(
+      all_key_ids, [&](unexportable_keys::UnexportableSigningKeyId key_id) {
+        unexportable_keys::ServiceErrorOr<std::vector<uint8_t>> wrapped_key =
+            unexportable_key_service_->GetWrappedKey(key_id);
+        return !wrapped_key.has_value() ||
+               known_wrapped_keys.contains(*wrapped_key) ||
+               unexportable_key_service_->GetCreationTime(key_id).value_or(
+                   base::Time::Now()) >=
+                   base::Process::Current().CreationTime();
+      });
 
   base::UmaHistogramCounts100(
       base::StrCat({kGarbageCollectionHistogramPrefix, "UsedKeyCount"}),

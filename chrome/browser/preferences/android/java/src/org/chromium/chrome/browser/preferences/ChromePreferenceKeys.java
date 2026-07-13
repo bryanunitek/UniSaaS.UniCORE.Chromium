@@ -189,8 +189,12 @@ public final class ChromePreferenceKeys {
     public static final String CONTEXT_MENU_OPEN_IN_EPHEMERAL_TAB_CLICKED =
             "Chrome.Contextmenu.OpenInEphemeralTabClicked";
 
-    public static final String CONTEXT_MENU_SEARCH_WITH_GOOGLE_LENS_CLICKED =
+    /** Note: The string value intentionally omits "Image" for backward compatibility. */
+    public static final String CONTEXT_MENU_SEARCH_IMAGE_WITH_GOOGLE_LENS_CLICKED =
             "Chrome.ContextMenu.SearchWithGoogleLensClicked";
+
+    public static final String CONTEXT_MENU_SEARCH_TAB_WITH_GOOGLE_LENS_CLICKED =
+            "Chrome.ContextMenu.SearchTabWithGoogleLensClicked";
 
     public static final String CONTEXT_MENU_SHOP_IMAGE_WITH_GOOGLE_LENS_CLICKED =
             "Chrome.ContextMenu.ShopImageWithGoogleLensClicked";
@@ -247,6 +251,10 @@ public final class ChromePreferenceKeys {
     /** The timestamp of when the theme tip bottom sheet has been shown. */
     public static final String NTP_CUSTOMIZATION_THEME_TIP_BOTTOM_SHEET_SHOWN_TIMESTAMP_MS =
             "Chrome.NtpCustomization.ThemeTipBottomSheetShownTimestampMs";
+
+    /** The file path of the customized NTP background image. */
+    public static final String NTP_CUSTOMIZATION_BACKGROUND_IMAGE_FILE_PATH =
+            "Chrome.NtpCustomization.BackgroundImageFilePath";
 
     /** Whether the customized NTP theme snackbar has been shown. */
     public static final String NTP_CUSTOMIZATION_THEME_IS_SNACKBAR_SHOWN =
@@ -399,6 +407,10 @@ public final class ChromePreferenceKeys {
     /** Indicates whether a chrome page URL has been overridden by an extension. */
     public static final KeyPrefix EXTENSIONS_CHROME_PAGE_URL_OVERRIDE_ENABLED =
             new KeyPrefix("Chrome.ExtensionsUrlOverrides.Page.*");
+
+    /** Indicates the previous widescreen state of the feed. */
+    public static final String FEED_PREVIOUS_WIDESCREEN_STATE =
+            "Chrome.Feed.PreviousWidescreenState";
 
     public static final String FIRST_RUN_FLOW_COMPLETE = "first_run_flow";
     // BACKUP_FLOW_SIGNIN_ACCOUNT_NAME used to be employed for the FRE too, thus the "first_run_"
@@ -712,7 +724,8 @@ public final class ChromePreferenceKeys {
 
     /**
      * The number at the end should be consistent with {@link
-     * org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataBase.PlatformType}
+     * org.chromium.chrome.browser.ntp_customization.theme_sync.data.
+     * NtpBackgroundDataBase.PlatformType}
      */
     public static final KeyPrefix NTP_CUSTOMIZATION_SYNC_HISTORY_DATA =
             new KeyPrefix("Chrome.NtpCustomizationSync.HistoryData.*");
@@ -784,26 +797,13 @@ public final class ChromePreferenceKeys {
     public static final String PRIVACY_IN_SAMPLE_FOR_CRASHES =
             "Chrome.Privacy.InSampleForCrashReporting";
 
-    // TODO(b/483043192): Remove this preference once metrics reporting migration is complete.
     public static final String PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER =
             "Chrome.Privacy.UsageAndCrashReportingPermittedByUser";
 
-    // TODO(b/483043192): Remove this preference once metrics reporting migration is complete.
-    public static final String PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY_LEGACY =
+    public static final String PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY =
             "Chrome.Privacy.UsageAndCrashReportingPermittedByPolicy";
 
-    /**
-     * The metrics reporting level as set by the user. Value is from {@link
-     * org.chromium.components.metrics.MetricsReportingLevel}.
-     */
-    public static final String PRIVACY_METRICS_REPORTING_LEVEL =
-            "Chrome.Privacy.MetricsReportingLevel";
-
-    /** Whether metrics reporting is disabled by policy. */
-    public static final String PRIVACY_METRICS_REPORTING_DISABLED_BY_POLICY =
-            "Chrome.Privacy.MetricsReportingDisabledByPolicy";
-
-    /** Whether to use metrics consent restructure. */
+    /** Whether to use metrics choice restructure. */
     public static final String PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE =
             "Chrome.Privacy.ShouldUseMetricsChoiceRestructure";
 
@@ -1192,7 +1192,8 @@ public final class ChromePreferenceKeys {
                 COMMERCE_SUBSCRIPTIONS_CHROME_MANAGED_TIMESTAMP,
                 CONTEXT_MENU_OPEN_IMAGE_IN_EPHEMERAL_TAB_CLICKED,
                 CONTEXT_MENU_OPEN_IN_EPHEMERAL_TAB_CLICKED,
-                CONTEXT_MENU_SEARCH_WITH_GOOGLE_LENS_CLICKED,
+                CONTEXT_MENU_SEARCH_IMAGE_WITH_GOOGLE_LENS_CLICKED,
+                CONTEXT_MENU_SEARCH_TAB_WITH_GOOGLE_LENS_CLICKED,
                 CONTEXT_MENU_SHOP_IMAGE_WITH_GOOGLE_LENS_CLICKED,
                 CROSS_DEVICE_IMPORTED_BOTTOM_OMNIBOX,
                 CROSS_DEVICE_IMPORTED_ALL_SETTINGS,
@@ -1208,6 +1209,7 @@ public final class ChromePreferenceKeys {
                 NTP_CUSTOMIZATION_BACKGROUND_INFO,
                 NTP_CUSTOMIZATION_CHROME_COLOR_DAILY_REFRESH_ENABLED,
                 NTP_CUSTOMIZATION_THEME_TIP_BOTTOM_SHEET_SHOWN_TIMESTAMP_MS,
+                NTP_CUSTOMIZATION_BACKGROUND_IMAGE_FILE_PATH,
                 NTP_CUSTOMIZATION_THEME_IS_SNACKBAR_SHOWN,
                 NTP_CUSTOMIZATION_LAST_APPLY_THEME_TIMESTAMP_MS,
                 NTP_CUSTOMIZATION_LAST_DAILY_REFRESH_TIMESTAMP,
@@ -1238,6 +1240,7 @@ public final class ChromePreferenceKeys {
                 EDUCATIONAL_TIP_LAST_DEFAULT_BROWSER_PROMO_TIMESTAMP,
                 EXPLORE_OFFLINE_CONTENT_AVAILABILITY_STATUS,
                 EXTENSIONS_CHROME_PAGE_URL_OVERRIDE_ENABLED.pattern(),
+                FEED_PREVIOUS_WIDESCREEN_STATE,
                 FIRST_RUN_SKIPPED_BY_POLICY,
                 FIRST_CTA_START_TIMESTAMP,
                 FLAGS_LAST_CACHED_MINIMAL_BROWSER_FLAGS_TIME_MILLIS,
@@ -1304,9 +1307,7 @@ public final class ChromePreferenceKeys {
                 PRICE_TRACKING_USER_MANAGED_NOTIFICATIONS_TIMESTAMPS,
                 PRIVACY_IN_SAMPLE_FOR_CRASHES,
                 PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER,
-                PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY_LEGACY,
-                PRIVACY_METRICS_REPORTING_LEVEL,
-                PRIVACY_METRICS_REPORTING_DISABLED_BY_POLICY,
+                PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY,
                 PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE,
                 PROMO_IS_DISMISSED.pattern(),
                 PROMO_TIMES_SEEN.pattern(),

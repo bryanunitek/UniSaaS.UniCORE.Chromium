@@ -25,6 +25,7 @@
 #include "ui/accessibility/platform/ax_platform.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate_utils_win.h"
 #include "ui/accessibility/platform/ax_platform_node_textprovider_win.h"
+#include "ui/accessibility/platform/ax_platform_node_win.h"
 #include "ui/accessibility/platform/ax_platform_tree_manager_delegate.h"
 #include "ui/accessibility/platform/browser_accessibility_win.h"
 #include "ui/accessibility/platform/uia_registrar_win.h"
@@ -344,12 +345,14 @@ void BrowserAccessibilityManagerWin::FireSourceEvent(
       // but Alt+Tabbing between windows does not, so the correct state is
       // not restored. Re-fire the event on the last selected tab when the
       // browser window is activated to bridge that gap. Only applies to
-      // BrowserRootView (not dialogs/popups).
-      // TODO(crbug.com/505781387): Collaborating with the JAWS team on a
-      // more robust signal; remove once adopted.
+      // BrowserRootView (not dialogs/popups), and only for older versions of
+      // JAWS. Newer versions detect the active tab on their own.
+      // TODO(crbug.com/505781387): Remove once the oldest supported JAWS
+      // version no longer needs this event.
       if (node == GetBrowserAccessibilityRoot() &&
           AXPlatform::GetInstance().active_assistive_tech() ==
-              AssistiveTech::kJaws) {
+              AssistiveTech::kJaws &&
+          AXPlatform::GetInstance().JawsNeedsTabSelectionEvent()) {
         const std::string& root_class = node->GetData().GetStringAttribute(
             ax::mojom::StringAttribute::kClassName);
         if (root_class == kBrowserRootViewClassName) {
@@ -363,6 +366,17 @@ void BrowserAccessibilityManagerWin::FireSourceEvent(
     default:
       break;
   }
+}
+
+// static
+LONG BrowserAccessibilityManagerWin::GetCheckedStateChangedUiaProperty(
+    const BrowserAccessibility& node) {
+  // Buttons that expose ExpandCollapse suppress Toggle (see IsToggleSupported),
+  // so their state change is reported through ExpandCollapseState.
+  if (ToBrowserAccessibilityWin(&node)->GetCOM()->IsExpandCollapseButton()) {
+    return UIA_ExpandCollapseExpandCollapseStatePropertyId;
+  }
+  return UIA_ToggleToggleStatePropertyId;
 }
 
 void BrowserAccessibilityManagerWin::FireGeneratedEvent(
@@ -399,7 +413,8 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
         HandleSelectedStateChanged(uia_selection_events_, wrapper,
                                    IsUIANodeSelected(wrapper));
       }
-      FireUiaPropertyChangedEvent(UIA_ToggleToggleStatePropertyId, wrapper);
+      FireUiaPropertyChangedEvent(GetCheckedStateChangedUiaProperty(*wrapper),
+                                  wrapper);
       HandleAriaPropertiesChangedEvent(*wrapper);
       break;
     case AXEventGenerator::Event::CHILDREN_CHANGED: {

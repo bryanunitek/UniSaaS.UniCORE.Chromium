@@ -28,7 +28,9 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.SplitCompatService;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.media.ui.ChromeMediaNotificationControllerDelegate.ListenerServiceImpl;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
 import org.chromium.components.browser_ui.media.MediaNotificationController;
@@ -98,13 +100,21 @@ public class MediaNotificationTestBase {
     @Before
     @SuppressWarnings("DirectInvocationOnMock") // For mMockUmaTracker
     public void setUp() {
-
+        // By default, disable multiple notifications to avoid breaking legacy tests.
+        FeatureOverrides.newBuilder()
+                .disable(ChromeFeatureList.ALLOW_MULTIPLE_MEDIA_NOTIFICATIONS)
+                .applyWithoutOverwrite();
+        // The MediaNotificationManager is in components, but the flag is in Chrome. In production
+        // code, we expect Chrome code to call
+        // MediaNotificationManager.setMultipleMediaNotificationsEnabled. In the test, this is not
+        // happening, so we have to do it manually.
+        MediaNotificationManager.setMultipleMediaNotificationsEnabled(false);
         mMockContext = spy(RuntimeEnvironment.application);
         ContextUtils.initApplicationContextForTests(mMockContext);
 
         mListener = mock(MediaNotificationListener.class);
 
-        ChromeMediaNotificationControllerDelegate.sMapNotificationIdToOptions.put(
+        ChromeMediaNotificationControllerDelegate.sMapMediaTypeIdToOptions.put(
                 getNotificationId(),
                 new ChromeMediaNotificationControllerDelegate.NotificationOptions(
                         MockListenerService.class, NOTIFICATION_GROUP_NAME));
@@ -114,7 +124,8 @@ public class MediaNotificationTestBase {
                 getNotificationId(),
                 spy(
                         new MockMediaNotificationController(
-                                new ChromeMediaNotificationControllerDelegate(getNotificationId()) {
+                                new ChromeMediaNotificationControllerDelegate(
+                                        getNotificationId(), getMediaTypeId()) {
                                     @Override
                                     public void logNotificationShown(
                                             NotificationWrapper notification) {
@@ -174,7 +185,9 @@ public class MediaNotificationTestBase {
 
     @After
     public void tearDown() {
-        MediaNotificationManager.clear(NOTIFICATION_ID);
+        MediaNotificationManager.hideForAllTabs(getNotificationId());
+        MediaNotificationManager.setService(getNotificationId(), null);
+        MediaNotificationManager.setMultipleMediaNotificationsEnabled(false);
     }
 
     MediaNotificationController getController() {
@@ -205,7 +218,7 @@ public class MediaNotificationTestBase {
         mService.onStartCommand(intent, 0, 0);
     }
 
-    private void ensureService() {
+    void ensureService() {
         if (mService != null) return;
         mService = spy(new MockListenerService());
         MockListenerServiceImpl impl = mService.getImpl();
@@ -234,6 +247,10 @@ public class MediaNotificationTestBase {
 
     int getNotificationId() {
         return NOTIFICATION_ID;
+    }
+
+    int getMediaTypeId() {
+        return getNotificationId();
     }
 
     void advanceTimeByMillis(int timeMillis) {

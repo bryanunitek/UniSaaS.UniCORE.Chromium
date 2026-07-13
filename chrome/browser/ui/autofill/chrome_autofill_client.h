@@ -41,7 +41,7 @@
 #include "components/autofill/core/browser/studies/autofill_ablation_study.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_prompt_options.h"
 #include "components/autofill/core/common/unique_ids.h"
-#include "components/personal_context/core/personal_context_enablement_service.h"
+#include "components/personal_context/core/personal_context_eligibility_service.h"
 #include "components/personal_context/core/personal_context_types.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "content/public/browser/visibility.h"
@@ -76,7 +76,7 @@ class AtMemoryBottomSheetBridge;
 #endif
 
 class ActorKeyMetricsRecorder;
-class PersonalContextAccessManager;
+class AutofillAiPersonalContextAccessManager;
 class AutofillOptimizationGuideDecider;
 class EmailVerificationPopupController;
 class EmailVerifierDelegate;
@@ -125,7 +125,8 @@ class ChromeAutofillClient : public ContentAutofillClient {
   ~ChromeAutofillClient() override;
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
+    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+  // Triggers the AtMemory promo bubble.
   void ShowAutofillAtMemoryPromo();
 #endif
 
@@ -134,6 +135,8 @@ class ChromeAutofillClient : public ContentAutofillClient {
   const std::string& GetAppLocale() const final;
   version_info::Channel GetChannel() const final;
   bool IsOffTheRecord() const final;
+  const subscription_eligibility::SubscriptionEligibilityService*
+  GetSubscriptionEligibilityService() const final;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() final;
   AutofillCrowdsourcingManager& GetCrowdsourcingManager() final;
   VotesUploader& GetVotesUploader() final;
@@ -148,18 +151,23 @@ class ChromeAutofillClient : public ContentAutofillClient {
   EntityDataManager* GetEntityDataManager() final;
   WalletPassAccessManager* GetWalletPassAccessManager() final;
   SingleFieldFillRouter& GetSingleFieldFillRouter() final;
-  bool ShouldShowPersonalContextAutofillNotice() const override;
+  bool ShouldShowPersonalContextAmbientAutofillNotice() const override;
+  void MarkPersonalContextAmbientAutofillNoticeAsAcknowledged() override;
+  bool ShouldShowPersonalContextAtMemoryNotice() const override;
+  void MarkPersonalContextAtMemoryNoticeAsAcknowledged() override;
   AutocompleteHistoryManager* GetAutocompleteHistoryManager() final;
   AutofillComposeDelegate* GetComposeDelegate() final;
-  accessibility_annotator::AccessibilityQueryService*
-  GetAccessibilityQueryService() override;
-  personal_context::PersonalContextEnablementState
-  GetPersonalContextEnablementState() const override;
+  AtMemoryQueryService* GetAtMemoryQueryService() override;
+  personal_context::PersonalContextEligibilityState
+  GetPersonalContextEligibilityState() const override;
+  personal_context::PersonalContextEligibilityService*
+  GetPersonalContextEligibilityService() const override;
   PasswordManagerDelegate* GetPasswordManagerDelegate(
       const FieldGlobalId& field_id) final;
   void GetAiPageContent(GetAiPageContentCallback callback) final;
   AutofillAiManager* GetAutofillAiManager() final;
-  PersonalContextAccessManager* GetPersonalContextAccessManager() final;
+  AutofillAiPersonalContextAccessManager*
+  GetAutofillAiPersonalContextAccessManager() final;
   AutofillAiModelCache* GetAutofillAiModelCache() final;
   AutofillAiModelExecutor* GetAutofillAiModelExecutor() final;
   consent_auditor::ConsentAuditor* GetConsentAuditor() final;
@@ -207,6 +215,7 @@ class ChromeAutofillClient : public ContentAutofillClient {
   void HideSuggestions(SuggestionHidingReason reason,
                        std::optional<FillingProduct> product) final;
   void OpenGeminiInSidebar(const std::u16string& prompt) final;
+  bool IsGlicEnabled() const final;
   void TriggerUserPerceptionOfAutofillSurvey(
       FillingProduct filling_product,
       const std::map<std::string, std::string>& field_filling_stats_data) final;
@@ -224,6 +233,9 @@ class ChromeAutofillClient : public ContentAutofillClient {
   ActorKeyMetricsRecorder* GetActorKeyMetricsRecorder() final;
   bool IsAutofillEnabled() const final;
   bool IsAutofillProfileEnabled() const final;
+  bool IsAutofillTypeBlockedByPolicy(
+      const GURL& url,
+      AutofillPolicyDataCategory category) const final;
   bool IsAutocompleteEnabled() const final;
   bool IsWalletPublicPassStorageEnabled() const final;
   bool IsPasswordManagerEnabled() const final;
@@ -241,7 +253,10 @@ class ChromeAutofillClient : public ContentAutofillClient {
   // on Android.
   AutofillSnackbarControllerImpl* GetAutofillSnackbarController() final;
 
-  void ShowAtMemoryBottomSheet(base::span<const Suggestion> suggestions) final;
+  void ShowAtMemoryBottomSheet(
+      base::span<const Suggestion> suggestions,
+      base::WeakPtr<AutofillSuggestionDelegate> delegate) final;
+  void HideAtMemoryBottomSheet() final;
 
   // Returns the AtMemoryBottomSheetBridge for the current tab.
   AtMemoryBottomSheetBridge* GetOrCreateAtMemoryBottomSheetBridge();
@@ -274,6 +289,8 @@ class ChromeAutofillClient : public ContentAutofillClient {
   void ShowAutofillAiLocalSaveNotification() final;
   void ShowAutofillAiSaveToWalletFailureNotification() final;
   void ShowAutofillAiFetchFromWalletFailureNotification() final;
+  void ShowAutofillAiPreFetchFailureNotification() final;
+  void ShowAutofillAiPrivateInferenceNotice() final;
   void ShowEmailVerifiedToast(const GURL& issuer) final;
   void ShowEmailVerificationPopup(
       const gfx::RectF& element_bounds,
@@ -332,6 +349,21 @@ class ChromeAutofillClient : public ContentAutofillClient {
   one_time_tokens::OneTimeTokenService* GetOneTimeTokenService() const final;
 
  protected:
+  class AtMemoryCopyPasteObserver : public content::WebContentsObserver {
+   public:
+    explicit AtMemoryCopyPasteObserver(ChromeAutofillClient* client);
+    ~AtMemoryCopyPasteObserver() override = default;
+
+    // content::WebContentsObserver:
+    void OnTextCopiedToClipboard(content::RenderFrameHost* render_frame_host,
+                                 const std::u16string& copied_text) override;
+    void OnPaste() override;
+
+   private:
+    const base::raw_ref<ChromeAutofillClient> client_;
+  };
+
+  AtMemoryCopyPasteObserver& at_memory_copy_paste_observer();
   explicit ChromeAutofillClient(content::WebContents* web_contents);
 
  private:
@@ -416,24 +448,7 @@ class ChromeAutofillClient : public ContentAutofillClient {
   std::unique_ptr<FormPredictionsTracker> form_predictions_tracker_;
   std::unique_ptr<ActorKeyMetricsRecorder> actor_key_metrics_recorder_;
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
-  class AtMemoryPromoObserver : public content::WebContentsObserver {
-   public:
-    explicit AtMemoryPromoObserver(ChromeAutofillClient* client);
-    ~AtMemoryPromoObserver() override = default;
-
-    // content::WebContentsObserver:
-    void OnTextCopiedToClipboard(content::RenderFrameHost* render_frame_host,
-                                 const std::u16string& copied_text) override;
-    void OnPaste() override;
-
-   private:
-    const base::raw_ref<ChromeAutofillClient> client_;
-  };
-
-  AtMemoryPromoObserver at_memory_promo_observer_{this};
-#endif
+  AtMemoryCopyPasteObserver at_memory_copy_paste_observer_{this};
 
   SEQUENCE_CHECKER(sequence_checker_);
 

@@ -82,6 +82,7 @@ if (enable_extensions) {
     "braille_display_private.webidl",
     "command_line_private.json",
     "crash_report_private.webidl",
+    "dictation_private.webidl",
     "enterprise_reporting_private.webidl",
     "experimental_actor.webidl",
     "experimental_ai_data.webidl",
@@ -104,6 +105,10 @@ if (enable_extensions) {
     schema_sources_ += [ "web_authentication_proxy.webidl" ]
   }
 
+  if (is_win || is_mac || is_linux || is_chromeos) {
+    schema_sources_ += [ "contextual_tasks_private.webidl" ]
+  }
+
   if (is_chromeos) {
     schema_sources_ += [
       "accessibility_private.json",
@@ -121,12 +126,12 @@ if (enable_extensions) {
       "enterprise_platform_keys_private.json",
       "file_manager_private.idl",
       "file_manager_private_internal.webidl",
-      "file_system_provider.idl",
+      "file_system_provider.webidl",
       "file_system_provider_internal.idl",
       "image_loader_private.idl",
       "input_method_private.json",
       "login.idl",
-      "login_screen_storage.idl",
+      "login_screen_storage.webidl",
       "login_screen_ui.idl",
       "login_state.idl",
       "odfs_config_private.idl",
@@ -161,7 +166,6 @@ if (enable_extensions) {
 
   uncompiled_sources_ += [
     "browser_action.json",
-    "idltest.idl",
     "page_action.json",
   ]
 

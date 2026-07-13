@@ -17,9 +17,9 @@
 #include "components/sync/base/features.h"
 #include "components/sync/base/time.h"
 #include "components/sync/engine/sync_encryption_handler.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
 #include "components/sync/nigori/cross_user_sharing_public_key.h"
 #include "components/sync/nigori/cryptographer_impl.h"
-#include "components/sync/nigori/key_derivation_params.h"
 #include "components/sync/nigori/keystore_keys_cryptographer.h"
 #include "components/sync/protocol/nigori_local_data.pb.h"
 #include "components/sync/protocol/nigori_specifics.pb.h"
@@ -103,7 +103,7 @@ bool IsValidKeyPairState(const NigoriState& state) {
   // Key version existence is guaranteed by NigoriState::CreateFromLocalProto().
   CHECK(state.cross_user_sharing_key_pair_version);
 
-  if (!state.cryptographer->HasKeyPair(
+  if (!state.cryptographer->HasCrossUserSharingKeyPair(
           state.cross_user_sharing_key_pair_version.value())) {
     // The private key does not exist for the current public key version.
     return false;

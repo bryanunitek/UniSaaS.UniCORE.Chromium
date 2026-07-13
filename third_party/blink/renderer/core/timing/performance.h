@@ -74,6 +74,7 @@ class Node;
 class PerformanceContainerTiming;
 class PerformanceElementTiming;
 class PerformanceEventTiming;
+class PerformanceScrollTiming;
 class PerformanceMark;
 class PerformanceMarkOptions;
 class PerformanceMeasure;
@@ -106,6 +107,10 @@ class CORE_EXPORT Performance : public EventTarget {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  // Delay used to throttle and batch IPC messages for observed performance
+  // entries, matching page load metrics buffer timer delay.
+  static constexpr base::TimeDelta kBufferTimerDelay = base::Milliseconds(100);
+
   ~Performance() override;
 
   const AtomicString& InterfaceName() const override;
@@ -217,6 +222,9 @@ class CORE_EXPORT Performance : public EventTarget {
   bool IsElementTimingBufferFull() const;
   void AddToElementTimingBuffer(PerformanceElementTiming&);
 
+  bool IsScrollTimingBufferFull() const;
+  void AddToScrollTimingBuffer(PerformanceScrollTiming&);
+
   bool IsEventTimingBufferFull() const;
   void AddToEventTimingBuffer(PerformanceEventTiming&);
 
@@ -236,6 +244,8 @@ class CORE_EXPORT Performance : public EventTarget {
 
   void clearMarks(const AtomicString& mark_name);
   void clearMarks() { return clearMarks(AtomicString()); }
+
+  virtual void markConditional(ScriptState*, const AtomicString& mark_name);
 
   void AddBackForwardCacheRestoration(base::TimeTicks start_time,
                                       base::TimeTicks pageshow_start_time,
@@ -413,6 +423,8 @@ class CORE_EXPORT Performance : public EventTarget {
   unsigned container_timing_buffer_max_size_;
   PerformanceEntryVector element_timing_buffer_;
   unsigned element_timing_buffer_max_size_;
+  PerformanceEntryVector scroll_timing_buffer_;
+  unsigned scroll_timing_buffer_max_size_;
   PerformanceEntryVector layout_shift_buffer_;
   PerformanceEntryVector largest_contentful_paint_buffer_;
   PerformanceEntryVector interaction_contentful_paint_buffer_;
@@ -467,6 +479,9 @@ class CORE_EXPORT Performance : public EventTarget {
 
   HeapMojoRemote<mojom::blink::DeclarativePerformanceObserverHost>
       declarative_performance_observer_host_;
+
+  void OnDeclarativePerformanceObserverHostDisconnected();
+  bool is_declarative_performance_observer_disabled_for_document_ = false;
 
   // Telling a document to pause/resume the parser for more optimized task
   // scheduling to priroitize key loading milestones. To explore this idea, the

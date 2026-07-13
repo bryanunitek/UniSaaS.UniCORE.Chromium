@@ -262,11 +262,13 @@ bool ChromeMetricsServicesManagerClient::GetSamplingRatePerMille(int* rate) {
 #endif  // BUILDFLAG(IS_ANDROID)
   std::string rate_str = base::GetFieldTrialParamValueByFeature(
       feature, metrics::internal::kRateParamName);
-  if (rate_str.empty())
+  if (rate_str.empty()) {
     return false;
+  }
 
-  if (!base::StringToInt(rate_str, rate) || *rate > 1000)
+  if (!base::StringToInt(rate_str, rate) || *rate > 1000) {
     return false;
+  }
 
   return true;
 }
@@ -336,10 +338,6 @@ ChromeMetricsServicesManagerClient::GetMetricsStateManager() {
   return metrics_state_manager_.get();
 }
 
-PrefService* ChromeMetricsServicesManagerClient::GetLocalState() {
-  return local_state_;
-}
-
 scoped_refptr<network::SharedURLLoaderFactory>
 ChromeMetricsServicesManagerClient::GetURLLoaderFactory() {
   return g_browser_process->system_network_context_manager()
@@ -361,8 +359,9 @@ bool ChromeMetricsServicesManagerClient::IsOffTheRecordSessionActive() {
   // TODO(crbug.com/40107157): This function should return true for Incognito
   // CCTs.
   for (const TabModel* model : TabModelList::models()) {
-    if (model->IsOffTheRecord())
+    if (model->IsOffTheRecord()) {
       return true;
+    }
   }
 
   return false;

@@ -136,8 +136,19 @@ TouchAction AdjustTouchActionForElement(TouchAction touch_action,
   bool is_child_document =
       element == document_element && element->GetDocument().LocalOwner();
   if (scrolls_overflow || is_child_document) {
-    return touch_action | TouchAction::kPan |
-           TouchAction::kInternalPanXScrolls |
+    // Only re-enable panning along axes the user can actually scroll:
+    // overflow: hidden is a scroll container, but is not user scrollable.
+    TouchAction enabled_touch_action = TouchAction::kNone;
+    if (is_child_document ||
+        ComputedStyle::ScrollsOverflow(builder.OverflowX())) {
+      enabled_touch_action |=
+          TouchAction::kPanX | TouchAction::kInternalPanXScrolls;
+    }
+    if (is_child_document ||
+        ComputedStyle::ScrollsOverflow(builder.OverflowY())) {
+      enabled_touch_action |= TouchAction::kPanY;
+    }
+    return touch_action | enabled_touch_action |
            TouchAction::kInternalNotWritable;
   }
   return touch_action;
@@ -1642,6 +1653,7 @@ StyleAdjuster::ElementTypeForCache StyleAdjuster::GetElementTypeCacheKey(
       return {ElementType::kHTMLBRElement};
 
     // SVG and MathML have special handling.
+    case ElementType::kMathMLAnchorElement:
     case ElementType::kMathMLElement:
     case ElementType::kMathMLFractionElement:
     case ElementType::kMathMLOperatorElement:
@@ -1802,6 +1814,7 @@ StyleAdjuster::ElementTypeForCache StyleAdjuster::GetElementTypeCacheKey(
     case ElementType::kHTMLSourceElement:
     case ElementType::kHTMLSpanElement:
     case ElementType::kHTMLStyleElement:
+    case ElementType::kHTMLSubMenuElement:
     case ElementType::kHTMLSummaryElement:
     case ElementType::kHTMLTableCaptionElement:
     case ElementType::kHTMLTableCellElement:

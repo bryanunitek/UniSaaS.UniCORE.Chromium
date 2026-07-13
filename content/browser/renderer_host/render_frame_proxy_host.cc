@@ -20,12 +20,12 @@
 #include "base/trace_event/typed_macros.h"
 #include "base/types/optional_util.h"
 #include "content/browser/bad_message.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/renderer_host/agent_scheduling_group_host.h"
 #include "content/browser/renderer_host/batched_proxy_ipc_sender.h"
 #include "content/browser/renderer_host/cross_process_frame_connector.h"
 #include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
+#include "content/browser/renderer_host/initiator_navigation_state_impl.h"
 #include "content/browser/renderer_host/ipc_utils.h"
 #include "content/browser/renderer_host/navigation_metrics_utils.h"
 #include "content/browser/renderer_host/navigator.h"
@@ -35,6 +35,7 @@
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_instance_group.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/public/browser/browser_thread.h"
@@ -79,14 +80,15 @@ TokenFrameMap& GetTokenFrameProxyMap() {
 // static
 void RenderFrameProxyHost::SetObserverForTesting(TestObserver* observer) {
   // Prevent clobbering by previously set TestObserver.
-  DCHECK(!observer || (observer && !g_observer_for_testing));
+  CHECK(!observer || (observer && !g_observer_for_testing),
+        base::NotFatalUntil::M153);
   g_observer_for_testing = observer;
 }
 
 // static
 RenderFrameProxyHost* RenderFrameProxyHost::FromID(int process_id,
                                                    int routing_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
   RoutingIDFrameProxyMap* frames = g_routing_id_frame_proxy_map.Pointer();
   auto it = frames->find(RenderFrameProxyHostID(process_id, routing_id));
   return it == frames->end() ? nullptr : it->second;
@@ -96,7 +98,7 @@ RenderFrameProxyHost* RenderFrameProxyHost::FromID(int process_id,
 RenderFrameProxyHost* RenderFrameProxyHost::FromFrameToken(
     int process_id,
     const blink::RemoteFrameToken& frame_token) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
   TokenFrameMap* frames = &GetTokenFrameProxyMap();
   auto it = frames->find(frame_token);
   // The check against |process_id| isn't strictly necessary, but represents
@@ -111,7 +113,7 @@ RenderFrameProxyHost* RenderFrameProxyHost::FromFrameToken(
 // static
 bool RenderFrameProxyHost::IsFrameTokenInUse(
     const blink::RemoteFrameToken& frame_token) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M152);
   TokenFrameMap* frames = &GetTokenFrameProxyMap();
   return frames->find(frame_token) != frames->end();
 }
@@ -214,10 +216,11 @@ std::string RenderFrameProxyHost::ToDebugString() {
 bool RenderFrameProxyHost::InitRenderFrameProxy(
     const std::optional<base::UnguessableToken>& navigation_metrics_token,
     BatchedProxyIPCSender* batched_proxy_ipc_sender) {
-  DCHECK(!render_frame_proxy_created_);
+  CHECK(!render_frame_proxy_created_, base::NotFatalUntil::M152);
   // We shouldn't be creating proxies for subframes of frames in
   // BackForwardCache.
-  DCHECK(!frame_tree_node_->current_frame_host()->IsInBackForwardCache());
+  CHECK(!frame_tree_node_->current_frame_host()->IsInBackForwardCache(),
+        base::NotFatalUntil::M152);
 
   // If the current RenderFrameHost is pending deletion, no new proxies should
   // be created for it, since this frame should no longer be visible from other
@@ -338,13 +341,13 @@ void RenderFrameProxyHost::SetRenderFrameProxyCreated(bool created) {
 
 const mojo::AssociatedRemote<blink::mojom::RemoteFrame>&
 RenderFrameProxyHost::GetAssociatedRemoteFrame() {
-  DCHECK(remote_frame_.is_bound());
+  CHECK(remote_frame_.is_bound(), base::NotFatalUntil::M152);
   return remote_frame_;
 }
 
 const mojo::AssociatedRemote<blink::mojom::RemoteMainFrame>&
 RenderFrameProxyHost::GetAssociatedRemoteMainFrame() {
-  DCHECK(remote_main_frame_.is_bound());
+  CHECK(remote_main_frame_.is_bound(), base::NotFatalUntil::M152);
   return remote_main_frame_;
 }
 
@@ -562,7 +565,7 @@ void RenderFrameProxyHost::RouteMessageEvent(
   bool is_guest_to_embedder_communication = false;
   if (source_frame_token) {
     RenderFrameHostImpl* source_rfh = RenderFrameHostImpl::FromFrameToken(
-        GetProcess()->GetDeprecatedID(), source_frame_token.value());
+        GetProcess()->GetID(), source_frame_token.value());
     if (source_rfh) {
       RenderFrameHostImpl* source_outermost_rfh =
           source_rfh->GetOutermostMainFrame();
@@ -601,7 +604,7 @@ void RenderFrameProxyHost::RouteMessageEvent(
   std::optional<blink::RemoteFrameToken> translated_source_token;
   if (source_frame_token) {
     RenderFrameHostImpl* source_rfh = RenderFrameHostImpl::FromFrameToken(
-        GetProcess()->GetDeprecatedID(), source_frame_token.value());
+        GetProcess()->GetID(), source_frame_token.value());
     if (source_rfh) {
       // https://crbug.com/822958: If the postMessage is going to a descendant
       // frame, ensure that any pending visual properties such as size are sent
@@ -804,7 +807,7 @@ void RenderFrameProxyHost::OpenURL(blink::mojom::OpenURLParamsPtr params) {
 
   if (params->initiator_frame_token) {
     RenderFrameHostImpl* initiator_frame = RenderFrameHostImpl::FromFrameToken(
-        GetProcess()->GetDeprecatedID(), params->initiator_frame_token.value());
+        GetProcess()->GetID(), params->initiator_frame_token.value());
     if (current_rfh->IsOutermostMainFrame()) {
       MaybeRecordAdClickMainFrameNavigationMetrics(
           /*initiator_frame=*/initiator_frame, /*target_frame=*/current_rfh,
@@ -814,7 +817,8 @@ void RenderFrameProxyHost::OpenURL(blink::mojom::OpenURLParamsPtr params) {
 
   // Since this navigation targeted a specific RenderFrameProxy, it should stay
   // in the current tab.
-  DCHECK_EQ(WindowOpenDisposition::CURRENT_TAB, params->disposition);
+  CHECK_EQ(WindowOpenDisposition::CURRENT_TAB, params->disposition,
+           base::NotFatalUntil::M152);
 
   // Augment |download_policy| for situations that were not covered on the
   // renderer side, e.g. status not available on remote frame, etc.
@@ -836,7 +840,13 @@ void RenderFrameProxyHost::OpenURL(blink::mojom::OpenURLParamsPtr params) {
 
   blink::LocalFrameToken* initiator_frame_token =
       base::OptionalToPtr(params->initiator_frame_token);
-
+  // TODO(crbug.com/510258191): Ensure that a well behaving renderer always has
+  // an associated |initiator_navigation_state|, and terminate renderer
+  // processes whose |initiator_navigation_state| we cannot find.
+  scoped_refptr<InitiatorNavigationState> initiator_navigation_state =
+      RenderFrameHostImpl::GetInitiatorNavigationStateFromFrameToken(
+          initiator_frame_token, GetProcess()->GetDeprecatedID(),
+          current_rfh->GetStoragePartition());
   // TODO(lfg, lukasza): Remove |extra_headers| parameter from
   // RequestTransferURL method once both RenderFrameProxyHost and
   // RenderFrameHostImpl call RequestOpenURL from their OnOpenURL handlers.
@@ -844,15 +854,11 @@ void RenderFrameProxyHost::OpenURL(blink::mojom::OpenURLParamsPtr params) {
   // TODO(clamy): The transition should probably be changed for POST navigations
   // to PAGE_TRANSITION_FORM_SUBMIT. See https://crbug.com/829827.
   frame_tree_node_->navigator().NavigateFromFrameProxy(
-      current_rfh, validated_url, initiator_frame_token,
-      GetProcess()->GetDeprecatedID(), params->initiator_origin,
-      params->initiator_base_url,
-      RenderFrameHostImpl::GetSourceSiteInstanceFromFrameToken(
-          initiator_frame_token, GetProcess()->GetDeprecatedID(),
-          current_rfh->GetStoragePartition()),
-      params->referrer.To<content::Referrer>(), ui::PAGE_TRANSITION_LINK,
-      params->should_replace_current_entry, download_policy,
-      params->post_body ? "POST" : "GET", params->post_body,
+      current_rfh, validated_url, initiator_frame_token, GetProcess()->GetID(),
+      params->initiator_origin, params->initiator_base_url,
+      initiator_navigation_state, params->referrer.To<content::Referrer>(),
+      ui::PAGE_TRANSITION_LINK, params->should_replace_current_entry,
+      download_policy, params->post_body ? "POST" : "GET", params->post_body,
       params->extra_headers, std::move(blob_url_loader_factory),
       std::move(params->source_location), params->user_gesture,
       params->is_form_submission, params->impression, params->started_by_ad,
@@ -886,7 +892,7 @@ void RenderFrameProxyHost::AdvanceFocus(
   // continuing the focus traversal from correct place in a parent frame after
   // one of its child frames finishes its traversal.
   RenderFrameHostImpl* source_rfh = RenderFrameHostImpl::FromFrameToken(
-      GetProcess()->GetDeprecatedID(), source_frame_token);
+      GetProcess()->GetID(), source_frame_token);
   RenderFrameHostImpl* target_rfh = frame_tree_node_->current_frame_host();
   RenderFrameProxyHost* source_proxy =
       source_rfh
@@ -949,6 +955,8 @@ void RenderFrameProxyHost::BindRemoteFrameInterfaces(
     mojo::PendingAssociatedRemote<blink::mojom::RemoteFrame> remote_frame,
     mojo::PendingAssociatedReceiver<blink::mojom::RemoteFrameHost>
         remote_frame_host_receiver) {
+  // TODO(crbug.com/529425548): CHECK-exclusion: Convert to CHECKs once we are
+  // confident it won't be triggered.
   DCHECK(!remote_frame_.is_bound());
   DCHECK(!remote_frame_host_receiver_.is_bound());
 
@@ -964,8 +972,9 @@ void RenderFrameProxyHost::BindRemoteMainFrameInterfaces(
         remote_main_frame,
     mojo::PendingAssociatedReceiver<blink::mojom::RemoteMainFrameHost>
         remote_main_frame_host_receiver) {
-  DCHECK(!remote_main_frame_.is_bound());
-  DCHECK(!remote_main_frame_host_receiver_.is_bound());
+  CHECK(!remote_main_frame_.is_bound(), base::NotFatalUntil::M152);
+  CHECK(!remote_main_frame_host_receiver_.is_bound(),
+        base::NotFatalUntil::M152);
 
   remote_main_frame_.Bind(std::move(remote_main_frame));
   remote_main_frame_host_receiver_.Bind(

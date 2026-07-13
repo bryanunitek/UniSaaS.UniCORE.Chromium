@@ -152,9 +152,6 @@ void BrowserCommandHandler::CanExecuteCommand(
     case Command::kOpenGlicSettings:
       can_execute = true;
       break;
-    case Command::kPrewarmGlicFre:
-      can_execute = true;
-      break;
     case Command::kOpenSplitView:
       can_execute = true;
       break;
@@ -182,9 +179,10 @@ void BrowserCommandHandler::ExecuteCommand(Command command_id,
   std::move(callback).Run(command_executed);
 }
 
-void BrowserCommandHandler::ExecuteCommandWithDisposition(
+void BrowserCommandHandler::HandleCommandWithDisposition(
     int id,
-    WindowOpenDisposition disposition) {
+    WindowOpenDisposition disposition,
+    base::TimeTicks time_stamp) {
   const auto command = static_cast<Command>(id);
   base::UmaHistogramEnumeration(kPromoBrowserCommandHistogramName, command);
 
@@ -249,9 +247,6 @@ void BrowserCommandHandler::ExecuteCommandWithDisposition(
     }
     case Command::kOpenGlicSettings:
       OpenGlicSettings();
-      break;
-    case Command::kPrewarmGlicFre:
-      // No-op: Glic FRE pre-warming is removed.
       break;
     case Command::kOpenSplitView:
       OpenSplitView();

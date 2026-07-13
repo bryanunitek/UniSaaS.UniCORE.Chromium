@@ -38,6 +38,10 @@ enum class ToolType {
   kWaitZeroDuration,
   // Tool for scrolling to a specific element or position.
   kScrollTo,
+  // Tool to logging in to a website.
+  kAttemptLogin,
+  // Tool to close a tab.
+  kCloseTab,
 };
 
 // iOS-specific error codes for tool execution failures.

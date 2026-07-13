@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "remoting/host/security_key/security_key_extension_session.h"
 
 #include <stddef.h>
@@ -32,6 +31,10 @@
 #include "remoting/protocol/client_stub.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_POSIX)
+#include "remoting/host/security_key/security_key_auth_handler_posix.h"
+#endif
 
 namespace remoting {
 
@@ -75,6 +78,8 @@ class TestClientStub : public protocol::ClientStub {
   void SetTransportInfo(const protocol::TransportInfo& transport_info) override;
   void SetActiveDisplay(const protocol::ActiveDisplay& active_display) override;
   void ControlMicrophone(const protocol::MicrophoneControl& control) override;
+  void DeliverTerminalControl(
+      const protocol::TerminalControl& terminal_control) override;
 
   // protocol::ClipboardStub implementation.
   void InjectClipboardEvent(const protocol::ClipboardEvent& event) override;
@@ -122,6 +127,9 @@ void TestClientStub::SetActiveDisplay(
 
 void TestClientStub::ControlMicrophone(
     const protocol::MicrophoneControl& control) {}
+
+void TestClientStub::DeliverTerminalControl(
+    const protocol::TerminalControl& terminal_control) {}
 
 void TestClientStub::InjectClipboardEvent(
     const protocol::ClipboardEvent& event) {}
@@ -187,32 +195,42 @@ class SecurityKeyExtensionSessionTest : public testing::Test {
   void CreateSecurityKeyConnection();
 
  protected:
-  base::test::SingleThreadTaskEnvironment task_environment_{
-      base::test::SingleThreadTaskEnvironment::MainThreadType::IO};
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::MainThreadType::IO};
 
   // Object under test.
   std::unique_ptr<SecurityKeyExtensionSession> security_key_extension_session_;
 
-  raw_ptr<MockSecurityKeyAuthHandler> mock_security_key_auth_handler_ = nullptr;
+  std::unique_ptr<MockSecurityKeyAuthHandler> mock_security_key_auth_handler_;
 
   TestClientStub client_stub_;
   TestClientSessionDetails client_details_;
+
+  base::ScopedTempDir temp_dir_;
 };
 
-SecurityKeyExtensionSessionTest::SecurityKeyExtensionSessionTest()
-    : security_key_extension_session_(
-          new SecurityKeyExtensionSession(&client_details_,
-                                          &client_stub_,
-                                          /*file_task_runner=*/nullptr)) {
-  // We want to retain ownership of mock object so we can use it to inject
-  // events into the extension session.  The mock object should not be used
-  // once |security_key_extension_session_| is destroyed.
-  mock_security_key_auth_handler_ = new MockSecurityKeyAuthHandler();
-  security_key_extension_session_->SetSecurityKeyAuthHandlerForTesting(
-      base::WrapUnique(mock_security_key_auth_handler_.get()));
+SecurityKeyExtensionSessionTest::SecurityKeyExtensionSessionTest() {
+  EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
+#if BUILDFLAG(IS_POSIX)
+  remoting::SecurityKeyAuthHandlerPosix::SetSecurityKeySocketName(
+      temp_dir_.GetPath().AppendASCII("test_socket"));
+#endif
+
+  mock_security_key_auth_handler_ =
+      std::make_unique<MockSecurityKeyAuthHandler>();
+
+  security_key_extension_session_ =
+      std::make_unique<SecurityKeyExtensionSession>(
+          mock_security_key_auth_handler_->GetWeakPtr(), &client_stub_);
 }
 
-SecurityKeyExtensionSessionTest::~SecurityKeyExtensionSessionTest() = default;
+SecurityKeyExtensionSessionTest::~SecurityKeyExtensionSessionTest() {
+#if BUILDFLAG(IS_POSIX)
+  remoting::SecurityKeyAuthHandlerPosix::SetSecurityKeySocketName(
+      base::FilePath());
+  remoting::SecurityKeyAuthHandlerPosix::ResetTaskRunnerForTesting();
+#endif
+}
 
 void SecurityKeyExtensionSessionTest::WaitForAndVerifyHostMessage() {
   client_stub_.WaitForDeliverHostMessage(base::Milliseconds(500));

@@ -179,7 +179,7 @@ IsolatedWebAppBrowserTestHarness::NavigateToURLInNewTab(
     const GURL& url,
     WindowOpenDisposition disposition) {
   auto new_contents = content::WebContents::Create(
-      content::WebContents::CreateParams(browser()->profile()));
+      content::WebContents::CreateParams(browser()->GetProfile()));
   window->tab_strip_model()->AppendWebContents(std::move(new_contents),
                                                /*foreground=*/true);
   return ui_test_utils::NavigateToURLWithDisposition(
@@ -199,9 +199,9 @@ UpdateDiscoveryTaskResultWaiter::UpdateDiscoveryTaskResultWaiter(
 UpdateDiscoveryTaskResultWaiter::~UpdateDiscoveryTaskResultWaiter() = default;
 
 // IsolatedWebAppUpdateManager::Observer:
-void UpdateDiscoveryTaskResultWaiter::OnUpdateDiscoveryTaskCompleted(
+void UpdateDiscoveryTaskResultWaiter::OnUpdateDiscoverAndPrepareTaskCompleted(
     const webapps::AppId& app_id,
-    IsolatedWebAppUpdateDiscoveryTask::CompletionStatus status) {
+    IsolatedWebAppUpdateCheckAndPrepareTask::CompletionStatus status) {
   if (app_id != expected_app_id_) {
     return;
   }

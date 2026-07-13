@@ -80,6 +80,7 @@
 #include "third_party/blink/renderer/core/html/html_collection.h"
 #include "third_party/blink/renderer/core/html/html_image_loader.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
+#include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
@@ -1001,7 +1002,14 @@ void HTMLInputElement::ParseAttribute(
     UseCounter::Count(GetDocument(), WebFeature::kPatternAttribute);
   } else if (name == html_names::kReadonlyAttr) {
     TextControlElement::ParseAttribute(params);
+    // A readonly input matches neither :in-range nor :out-of-range.
+    if (params.old_value.IsNull() != params.new_value.IsNull()) {
+      input_type_->InRangeChanged();
+    }
     input_type_view_->ReadonlyAttributeChanged();
+  } else if (name == html_names::kColorspaceAttr ||
+             name == html_names::kAlphaAttr) {
+    input_type_->ColorSpaceOrAlphaAttributeChanged();
   } else if (name == html_names::kListAttr) {
     has_non_empty_list_ = !value.empty();
     ResetListAttributeTargetObserver();
@@ -1333,11 +1341,15 @@ void HTMLInputElement::SetSuggestedValue(const String& value) {
 }
 
 void HTMLInputElement::DidChangeIsCanvasOrInCanvasSubtree() {
+  TextControlElement::DidChangeIsCanvasOrInCanvasSubtree();
   if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(GetExecutionContext()) &&
       IsInCanvasSubtree()) {
     // Hide suggested values when under canvas, to prevent leaking this
     // information to javascript.
     SetSuggestedValue(String());
+  }
+  if (auto* email_input = DynamicTo<EmailInputType>(input_type_.Get())) {
+    email_input->UpdateEmailVerificationIndicator();
   }
 }
 
@@ -1366,9 +1378,9 @@ void HTMLInputElement::setValueForBinding(const String& value,
            was_autofilled && !value_changed && !value.empty()
                ? WebAutofillState::kAutofilled
                : WebAutofillState::kNotFilled);
-  if (Page* page = GetDocument().GetPage(); page && value_changed) {
-    page->GetChromeClient().JavaScriptChangedValue(*this, old_value,
-                                                   was_autofilled);
+  if (Page* page = GetDocument().GetPage(); page) {
+    page->GetChromeClient().JavaScriptSetValue(*this, old_value, was_autofilled,
+                                               value_changed);
   }
 }
 
@@ -1953,9 +1965,9 @@ void HTMLInputElement::RequiredAttributeChanged() {
   input_type_view_->RequiredAttributeChanged();
 }
 
-void HTMLInputElement::DisabledAttributeChanged() {
-  TextControlElement::DisabledAttributeChanged();
-  input_type_view_->DisabledAttributeChanged();
+void HTMLInputElement::DisabledAttributeChanged(DisabledChangedReason reason) {
+  TextControlElement::DisabledAttributeChanged(reason);
+  input_type_view_->DisabledAttributeChanged(reason);
 }
 
 void HTMLInputElement::SelectColorInColorChooser(const Color& color) {
@@ -2156,12 +2168,10 @@ int HTMLInputElement::scrollWidth() {
     return TextControlElement::scrollWidth();
   // Adjust scrollWidth to include input element horizontal paddings and
   // decoration width.
-  LayoutUnit adjustment = box->ClientWidth() - editor_box->ClientWidth();
-  int snapped_scroll_width =
-      SnapSizeToPixel(editor_box->ScrollWidth() + adjustment,
-                      box->PhysicalLocation().left + box->ClientLeft());
+  LayoutUnit adjustment = box->PhysicalPaddingBoxRect().Width() -
+                          editor_box->PhysicalPaddingBoxRect().Width();
   return AdjustForAbsoluteZoom::AdjustLayoutUnit(
-             LayoutUnit(snapped_scroll_width), box->StyleRef())
+             editor_box->ScrollWidth() + adjustment, box->StyleRef())
       .Round();
 }
 
@@ -2183,7 +2193,8 @@ int HTMLInputElement::scrollHeight() {
     return TextControlElement::scrollHeight();
   // Adjust scrollHeight to include input element vertical paddings and
   // decoration height.
-  LayoutUnit adjustment = box->ClientHeight() - editor_box->ClientHeight();
+  LayoutUnit adjustment = box->PhysicalPaddingBoxRect().Height() -
+                          editor_box->PhysicalPaddingBoxRect().Height();
   return AdjustForAbsoluteZoom::AdjustLayoutUnit(
              editor_box->ScrollHeight() + adjustment, box->StyleRef())
       .Round();
@@ -2419,6 +2430,19 @@ void HTMLInputElement::SetShouldRevealPassword(bool value) {
         kLocalStyleChange,
         StyleChangeReasonForTracing::Create(style_change_reason::kControl));
   }
+}
+
+void HTMLInputElement::SetEmailVerificationState(EmailVerificationState state) {
+  if (auto* email_input = DynamicTo<EmailInputType>(input_type_.Get())) {
+    email_input->SetEmailVerificationState(state);
+  }
+}
+
+EmailVerificationState HTMLInputElement::GetEmailVerificationState() const {
+  if (auto* email_input = DynamicTo<EmailInputType>(input_type_.Get())) {
+    return email_input->GetEmailVerificationState();
+  }
+  return EmailVerificationState::kNone;
 }
 
 void HTMLInputElement::DispatchSimulatedEnter() {
@@ -2659,6 +2683,9 @@ bool HTMLInputElement::IsBaseAppearanceCombobox() const {
 HTMLSelectElement* HTMLInputElement::FilterTarget() const {
   if (!RuntimeEnabledFeatures::FilterableSelectEnabled()) {
     return nullptr;
+  }
+  if (nearest_ancestor_select_) {
+    return nearest_ancestor_select_;
   }
   if (auto* select = DynamicTo<HTMLSelectElement>(
           GetElementAttributeResolvingReferenceTarget(

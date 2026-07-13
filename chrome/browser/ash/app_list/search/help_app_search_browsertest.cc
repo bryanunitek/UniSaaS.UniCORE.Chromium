@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/app_list/app_list_notifier.h"
 #include "ash/public/cpp/test/app_list_test_api.h"
@@ -18,6 +19,7 @@
 #include "chrome/browser/ash/app_list/search/test/app_list_search_test_helper.h"
 #include "chrome/browser/ash/app_list/search/test/search_results_changed_waiter.h"
 #include "chrome/browser/ash/app_list/search/test/test_continue_files_search_provider.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
@@ -28,7 +30,6 @@
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/webapps/common/web_app_id.h"
@@ -50,7 +51,7 @@ class HelpAppSearchBrowserTestBase : public AppListSearchBrowserTest {
     AppListSearchBrowserTest::SetUpOnMainThread();
     AppListClientImpl::GetInstance()->UpdateProfile();
     web_app::test::WaitUntilReady(
-        web_app::WebAppProvider::GetForTest(browser()->profile()));
+        web_app::WebAppProvider::GetForTest(browser()->GetProfile()));
   }
 
   void ShowAppListAndWaitForHelpAppZeroStateResults() {
@@ -71,8 +72,9 @@ class HelpAppSearchBrowserTestBase : public AppListSearchBrowserTest {
   // Returns the first published continue section result.
   const ChromeSearchResult* FindLeadingContinueSectionResult() {
     for (const ChromeSearchResult* result : PublishedResults()) {
-      if (result->display_type() == ash::SearchResultDisplayType::kContinue)
+      if (result->display_type() == ash::SearchResultDisplayType::kContinue) {
         return result;
+      }
     }
     return nullptr;
   }
@@ -130,7 +132,7 @@ IN_PROC_BROWSER_TEST_F(HelpAppSearchBrowserTest,
   ash::SystemWebAppManager::GetForTest(GetProfile())
       ->InstallSystemAppsForTesting();
   GetProfile()->GetPrefs()->SetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
 
   ShowAppListAndWaitForHelpAppZeroStateResults();
 
@@ -148,7 +150,7 @@ IN_PROC_BROWSER_TEST_F(HelpAppSearchBrowserTest, ReleaseNoteChipRankedFirst) {
   ash::SystemWebAppManager::GetForTest(GetProfile())
       ->InstallSystemAppsForTesting();
   GetProfile()->GetPrefs()->SetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
 
   local_continue_section_provider_->set_count(5);
   drive_continue_section_provider_->set_count(5);
@@ -168,7 +170,7 @@ IN_PROC_BROWSER_TEST_F(HelpAppSearchBrowserTest,
   ash::SystemWebAppManager::GetForTest(GetProfile())
       ->InstallSystemAppsForTesting();
   GetProfile()->GetPrefs()->SetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
   ash::AppListTestApi app_list_test_api;
   app_list_test_api.SetContinueSectionPrivacyNoticeAccepted();
 
@@ -181,7 +183,7 @@ IN_PROC_BROWSER_TEST_F(HelpAppSearchBrowserTest,
       ash::AppListNotifier::Location::kContinue);
 
   const int times_left_to_show = GetProfile()->GetPrefs()->GetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow);
   EXPECT_EQ(times_left_to_show, 2);
 }
 
@@ -194,7 +196,7 @@ IN_PROC_BROWSER_TEST_F(
   ash::SystemWebAppManager::GetForTest(GetProfile())
       ->InstallSystemAppsForTesting();
   GetProfile()->GetPrefs()->SetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
   ash::AppListTestApi app_list_test_api;
   app_list_test_api.SetContinueSectionPrivacyNoticeAccepted();
 
@@ -206,7 +208,7 @@ IN_PROC_BROWSER_TEST_F(
       {ash::AppListSearchResultType::kZeroStateHelpApp});
   ash::ShellTestApi().SetTabletModeEnabledForTest(true);
   // Minimize the browser window to show home screen.
-  browser()->window()->Minimize();
+  browser()->GetWindow()->Minimize();
   ash::AppListTestApi().WaitForAppListShowAnimation(/*is_bubble_window=*/false);
   results_waiter.Wait();
 
@@ -214,7 +216,7 @@ IN_PROC_BROWSER_TEST_F(
       ash::AppListNotifier::Location::kContinue);
 
   const int times_left_to_show = GetProfile()->GetPrefs()->GetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow);
   EXPECT_EQ(times_left_to_show, 2);
 }
 
@@ -225,7 +227,7 @@ IN_PROC_BROWSER_TEST_F(HelpAppSearchBrowserTest,
   ash::SystemWebAppManager::GetForTest(GetProfile())
       ->InstallSystemAppsForTesting();
   GetProfile()->GetPrefs()->SetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
 
   ShowAppListAndWaitForHelpAppZeroStateResults();
 
@@ -255,7 +257,7 @@ IN_PROC_BROWSER_TEST_F(HelpAppSearchBrowserTest,
 
   // Clicking on the chip should stop showing it in the future.
   const int times_left_to_show = GetProfile()->GetPrefs()->GetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow);
   EXPECT_EQ(times_left_to_show, 0);
 }
 
@@ -342,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(HelpAppSwaSearchBrowserTest, AppListSearchHasApp) {
   ash::SystemWebAppManager::GetForTest(GetProfile())
       ->InstallSystemAppsForTesting();
   GetProfile()->GetPrefs()->SetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 3);
 
   ShowAppListAndWaitForZeroStateResults(
       {ash::AppListSearchResultType::kZeroStateHelpApp,
@@ -372,12 +374,11 @@ IN_PROC_BROWSER_TEST_F(HelpAppSwaSearchBrowserTest, Launch) {
   result->Open(ui::EF_NONE);
   navigation_observer.Wait();
 
-  Browser* help_app_browser =
-      ash::FindSystemWebAppBrowser(profile, ash::SystemWebAppType::HELP);
+  ash::BrowserDelegate* help_app_browser = ash::FindSystemWebAppBrowser(
+      profile, ash::SystemWebAppType::HELP, ash::BrowserType::kApp);
   ASSERT_TRUE(help_app_browser);
-  EXPECT_EQ(expected_url, help_app_browser->tab_strip_model()
-                              ->GetActiveWebContents()
-                              ->GetVisibleURL());
+  EXPECT_EQ(expected_url,
+            help_app_browser->GetActiveWebContents()->GetVisibleURL());
 }
 
 }  // namespace app_list::test

@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/views/download/bubble/download_bubble_security_view.h"
 
 #include "base/command_line.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/download/bubble/download_bubble_ui_controller.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_core_service.h"
@@ -13,10 +12,9 @@
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_item_warning_data.h"
 #include "chrome/browser/download/download_ui_model.h"
+#include "chrome/browser/download/mock_download_core_service.h"
 #include "chrome/browser/download/offline_item_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/download/download_bubble_contents_view_info.h"
-#include "chrome/browser/ui/download/download_bubble_info.h"
 #include "chrome/browser/ui/download/download_bubble_security_view_info.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_contents_view.h"
@@ -28,7 +26,6 @@
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/download/public/common/mock_download_item.h"
-#include "components/safe_browsing/core/common/features.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/test/mock_download_manager.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -36,7 +33,6 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/color/color_id.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
-#include "ui/views/vector_icons.h"
 #include "ui/views/view.h"
 #include "ui/views/window/dialog_client_view.h"
 
@@ -133,29 +129,10 @@ class MockDownloadBubbleSecurityViewDelegate
   const raw_ptr<download::DownloadItem> download_item2_;
 };
 
-class MockDownloadCoreService : public DownloadCoreService {
- public:
-  MOCK_METHOD(ChromeDownloadManagerDelegate*, GetDownloadManagerDelegate, ());
-  MOCK_METHOD(DownloadUIController*, GetDownloadUIController, ());
-  MOCK_METHOD(DownloadHistory*, GetDownloadHistory, ());
-  MOCK_METHOD(extensions::ExtensionDownloadsEventRouter*,
-              GetExtensionEventRouter,
-              ());
-  MOCK_METHOD(bool, HasCreatedDownloadManager, ());
-  MOCK_METHOD(int, BlockingShutdownCount, (), (const));
-  MOCK_METHOD(void,
-              CancelDownloads,
-              (DownloadCoreService::CancelDownloadsTrigger));
-  MOCK_METHOD(void,
-              SetDownloadManagerDelegateForTesting,
-              (std::unique_ptr<ChromeDownloadManagerDelegate> delegate));
-  MOCK_METHOD(bool, IsDownloadUiEnabled, ());
-  MOCK_METHOD(bool, IsDownloadObservedByExtension, ());
-};
 
 std::unique_ptr<KeyedService> BuildMockDownloadCoreService(
     content::BrowserContext* browser_context) {
-  return std::make_unique<MockDownloadCoreService>();
+  return std::make_unique<testing::NiceMock<MockDownloadCoreService>>();
 }
 
 }  // namespace
@@ -208,13 +185,14 @@ class DownloadBubbleSecurityViewTest : public ChromeViewsTestBase {
             bubble_navigator_->GetWeakPtr(), bubble_delegate_));
 
     DownloadCoreServiceFactory::GetInstance()->SetTestingFactory(
-        browser_->profile(),
+        browser_->GetProfile(),
         base::BindRepeating(&BuildMockDownloadCoreService));
     MockDownloadCoreService* mock_dcs = static_cast<MockDownloadCoreService*>(
-        DownloadCoreServiceFactory::GetForBrowserContext(browser_->profile()));
+        DownloadCoreServiceFactory::GetForBrowserContext(
+            browser_->GetProfile()));
     ON_CALL(*mock_dcs, IsDownloadUiEnabled()).WillByDefault(Return(true));
     delegate_ =
-        std::make_unique<ChromeDownloadManagerDelegate>(browser_->profile());
+        std::make_unique<ChromeDownloadManagerDelegate>(browser_->GetProfile());
     ON_CALL(*mock_dcs, GetDownloadManagerDelegate())
         .WillByDefault(Return(delegate_.get()));
 

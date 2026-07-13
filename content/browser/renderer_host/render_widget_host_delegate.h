@@ -383,7 +383,7 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
 
   // Show the newly created widget with the specified bounds.
   // The widget is identified by the route_id passed to CreateNewWidget.
-  virtual void ShowCreatedWidget(int process_id,
+  virtual void ShowCreatedWidget(ChildProcessId process_id,
                                  int widget_route_id,
                                  const gfx::Rect& initial_rect_in_dips,
                                  const gfx::Rect& initial_anchor_rect_in_dips) {
@@ -397,9 +397,6 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
   // Returns false if it's a private window, and text entered into this page
   // shouldn't be used to improve typing suggestions for the user.
   virtual bool ShouldDoLearning();
-
-  // Notifies when an input event is ignored.
-  virtual void OnInputIgnored(const blink::WebInputEvent& event) {}
 
 #if BUILDFLAG(IS_ANDROID)
   // Get the offset for the current touch sequence. e.g. visible top controls or

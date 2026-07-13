@@ -20,7 +20,6 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DisableLeakChecks;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
@@ -45,7 +44,6 @@ import java.util.concurrent.TimeoutException;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
-@DisableLeakChecks("crbug.com/512492636 (TabObserverTest)")
 public class TabObserverTest {
     /** A {@Link TabObserver} that has callback helpers for each event. */
     private static class TestTabObserver extends EmptyTabObserver {
@@ -134,11 +132,39 @@ public class TabObserverTest {
 
     @Test
     @SmallTest
-    public void testTabDetach_observerUnregistered() {
+    public void testTabDetach_observerUnregistered() throws TimeoutException {
+        final Tab tempTab =
+                ChromeTabUtils.fullyLoadUrlInNewTab(
+                        InstrumentationRegistry.getInstrumentation(),
+                        mActivity,
+                        "about:blank",
+                        false);
+
+        final TestTabObserver tempObserver = new TestTabObserver();
+
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mTab.updateAttachment(null, null);
-                    assertFalse(mTab.hasObserverForTesting(mTabObserver));
+                    tempTab.addObserver(tempObserver);
+                });
+
+        boolean hasObserverBefore =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> tempTab.hasObserverForTesting(tempObserver));
+        assertTrue("Tab should have the observer before detach.", hasObserverBefore);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tempTab.updateAttachment(null, null);
+                });
+
+        boolean hasObserverAfter =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> tempTab.hasObserverForTesting(tempObserver));
+        assertFalse("Tab should not have the observer after detach.", hasObserverAfter);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tempTab.destroy();
                 });
     }
 

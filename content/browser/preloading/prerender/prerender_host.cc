@@ -21,10 +21,12 @@
 #include "base/time/time.h"
 #include "base/trace_event/named_trigger.h"
 #include "base/trace_event/typed_macros.h"
+#include "content/browser/back_forward_cache/back_forward_cache_impl.h"
 #include "content/browser/client_hints/client_hints.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/preloading/prefetch/no_vary_search_helper.h"
 #include "content/browser/preloading/preload_activation_report_manager.h"
+#include "content/browser/preloading/preload_activation_report_utils.h"
 #include "content/browser/preloading/preloading_attempt_impl.h"
 #include "content/browser/preloading/preloading_trigger_type_impl.h"
 #include "content/browser/preloading/prerender/devtools_prerender_attempt.h"
@@ -42,6 +44,7 @@
 #include "content/browser/renderer_host/page_impl.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/site_instance_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
@@ -49,6 +52,7 @@
 #include "content/public/browser/preloading_trigger_type.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/referrer.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_request_headers.h"
@@ -132,15 +136,13 @@ void CheckPrerenderAttributes(const PrerenderAttributes& attributes) {
   if (attributes.IsBrowserInitiated()) {
     CHECK(!attributes.initiator_origin.has_value());
     CHECK(!attributes.initiator_frame_token.has_value());
-    CHECK_EQ(attributes.initiator_process_id,
-             ChildProcessHost::kInvalidUniqueID);
+    CHECK(attributes.initiator_process_id.is_null());
     CHECK_EQ(attributes.initiator_ukm_id, ukm::kInvalidSourceId);
     CHECK(attributes.initiator_frame_tree_node_id.is_null());
   } else {
     CHECK(attributes.initiator_origin.has_value());
     CHECK(attributes.initiator_frame_token.has_value());
-    CHECK_NE(attributes.initiator_process_id,
-             ChildProcessHost::kInvalidUniqueID);
+    CHECK(attributes.initiator_process_id);
     CHECK_NE(attributes.initiator_ukm_id, ukm::kInvalidSourceId);
     CHECK(attributes.initiator_frame_tree_node_id);
   }
@@ -215,6 +217,11 @@ void PrerenderHost::PrerenderFrameTreeDelegate::DidStopLoading() {
 
 bool PrerenderHost::PrerenderFrameTreeDelegate::IsHidden() {
   return true;
+}
+
+BackForwardCacheImpl&
+PrerenderHost::PrerenderFrameTreeDelegate::GetBackForwardCache() {
+  NOTREACHED();
 }
 
 FrameTree* PrerenderHost::PrerenderFrameTreeDelegate::LoadingTree() {
@@ -509,14 +516,32 @@ PrerenderHost::PrerenderHost(
     GetFrameTree()->root()->ResetNavigationRequest(
         NavigationDiscardReason::kExplicitCancellation);
     frame_tree_delegate_->prerender_host_ = *this;
+
+    CHECK(!reuse_host->process_reuse_closure_runner_);
   } else {
     frame_tree_delegate_ = std::make_unique<PrerenderFrameTreeDelegate>(
         web_contents.GetBrowserContext(), web_contents, *this);
+
     scoped_refptr<SiteInstanceImpl> site_instance =
         base::FeatureList::IsEnabled(kCreatePrerenderSiteInstanceWithURL)
             ? SiteInstanceImpl::CreateForURL(web_contents.GetBrowserContext(),
                                              attributes.prerendering_url)
             : SiteInstanceImpl::Create(web_contents.GetBrowserContext());
+
+    if (ShouldAllowProcessReuse() &&
+        attributes.initiator_frame_token.has_value()) {
+      RenderFrameHostImpl* initiator_rfh = RenderFrameHostImpl::FromFrameToken(
+          attributes.initiator_process_id,
+          attributes.initiator_frame_token.value());
+      if (initiator_rfh) {
+        site_instance->ReuseExistingProcessIfPossible(
+            initiator_rfh->GetProcess());
+        process_reuse_closure_runner_ =
+            web_contents_->GetPrerenderHostRegistry()
+                ->IncrementProcessReuseCount();
+      }
+    }
+
     GetFrameTree()->Init(site_instance.get(),
                          /*renderer_initiated_creation=*/false,
                          /*main_frame_name=*/"", /*opener_for_origin=*/nullptr,
@@ -573,6 +598,8 @@ bool PrerenderHost::StartPrerendering() {
   load_url_params.initiator_origin = attributes_.initiator_origin;
   load_url_params.initiator_process_id = attributes_.initiator_process_id;
   load_url_params.initiator_frame_token = attributes_.initiator_frame_token;
+  load_url_params.initiator_navigation_state =
+      attributes_.initiator_navigation_state;
 #if BUILDFLAG(IS_ANDROID)
   if (!attributes_.additional_headers.IsEmpty()) {
     load_url_params.extra_headers =
@@ -709,7 +736,9 @@ void PrerenderHost::ReadyToCommitNavigation(
           blink::mojom::WebFeature::kPrerender2CrossOriginIframes);
     }
 
-    if (base::FeatureList::IsEnabled(features::kPrerenderActivationBeacon)) {
+    if (IsPrerenderActivationBeaconEnabled(
+            navigation_request->GetURL(),
+            navigation_request->GetResponseHeaders())) {
       activation_beacon_url_ = FindActivationBeaconURL(*navigation_request);
     }
   }
@@ -799,12 +828,12 @@ std::unique_ptr<StoredPage> PrerenderHost::Activate(
   CHECK(is_ready_for_activation_);
   is_ready_for_activation_ = false;
 
-  if (base::FeatureList::IsEnabled(features::kPrerenderActivationBeacon) &&
-      !activation_beacon_url_.is_empty()) {
+  if (!activation_beacon_url_.is_empty()) {
     auto* manager =
         PreloadActivationReportManager::GetOrCreateForBrowserContext(
             web_contents_->GetBrowserContext());
-    manager->ReportActivation(activation_beacon_url_, &*web_contents_);
+    manager->ReportActivation(activation_beacon_url_,
+                              GetFrameTree()->root()->current_frame_host());
   }
 
   FrameTree& target_frame_tree = web_contents_->GetPrimaryFrameTree();
@@ -1350,7 +1379,9 @@ void PrerenderHost::RecordFailedFinalStatusImpl(
   CHECK_NE(reason.final_status(), PrerenderFinalStatus::kActivated);
   final_status_ = reason.final_status();
   RecordFailedPrerenderFinalStatus(reason, attributes_);
-
+  if (process_reuse_closure_runner_) {
+    process_reuse_closure_runner_.RunAndReset();
+  }
   // Set failure reason for this PreloadingAttempt specific to the
   // FinalStatus.
   SetFailureReason(reason);
@@ -1362,6 +1393,9 @@ void PrerenderHost::RecordFailedFinalStatusImpl(
 
 void PrerenderHost::RecordActivation(NavigationRequest& navigation_request) {
   CHECK(!final_status_);
+  if (process_reuse_closure_runner_) {
+    process_reuse_closure_runner_.RunAndReset();
+  }
   final_status_ = PrerenderFinalStatus::kActivated;
   ReportSuccessActivation(attributes_,
                           navigation_request.GetNextPageUkmSourceId());
@@ -1369,6 +1403,87 @@ void PrerenderHost::RecordActivation(NavigationRequest& navigation_request) {
 
 PrerenderHost::LoadingOutcome PrerenderHost::WaitForLoadStopForTesting() {
   return frame_tree_delegate_->WaitForLoadStopForTesting();  // IN-TEST
+}
+
+bool PrerenderHost::ShouldAllowProcessReuse() const {
+  if (attributes_.IsBrowserInitiated() ||
+      !base::FeatureList::IsEnabled(
+          features::kPrerender2ReuseInitiatorProcess)) {
+    return false;
+  }
+
+  if (!attributes_.initiator_origin->IsSameOriginWith(
+          attributes_.prerendering_url)) {
+    return false;
+  }
+
+  if (attributes_.GetTargetHint() ==
+      blink::mojom::SpeculationTargetHint::kBlank) {
+    return false;
+  }
+
+  int max_reuse_count =
+      features::kPrerender2ReuseInitiatorProcessMaxReuseCount.Get();
+  if (web_contents_->GetPrerenderHostRegistry()->GetProcessReuseCount() >=
+      max_reuse_count) {
+    return false;
+  }
+
+  std::string allowed_action =
+      features::kPrerender2ReuseInitiatorProcessActionType.Get();
+
+  bool action_matches = false;
+  if (allowed_action == "all") {
+    action_matches = true;
+  } else if (allowed_action == "prerender" &&
+             attributes_.prerender_action_type ==
+                 blink::mojom::SpeculationAction::kPrerender) {
+    action_matches = true;
+  } else if (allowed_action == "prerender-until-script" &&
+             attributes_.prerender_action_type ==
+                 blink::mojom::SpeculationAction::kPrerenderUntilScript) {
+    action_matches = true;
+  }
+
+  if (!action_matches) {
+    return false;
+  }
+
+  std::string allowed_eagerness =
+      features::kPrerender2ReuseInitiatorProcessEagerness.Get();
+  if (allowed_eagerness == "all") {
+    return true;
+  }
+
+  auto get_eagerness_score = [](blink::mojom::SpeculationEagerness e) {
+    switch (e) {
+      case blink::mojom::SpeculationEagerness::kConservative:
+        return 0;
+      case blink::mojom::SpeculationEagerness::kModerate:
+        return 1;
+      case blink::mojom::SpeculationEagerness::kEager:
+        return 2;
+      case blink::mojom::SpeculationEagerness::kImmediate:
+        return 3;
+    }
+  };
+
+  CHECK(attributes_.GetEagerness().has_value());
+  int current_score = get_eagerness_score(attributes_.GetEagerness().value());
+  int allowed_score = 1;  // Default Moderate
+  if (allowed_eagerness == "conservative") {
+    allowed_score = 0;
+  } else if (allowed_eagerness == "moderate") {
+    allowed_score = 1;
+  } else if (allowed_eagerness == "eager") {
+    allowed_score = 2;
+  } else if (allowed_eagerness == "immediate") {
+    allowed_score = 3;
+  } else {
+    return false;
+  }
+
+  return current_score <= allowed_score;
 }
 
 const GURL& PrerenderHost::GetInitialUrl() const {
@@ -1731,7 +1846,6 @@ bool PrerenderHost::ShouldAbortNavigationBecausePrefetchUnavailable() const {
         // Prefetch is not available for HTTP, but prerender is available
         // for HTTPS/HTTP.
       case PreloadingEligibility::kSchemeIsNotHttps:
-      case PreloadingEligibility::kBlockedByConnectionAllowlist:
         return true;
       case PreloadingEligibility::kEligible:
       case PreloadingEligibility::kUnspecified:
@@ -1764,6 +1878,7 @@ bool PrerenderHost::ShouldAbortNavigationBecausePrefetchUnavailable() const {
       case PreloadingEligibility::kPreloadingEligibilityContentEnd:
       case PreloadingEligibility::kPreloadingEligibilityContentStart2:
       case PreloadingEligibility::kPreloadingEligibilityContentEnd2:
+      case PreloadingEligibility::kBlockedByConnectionAllowlist:
         return false;
     }
   };

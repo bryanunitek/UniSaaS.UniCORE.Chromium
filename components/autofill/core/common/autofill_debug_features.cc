@@ -11,6 +11,14 @@
 
 namespace autofill::features::debug {
 
+// When enabled, SPII data is not removed from AtMemory search results when the
+// client does not support device reauth.
+BASE_FEATURE(kAtMemoryNoDeviceReauthCheck, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Bypasses the eligibility checks (PersonalContext, Gemini subscription tier
+// and other) for local testing and teamfooding.
+BASE_FEATURE(kAtMemorySkipEnablementChecks, base::FEATURE_DISABLED_BY_DEFAULT);
+
 // When enabled, Wallet private passes are supported on devices without re-auth.
 BASE_FEATURE(kAutofillAiDisableReauthRequirement,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -18,6 +26,11 @@ BASE_FEATURE(kAutofillAiDisableReauthRequirement,
 // When enabled, the user will be considered to be opted-in to Autofill AI by
 // default. Used for development purposes.
 BASE_FEATURE(kAutofillAiForceOptIn, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// When enabled, all ambient autofill eligibility checks will be overridden and
+// return true. Used for development purposes.
+BASE_FEATURE(kAutofillAmbientAutofillSkipEligibilityChecks,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Testing tool that collects metrics during a run of the captured site tests
 // and dumps the collected metrics into a specified output directory.

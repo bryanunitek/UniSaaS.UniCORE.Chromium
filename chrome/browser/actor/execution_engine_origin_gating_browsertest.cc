@@ -166,7 +166,7 @@ class ExecutionEngineOriginGatingBrowserTestBase
       const std::string_view handle_dialog_js,
       const base::Location& location = FROM_HERE) {
     return InAnyContext(WithElement(
-        glic::test::kGlicContentsElementId,
+        glic::kGlicContentsElementId,
         [handle_dialog_js, location](::ui::TrackedElement* el) mutable {
           content::WebContents* glic_contents =
               AsInstrumentedWebContents(el)->web_contents();
@@ -227,7 +227,7 @@ class ExecutionEngineOriginGatingBrowserTestBase
       bool permission_granted,
       const base::Location& location = FROM_HERE) {
     return InAnyContext(WithElement(
-        glic::test::kGlicContentsElementId,
+        glic::kGlicContentsElementId,
         [permission_granted, location](::ui::TrackedElement* el) {
           content::WebContents* glic_contents =
               AsInstrumentedWebContents(el)->web_contents();
@@ -257,7 +257,7 @@ class ExecutionEngineOriginGatingBrowserTestBase
     return web_contents()->GetPrimaryMainFrame();
   }
   ActorKeyedService& actor_keyed_service() {
-    return *ActorKeyedService::Get(browser()->profile());
+    return *ActorKeyedService::Get(browser()->GetProfile());
   }
   ActorTask& actor_task() { return *actor_keyed_service().GetTask(task_id_); }
   tabs::TabInterface* active_tab() {
@@ -292,7 +292,7 @@ class ExecutionEngineOriginGatingBrowserTestBase
       const base::DictValue& expected_request,
       const base::Location& location) {
     return InAnyContext(WithElement(
-        glic::test::kGlicContentsElementId,
+        glic::kGlicContentsElementId,
         [&, get_request_js](::ui::TrackedElement* el) {
           content::WebContents* glic_contents =
               AsInstrumentedWebContents(el)->web_contents();
@@ -1010,6 +1010,60 @@ IN_PROC_BROWSER_TEST_F(ExecutionEngineOriginGatingBrowserTest,
   histogram_tester.ExpectUniqueSample(
       "Actor.NavigationGating.GatingDecision2",
       ExecutionEngine::GatingDecision::kAllowByStaticList, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineOriginGatingBrowserTest,
+                       SameOriginNavigationInStaticBlockList_Click) {
+  base::HistogramTester histogram_tester;
+  const GURL start_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/link.html");
+  SafetyListManager::GetInstance()->ParseSafetyLists(R"json(
+     {
+       "navigation_blocked": [
+         { "from": "[*.]example.com", "to": "[*.]example.com" }
+       ]
+     }
+   )json");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), start_url));
+  OpenGlicAndCreateTask();
+
+  EXPECT_TRUE(content::ExecJs(web_contents(),
+                              content::JsReplace("setLink($1);", start_url)));
+
+  ClickTarget("#link", mojom::ActionResultCode::kActionsBlockedForSiteRisk);
+}
+
+IN_PROC_BROWSER_TEST_F(ExecutionEngineOriginGatingBrowserTest,
+                       SameOriginNavigationInStaticBlockList_Navigate) {
+  base::HistogramTester histogram_tester;
+  const GURL start_url =
+      embedded_https_test_server().GetURL("example.com", "/empty.html");
+  SafetyListManager::GetInstance()->ParseSafetyLists(R"json(
+    {
+      "navigation_blocked": [
+        { "from": "[*.]example.com", "to": "[*.]example.com" }
+      ]
+    }
+  )json");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), start_url));
+  OpenGlicAndCreateTask();
+
+  ActResultFuture result;
+  actor_task().Act(
+      ToRequestList(MakeNavigateRequest(*active_tab(), start_url.spec())),
+      result.GetCallback());
+  ExpectErrorResult(result,
+                    mojom::ActionResultCode::kTriggeredNavigationBlocked);
+
+  histogram_tester.ExpectUniqueSample(
+      "Actor.NavigationGating.GatingDecision2",
+      ExecutionEngine::GatingDecision::kBlockByStaticList, 1);
+  histogram_tester.ExpectBucketCount("Actor.NavigationGating.AppliedGate", true,
+                                     1);
+  histogram_tester.ExpectUniqueSample(kSameOriginSourceHistogram, true, 1);
+  histogram_tester.ExpectUniqueSample(kSameSiteSourceHistogram, true, 1);
+  histogram_tester.ExpectUniqueSample(kSameOriginInitiatorHistogram, false, 1);
+  histogram_tester.ExpectUniqueSample(kSameSiteInitiatorHistogram, false, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(ExecutionEngineOriginGatingBrowserTest,

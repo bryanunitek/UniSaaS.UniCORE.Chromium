@@ -16,6 +16,7 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "base/test/values_test_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -33,10 +34,12 @@
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/navigation_entry_restore_context_impl.h"
 #include "content/browser/renderer_host/navigation_request.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/features.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/focused_node_details.h"
 #include "content/public/browser/frame_type.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/common/content_features.h"
@@ -1144,6 +1147,110 @@ IN_PROC_BROWSER_TEST_F(FencedFrameMPArchBrowserTest,
   EXPECT_TRUE(ExecJs(fenced_frame_rfh.get(), "window.focus()"));
   focus_observer.Wait();
   EXPECT_EQ(web_contents()->GetFocusedFrame(), fenced_frame_rfh.get());
+}
+
+class FocusChangedWatcher : public WebContentsObserver {
+ public:
+  explicit FocusChangedWatcher(WebContents* web_contents)
+      : WebContentsObserver(web_contents) {}
+
+  void OnFocusChangedInPage(const FocusedNodeDetails& details) override {
+    future_.SetValue(details);
+  }
+
+  const FocusedNodeDetails& Wait() { return future_.Get(); }
+  bool observed() const { return future_.IsReady(); }
+
+ private:
+  base::test::TestFuture<FocusedNodeDetails> future_;
+};
+
+class FencedFrameMPArchBrowserTestWithEnforceFocusDisabled
+    : public FencedFrameMPArchBrowserTest {
+ public:
+  FencedFrameMPArchBrowserTestWithEnforceFocusDisabled() {
+    feature_list_.InitAndDisableFeature(features::kFencedFramesEnforceFocus);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Regression test for crbug.com/514519203.
+// Verify that an unfocused fenced frame cannot trigger focused element changed
+// notifications on the root view.
+IN_PROC_BROWSER_TEST_F(FencedFrameMPArchBrowserTestWithEnforceFocusDisabled,
+                       FencedFrameFocusedElementChangedWithoutFocus) {
+  ASSERT_TRUE(https_server()->Start());
+  const GURL url = https_server()->GetURL("c.test", "/title1.html");
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+
+  // 1. Focus primary main frame input.
+  {
+    FocusChangedWatcher watcher(web_contents());
+    ASSERT_TRUE(ExecJs(primary_main_frame_host(),
+                       "const input = document.createElement('input');"
+                       "input.id = 'primary_input';"
+                       "document.body.appendChild(input);"
+                       "input.focus();"));
+    const FocusedNodeDetails& details = watcher.Wait();
+    EXPECT_TRUE(details.is_editable_node);
+  }
+
+  // 2. Create fenced frame and add two inputs.
+  const GURL fenced_frame_url =
+      https_server()->GetURL("c.test", "/fenced_frames/title1.html");
+  RenderFrameHostImplWrapper fenced_frame_rfh(
+      fenced_frame_test_helper().CreateFencedFrame(primary_main_frame_host(),
+                                                   fenced_frame_url));
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh.get(),
+                     "const input1 = document.createElement('input');"
+                     "input1.id = 'fenced_input1';"
+                     "document.body.appendChild(input1);"
+                     "const input2 = document.createElement('input');"
+                     "input2.id = 'fenced_input2';"
+                     "document.body.appendChild(input2);"));
+
+  // 3. Focus fenced_input1 WITH user gesture.
+  {
+    FocusChangedWatcher watcher(web_contents());
+    ASSERT_TRUE(ExecJs(fenced_frame_rfh.get(),
+                       "document.getElementById('fenced_input1').focus();"));
+    const FocusedNodeDetails& details = watcher.Wait();
+    EXPECT_TRUE(details.is_editable_node);
+  }
+
+  // 4. Focus primary main frame input WITH user gesture.
+  {
+    FocusChangedWatcher watcher(web_contents());
+    ASSERT_TRUE(ExecJs(primary_main_frame_host(),
+                       "const input = document.createElement('input');"
+                       "input.id = 'primary_input';"
+                       "document.body.appendChild(input);"
+                       "input.focus();"));
+    const FocusedNodeDetails& details = watcher.Wait();
+    EXPECT_TRUE(details.is_editable_node);
+  }
+
+  // Clear user activation on the fenced frame to ensure it doesn't have
+  // transient user activation from step 3.
+  static_cast<RenderFrameHostImpl*>(fenced_frame_rfh.get())
+      ->ClearUserActivation();
+
+  // 5. Try to focus fenced_input2 WITHOUT user gesture.
+  // Fenced frame is NOT focused now.
+  FocusChangedWatcher final_watcher(web_contents());
+  ASSERT_TRUE(ExecJs(fenced_frame_rfh.get(),
+                     "document.getElementById('fenced_input2').focus();",
+                     EXECUTE_SCRIPT_NO_USER_GESTURE));
+
+  // Force a roundtrip to ensure any pending IPCs are processed.
+  EXPECT_EQ(true, EvalJs(fenced_frame_rfh.get(), "true"));
+
+  // If the bug is present, the unfocused fenced frame can still trigger
+  // FocusedElementChanged, which would notify our observer.
+  // We expect it to be ignored (after fix).
+  EXPECT_FALSE(final_watcher.observed());
 }
 
 // Test that the initial navigation in a fenced frame, which navigates from the
@@ -5766,12 +5873,8 @@ class FencedFrameReportEventBrowserTest
             ->GetURLLoaderFactoryForBrowserProcess(),
         web_contents()->GetBrowserContext(),
         /*direct_seller_is_seller=*/false,
-        PrivateAggregationManager::GetManager(
-            *web_contents()->GetBrowserContext()),
         /*main_frame_origin=*/
         web_contents()->GetPrimaryMainFrame()->GetLastCommittedOrigin(),
-        /*winner_origin=*/url::Origin::Create(GURL("https://a.test")),
-        /*winner_aggregation_coordinator_origin=*/std::nullopt,
         /*allowed_reporting_origins=*/
         {{url::Origin::Create(https_server()->GetURL("a.test", "/")),
           url::Origin::Create(https_server()->GetURL("b.test", "/")),
@@ -6300,8 +6403,6 @@ IN_PROC_BROWSER_TEST_F(FencedFrameReportEventBrowserTest,
   EXPECT_TRUE(NavigateToURL(shell(), new_url));
   histogram_tester.ExpectUniqueSample(
       blink::kFencedFrameBeaconReportingCountUMA, 3, 1);
-  histogram_tester.ExpectUniqueSample(
-      blink::kFencedFrameBeaconReportingCountCrossOriginUMA, 0, 1);
 }
 
 // reportEvent shouldn't work in subframes that are cross-origin to the most
@@ -7309,8 +7410,6 @@ IN_PROC_BROWSER_TEST_F(FencedFrameReportEventBrowserTest,
   EXPECT_TRUE(NavigateToURL(shell(), new_url));
   histogram_tester.ExpectUniqueSample(
       blink::kFencedFrameBeaconReportingCountUMA, 1, 1);
-  histogram_tester.ExpectUniqueSample(
-      blink::kFencedFrameBeaconReportingCountCrossOriginUMA, 1, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(FencedFrameReportEventBrowserTest,
@@ -7344,8 +7443,6 @@ IN_PROC_BROWSER_TEST_F(FencedFrameReportEventBrowserTest,
   EXPECT_TRUE(NavigateToURL(shell(), new_url));
   histogram_tester.ExpectUniqueSample(
       blink::kFencedFrameBeaconReportingCountUMA, 1, 1);
-  histogram_tester.ExpectUniqueSample(
-      blink::kFencedFrameBeaconReportingCountCrossOriginUMA, 1, 1);
 }
 
 class FencedFrameReportEventAttributionCrossAppWebEnabledBrowserTest
@@ -7788,13 +7885,8 @@ class FencedFrameAutomaticBeaconBrowserTest
             ->GetURLLoaderFactoryForBrowserProcess(),
         web_contents()->GetBrowserContext(),
         /*direct_seller_is_seller=*/false,
-        static_cast<StoragePartitionImpl*>(
-            web_contents()->GetPrimaryMainFrame()->GetStoragePartition())
-            ->GetPrivateAggregationManager(),
         /*main_frame_origin=*/
-        web_contents()->GetPrimaryMainFrame()->GetLastCommittedOrigin(),
-        /*winner_origin=*/url::Origin::Create(GURL("https://a.test")),
-        /*winner_aggregation_coordinator_origin=*/std::nullopt);
+        web_contents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   }
 
   // A helper function for specifying automatic beacon tests.
@@ -7909,10 +8001,6 @@ class FencedFrameAutomaticBeaconBrowserTest
             )",
                              config.beacon_type.name, destination_list.Clone()),
                    ad_frame_execjs_options));
-
-        histogram_tester_.ExpectUniqueSample(
-            blink::kAutomaticBeaconEventTypeHistogram, config.beacon_type.type,
-            1);
       } else {
         // Call `setReportEventDataForAutomaticBeacons()` with `eventData`.
         EvalJsResult result =
@@ -7938,15 +8026,8 @@ class FencedFrameAutomaticBeaconBrowserTest
                           "The data provided to "
                           "setReportEventDataForAutomaticBeacons() "
                           "exceeds the maximum length, which is 64KB.")));
-
-          histogram_tester_.ExpectUniqueSample(
-              blink::kAutomaticBeaconEventTypeHistogram,
-              config.beacon_type.type, 0);
         } else {
           EXPECT_TRUE(result.is_ok());
-          histogram_tester_.ExpectUniqueSample(
-              blink::kAutomaticBeaconEventTypeHistogram,
-              config.beacon_type.type, 1);
         }
       }
     }
@@ -8027,20 +8108,6 @@ class FencedFrameAutomaticBeaconBrowserTest
       response.WaitForRequest();
       EXPECT_TRUE(response.has_received_request());
       EXPECT_EQ(response.http_request()->content, "response");
-      // Fenced frames do not allow top-level navigation without user activation
-      // due to the permissions policy always being disabled. We only test the
-      // histogram for iframes.
-      if (!config.initiator_has_user_activation &&
-          GetParam() == std::string("iframe")) {
-        histogram_tester_.ExpectUniqueSample(
-            blink::kAutomaticBeaconOutcomeHistogram,
-            blink::AutomaticBeaconOutcome::kNoUserActivation, 1);
-      }
-      if (secondary_initiator_url.is_valid()) {
-        histogram_tester_.ExpectUniqueSample(
-            blink::kAutomaticBeaconOutcomeHistogram,
-            blink::AutomaticBeaconOutcome::kNotSameOriginNotOptedIn, 1);
-      }
       return;
     }
 
@@ -8083,10 +8150,6 @@ class FencedFrameAutomaticBeaconBrowserTest
     }
 
     response.Done();
-
-    histogram_tester_.ExpectUniqueSample(
-        blink::kAutomaticBeaconOutcomeHistogram,
-        blink::AutomaticBeaconOutcome::kSuccess, 1);
   }
 
  private:

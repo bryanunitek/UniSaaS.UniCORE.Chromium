@@ -177,7 +177,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"First Name",
         @"renderer_id" : @"2"
@@ -195,7 +195,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"Last Name",
         @"renderer_id" : @"3"
@@ -213,7 +213,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"",
         @"renderer_id" : @"4"
@@ -276,7 +276,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"First Name",
         @"renderer_id" : @"2"
@@ -294,7 +294,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"Last Name",
         @"renderer_id" : @"3"
@@ -312,7 +312,7 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"should_autocomplete" : @true,
         @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited_deprecated" : @true,
+        @"is_user_edited_deprecated" : @false,
         @"value" : @"",
         @"label" : @"",
         @"renderer_id" : @"4"
@@ -576,7 +576,7 @@ TEST_F(AutofillJavaScriptFeatureTest, FillFormUsingRendererIDs) {
 
   base::test::TestFuture<NSString*> future;
   feature()->FillForm(main_web_frame(), std::move(autofillData),
-                      FieldRendererId(2), future.GetCallback());
+                      future.GetCallback());
   EXPECT_TRUE(future.Wait());
   NSString* filling_result = future.Get();
   EXPECT_NSEQ(@"{\"2\":\"Cool User\",\"3\":\"coolemail@com\"}", filling_result);
@@ -624,7 +624,7 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   base::test::TestFuture<NSString*> future;
   feature()->FillForm(main_web_frame(), std::move(autofillData),
-                      FieldRendererId(2), future.GetCallback());
+                      future.GetCallback());
   EXPECT_TRUE(future.Wait());
 
   // Check that the input has the autofilled attribute so that we can
@@ -657,7 +657,7 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   base::test::TestFuture<NSString*> undo_future;
   feature()->FillForm(main_web_frame(), std::move(undoAutofillData),
-                      FieldRendererId(2), undo_future.GetCallback());
+                      undo_future.GetCallback());
   EXPECT_TRUE(undo_future.Wait());
 
   EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(

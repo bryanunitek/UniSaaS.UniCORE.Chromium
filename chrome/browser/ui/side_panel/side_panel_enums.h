@@ -43,10 +43,11 @@ enum class SidePanelOpenTrigger {
   kReadAnythingKeyboardShortcut = 26,
 #if BUILDFLAG(IS_ANDROID)
   kWindowResized = 27,
-  kMaxValue = kWindowResized,
-#else
-  kMaxValue = kReadAnythingKeyboardShortcut,
 #endif
+  kGlicOpened = 28,
+  kContextualTasks = 29,
+  kReadAnythingListenToThisPageContextMenu = 30,
+  kMaxValue = kReadAnythingListenToThisPageContextMenu,
 };
 // LINT.ThenChange(//tools/metrics/histograms/enums.xml:SidePanelOpenTrigger)
 

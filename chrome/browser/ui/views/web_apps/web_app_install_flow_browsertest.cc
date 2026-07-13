@@ -57,9 +57,7 @@ namespace {
 
 class WebAppInstallFlowBrowserTest : public WebAppBrowserTestBase {
  public:
-  WebAppInstallFlowBrowserTest()
-      : progress_delay_override_(ProgressDelay::SetDurationOverrideForTesting(
-            base::Milliseconds(0))) {}
+  WebAppInstallFlowBrowserTest() = default;
 
   ~WebAppInstallFlowBrowserTest() override = default;
 
@@ -122,7 +120,7 @@ class WebAppInstallFlowBrowserTest : public WebAppBrowserTestBase {
     }));
 
     // Wait for all installs to be completed, if in progress.
-    WebAppProvider::GetForWebApps(browser()->profile())
+    WebAppProvider::GetForWebApps(browser()->GetProfile())
         ->command_manager()
         .AwaitAllCommandsCompleteForTesting();
   }
@@ -144,7 +142,6 @@ class WebAppInstallFlowBrowserTest : public WebAppBrowserTestBase {
   }
 
  private:
-  base::AutoReset<std::optional<base::TimeDelta>> progress_delay_override_;
   base::test::ScopedFeatureList feature_list_{features::kWebAppInstallDialog};
 };
 
@@ -354,8 +351,13 @@ class WebAppInstallFlowOptionsViewTest
       public ::testing::WithParamInterface<
           std::tuple<InstallDialogType, CheckboxOptions>> {
  public:
+  WebAppInstallFlowOptionsViewTest() {
+    win_pin_feature_list_.InitAndEnableFeature(
+        features::kWebAppInstallDialogWinPin);
+  }
+
   void TearDownOnMainThread() override {
-    web_app::test::UninstallAllWebApps(browser()->profile());
+    web_app::test::UninstallAllWebApps(browser()->GetProfile());
     WebAppBrowserTestBase::TearDownOnMainThread();
   }
 
@@ -390,6 +392,9 @@ class WebAppInstallFlowOptionsViewTest
     }
     NOTREACHED();
   }
+
+ private:
+  base::test::ScopedFeatureList win_pin_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(WebAppInstallFlowOptionsViewTest, OptionsParameters) {

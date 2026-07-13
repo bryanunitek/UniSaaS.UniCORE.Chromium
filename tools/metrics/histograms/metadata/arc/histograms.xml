@@ -381,7 +381,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Arc.App.LowMemoryKills.{ArcAppKillType}Count10Minutes"
-    units="Apps" expires_after="2026-07-26">
+    units="Apps" expires_after="2027-06-25">
   <owner>cwd@google.com</owner>
   <owner>cros-vm-technology@google.com</owner>
   <summary>
@@ -393,7 +393,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Arc.App.LowMemoryKills.{ArcBackgroundVms}.{ArcAppKillType}Count10Minutes"
-    units="Apps" expires_after="2026-11-29">
+    units="Apps" expires_after="2027-06-25">
   <owner>cwd@google.com</owner>
   <owner>cros-vm-technology@google.com</owner>
   <summary>
@@ -406,7 +406,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Arc.App.LowMemoryKills{ArcAppKillDailyBackgroundVms}{ArcAppKillDailyType}"
-    units="Apps" expires_after="2026-11-29">
+    units="Apps" expires_after="2027-06-25">
   <owner>cwd@google.com</owner>
   <owner>cros-vm-technology@google.com</owner>
   <summary>
@@ -667,7 +667,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Arc.ArcOnDemandV2.ActivationShouldBeDelayed" enum="Boolean"
-    expires_after="2026-10-11">
+    expires_after="2026-12-16">
   <owner>yuholong@google.com</owner>
   <owner>arcvm-eng@google.com</owner>
   <summary>
@@ -884,7 +884,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Arc.ContainerLifetimeEvent" enum="ArcContainerLifetimeEvent"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>khmel@google.com</owner>
   <owner>arc-core@google.com</owner>
   <summary>
@@ -1200,7 +1200,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Arc.GameControls.EditDeleteMenuFuctionTriggered"
-    enum="GameControlsEditDeleteMenuFunction" expires_after="2026-11-01">
+    enum="GameControlsEditDeleteMenuFunction" expires_after="2027-01-03">
   <owner>cuicuiruan@google.com</owner>
   <owner>pjlee@google.com</owner>
   <owner>arc-gaming@google.com</owner>
@@ -1211,7 +1211,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Arc.GameControls.EditingListFunctionTriggered"
-    enum="GameControlsEditingListFunction" expires_after="2026-11-01">
+    enum="GameControlsEditingListFunction" expires_after="2027-01-03">
   <owner>cuicuiruan@google.com</owner>
   <owner>pjlee@google.com</owner>
   <owner>arc-gaming@google.com</owner>
@@ -1311,7 +1311,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Arc.IdleManager.ScreenOffTime" units="ms"
-    expires_after="2026-10-04">
+    expires_after="2026-12-06">
   <owner>raging@google.com</owner>
   <owner>arcvm-eng@google.com</owner>
   <summary>
@@ -2946,7 +2946,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Arc.{MuteType}AudioSuccess" enum="BooleanSuccess"
-    expires_after="2026-07-26">
+    expires_after="2027-01-26">
   <owner>vshenvi@google.com</owner>
   <owner>cros-edu-eng@google.com</owner>
   <summary>

@@ -118,10 +118,15 @@ void GetTextInfoForGlyphCallback(void* context,
   size_t start_index = static_cast<TextInfoContext*>(context)->start_index;
 
   sk_sp<SkTypeface> typeface = font_data->PlatformData().TypefaceSp();
-  if (results.empty() || results.back().typeface != typeface) {
-    results.emplace_back(std::move(typeface),
-                         std::vector<WebFormControlElement::GlyphInfo>{},
-                         is_horizontal);
+  bool synthetic_bold = font_data->PlatformData().SyntheticBold();
+  bool synthetic_italic = font_data->PlatformData().SyntheticItalic();
+  if (results.empty() || results.back().typeface != typeface ||
+      results.back().is_synthetic_bold != synthetic_bold ||
+      results.back().is_synthetic_italic != synthetic_italic) {
+    results.emplace_back(
+        std::move(typeface), std::vector<WebFormControlElement::GlyphInfo>{},
+        /*is_horizontal=*/is_horizontal, /*is_synthetic_bold=*/synthetic_bold,
+        /*is_synthetic_italic=*/synthetic_italic);
   }
 
   CHECK_EQ(results.back().is_horizontal, is_horizontal);
@@ -153,7 +158,13 @@ HTMLTextAreaElement::HTMLTextAreaElement(Document& document)
 }
 
 void HTMLTextAreaElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
-  root.AppendChild(CreateInnerEditorElement());
+  auto* inner_editor = CreateInnerEditorElement();
+  if (RuntimeEnabledFeatures::TextAreaEmptyPlaceholderBreakEnabled()) {
+    // We need a placeholder break for an empty value in order to provide one
+    // line-height and a baseline even if this element is not editable.
+    inner_editor->AppendChild(CreatePlaceholderBreakElement());
+  }
+  root.AppendChild(inner_editor);
 }
 
 FormControlType HTMLTextAreaElement::FormControlType() const {
@@ -186,8 +197,8 @@ int HTMLTextAreaElement::scrollWidth() {
   auto* box = GetLayoutBox();
   if (!box || !editor_box)
     return TextControlElement::scrollWidth();
-  LayoutUnit width =
-      editor_box->ClientWidth() + box->PaddingOutsets().HorizontalSum();
+  const LayoutUnit width = editor_box->PhysicalPaddingBoxRect().Width() +
+                           box->PaddingOutsets().HorizontalSum();
   return AdjustForAbsoluteZoom::AdjustLayoutUnit(width, box->StyleRef())
       .Round();
 }
@@ -204,8 +215,8 @@ int HTMLTextAreaElement::scrollHeight() {
   auto* box = GetLayoutBox();
   if (!box || !editor_box)
     return TextControlElement::scrollHeight();
-  LayoutUnit height =
-      editor_box->ClientHeight() + box->PaddingOutsets().VerticalSum();
+  const LayoutUnit height = editor_box->PhysicalPaddingBoxRect().Height() +
+                            box->PaddingOutsets().VerticalSum();
   return AdjustForAbsoluteZoom::AdjustLayoutUnit(height, box->StyleRef())
       .Round();
 }
@@ -541,9 +552,9 @@ void HTMLTextAreaElement::setValueForBinding(const String& value) {
            TextControlSetValueSelection::kSetSelectionToEnd,
            was_autofilled && !value_changed ? WebAutofillState::kAutofilled
                                             : WebAutofillState::kNotFilled);
-  if (Page* page = GetDocument().GetPage(); page && value_changed) {
-    page->GetChromeClient().JavaScriptChangedValue(*this, old_value,
-                                                   was_autofilled);
+  if (Page* page = GetDocument().GetPage(); page) {
+    page->GetChromeClient().JavaScriptSetValue(*this, old_value, was_autofilled,
+                                               value_changed);
   }
 }
 
@@ -692,6 +703,7 @@ void HTMLTextAreaElement::SetSuggestedValue(const String& value) {
 }
 
 void HTMLTextAreaElement::DidChangeIsCanvasOrInCanvasSubtree() {
+  TextControlElement::DidChangeIsCanvasOrInCanvasSubtree();
   if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(GetExecutionContext()) &&
       IsInCanvasSubtree()) {
     // Hide suggested values when under canvas, to prevent leaking this
@@ -914,6 +926,8 @@ WebFormControlElement::TextInfo HTMLTextAreaElement::GetTextInfo() const {
 
   WebFormControlElement::TextInfo results;
   results.effective_zoom = inner_layout->StyleRef().EffectiveZoom();
+  results.primary_ascent =
+      inner_layout->StyleRef().GetFontHeight().ascent.ToFloat();
   for (LayoutObject* child = inner_layout->FirstChild(); child;
        child = child->NextSibling()) {
     const auto* paragraph_block = DynamicTo<LayoutBlockFlow>(child);

@@ -13,7 +13,7 @@ angle_has_build = true
 angle_use_static_angle = use_static_angle
 
 # Whether ANGLE is using the shared Vulkan loader on Mac.
-angle_shared_libvulkan_on_mac = shared_libvulkan_on_mac
+angle_shared_libvulkan_on_mac = true
 
 # Overrides for ANGLE's dependencies
 angle_glslang_dir = "//third_party/glslang/src"
@@ -26,3 +26,15 @@ angle_spirv_tools_dir = "//third_party/spirv-tools/src"
 angle_vulkan_memory_allocator_dir = "//third_party/vulkan_memory_allocator"
 angle_wayland_dir = "//third_party/wayland/src"
 angle_dawn_dir = "//third_party/dawn"
+
+# In static ANGLE builds on desktop, Chromium still generates EGL/GLESv2 stubs
+# (libEGL.so/libGLESv2.so) for official build infra. To allow ANGLE standalone
+# tests to still link dynamically, we build the real shared libraries with a
+# "_test" suffix to avoid name collisions in the output directory.
+#
+# Note: On ChromeOS we generate the real dylibs as system services (such as
+# cros_camera) require real libEGL.so and libGLESv2.so shared libraries with
+# their expected production names.
+if (angle_use_static_angle && !is_android && !is_chromeos) {
+  angle_libs_suffix = "_test"
+}

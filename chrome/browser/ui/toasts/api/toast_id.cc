@@ -93,6 +93,22 @@ std::string_view GetToastName(ToastId toast_id) {
       return "SendTabToSelfNoInternetConnection";
     case ToastId::kIndigoInvokeError:
       return "IndigoInvokeError";
+    case ToastId::kTabStripSwitchDelayedHorizontal:
+      return "TabStripSwitchDelayedHorizontal";
+    case ToastId::kTabStripSwitchDelayedVertical:
+      return "TabStripSwitchDelayedVertical";
+    case ToastId::kAutofillAiPreFetchErrorMessage:
+      return "AutofillAiPreFetchErrorMessage";
+    case ToastId::kEnterpriseCopyAudit:
+      return "EnterpriseCopyAudit";
+    case ToastId::kEnterpriseCopyKeptInManagedChrome:
+      return "EnterpriseCopyKeptInManagedChrome";
+    case ToastId::kDictationError:
+      return "DictationError";
+    case ToastId::kDictationStopped:
+      return "DictationStopped";
+    case ToastId::kGlicSelectionHiddenForSite:
+      return "GlicSelectionHiddenForSite";
   }
 
   NOTREACHED();

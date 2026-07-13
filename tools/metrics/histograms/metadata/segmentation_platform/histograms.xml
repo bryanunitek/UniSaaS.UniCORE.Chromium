@@ -40,6 +40,11 @@ chromium-metrics-reviews@google.com.
 
 <variants name="DatabaseOperation">
   <variant name="AddUmaMetric"/>
+  <variant name="CleanupItems"/>
+  <variant name="CleanupOldEntries"/>
+  <variant name="DeleteAllUrls"/>
+  <variant name="InitDatabase"/>
+  <variant name="OnUrlValidated"/>
   <variant name="RemoveUrls"/>
   <variant name="RunReadOnlyQueries"/>
   <variant name="StoreUkmEntry"/>
@@ -191,7 +196,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="SegmentationPlatform.ClassificationRequest.TotalDuration.{SegmentationKey}"
-    units="ms" expires_after="2026-09-13">
+    units="ms" expires_after="2026-12-16">
   <owner>ritikagup@google.com</owner>
   <owner>chrome-segmentation-platform@google.com</owner>
   <summary>
@@ -695,7 +700,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="SegmentationPlatform.ModelExecution.Status.{SegmentationModel}"
-    enum="SegmentationPlatformModelExecutionStatus" expires_after="2026-09-13">
+    enum="SegmentationPlatformModelExecutionStatus" expires_after="2027-01-03">
   <owner>nyquist@chromium.org</owner>
   <owner>shaktisahu@chromium.org</owner>
   <owner>chrome-segmentation-platform@google.com</owner>

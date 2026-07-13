@@ -16,6 +16,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/page_action/page_action_model_observer.h"
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
 #include "chrome/browser/ui/views/page_action/anchored_message_view.h"
@@ -27,6 +28,7 @@
 #include "ui/events/event.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/views/view.h"
+#include "ui/views/view_observer.h"
 #include "ui/views/widget/widget.h"
 
 namespace page_actions {
@@ -44,8 +46,8 @@ class PageActionView : public IconLabelBubbleView,
   METADATA_HEADER(PageActionView, IconLabelBubbleView)
  public:
   PageActionView(actions::ActionItem* action_item,
-
                  const PageActionViewParams& params,
+                 PageActionIconType type,
                  ui::ElementIdentifier element_identifier);
   PageActionView(const PageActionView&) = delete;
   PageActionView& operator=(const PageActionView&) = delete;
@@ -120,6 +122,9 @@ class PageActionView : public IconLabelBubbleView,
   bool IsTriggerableEvent(const ui::Event& event) override;
   void AnimationEnded(const gfx::Animation* animation) override;
 
+  // views::LayoutDelegate:
+  void BeforeApplyLayout(const views::ProposedLayout& layout) override;
+
   // AnchoredMessageBubbleView::Delegate:
   void AnchoredMessageChipClick() override;
   void CloseAnchoredMessage() override;
@@ -143,7 +148,8 @@ class PageActionView : public IconLabelBubbleView,
   // update the image size if needed.
   void UpdateIconImage();
 
-  void AnimateImage(int resource_id, SkColor icon_color);
+  void AnimateImage(const page_actions::PageActionAnimationParams& params,
+                    SkColor icon_color);
 
   const gfx::Insets GetInsetsForNonVectorIcon() const;
 
@@ -155,9 +161,15 @@ class PageActionView : public IconLabelBubbleView,
   // notification will happen after PageActionModel::NotifyChange().
   void NotifyIsChipShowingChange();
 
+  void MaybeRecordCollapsedMetrics(int label_width);
+
   void OnAnchoredMessageWidgetClose(views::Widget::ClosedReason closed_reason);
 
   void CreateAndShowAnchoredMessage(const PageActionModelInterface& model);
+
+  void UpdateAnimationState(const PageActionModelInterface& model);
+  void HandleSlideAndCrossfadeTransition(const PageActionModelInterface& model);
+  void HandleSuggestionChipTransition(const PageActionModelInterface& model);
 
   base::WeakPtr<actions::ActionItem> action_item_ = nullptr;
   base::ScopedObservation<PageActionModelInterface, PageActionModelObserver>
@@ -195,6 +207,9 @@ class PageActionView : public IconLabelBubbleView,
 
   // The last "chip showing" state that was sent for a notification.
   std::optional<bool> last_notified_is_chip_showing_;
+
+  PageActionIconType type_;
+  bool chip_shown_metric_recorded_ = false;
 
   // Used to record click event histogram. It's initialized to base::DoNothing()
   // for testing purpose.

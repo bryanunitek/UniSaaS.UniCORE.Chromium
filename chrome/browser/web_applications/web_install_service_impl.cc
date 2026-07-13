@@ -12,16 +12,19 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/commands/parse_manifest_from_manifest_url_command.h"
 #include "chrome/browser/web_applications/commands/web_install_from_url_command.h"
 #include "chrome/browser/web_applications/icons/icon_masker.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/model/app_installed_by.h"
 #include "chrome/browser/web_applications/model/dialog_image_info.h"
+#include "chrome/browser/web_applications/model/web_install_manifest_fetch_error.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
@@ -35,6 +38,7 @@
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
+#include "chrome/browser/web_applications/web_install_manifest_fetcher.h"
 #include "components/permissions/permission_request.h"
 #include "components/ukm/app_source_url_recorder.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
@@ -53,9 +57,11 @@
 #include "content/public/browser/permission_request_description.h"
 #include "content/public/browser/permission_result.h"
 #include "content/public/browser/web_contents.h"
+#include "net/base/url_util.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/mojom/web_sandbox_flags.mojom.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/common/manifest/manifest_util.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
@@ -65,6 +71,7 @@
 #include "third_party/blink/public/mojom/web_install/web_install.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+#include "url/url_constants.h"
 
 namespace web_app {
 
@@ -185,12 +192,21 @@ void WebInstallServiceImpl::CreateIfAllowed(
 
   // This class is created only on the primary main frame.
   if (!render_frame_host->IsInPrimaryMainFrame()) {
-    receiver.reset();
+    mojo::ReportBadMessage("WebInstall not allowed in subframes");
     return;
   }
 
   if (!render_frame_host->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
-    receiver.reset();
+    return;
+  }
+
+  // TODO(crbug.com/493534965): Evaluate sandbox restrictions. In the meantime,
+  // Web Install API is not available in any sandboxed contexts, including
+  // sandboxed top-level documents, as well as frames with sandbox flags
+  // (whether from iframe sandbox attribute, CSP sandbox directive, or inherited
+  // from window.open() opener).
+  if (render_frame_host->IsSandboxed(network::mojom::WebSandboxFlags::kAll)) {
+    mojo::ReportBadMessage("WebInstall not allowed in a sandboxed contexts");
     return;
   }
 
@@ -310,6 +326,207 @@ void WebInstallServiceImpl::InstallFromElement(
     InstallCallback callback) {
   InstallInternal(std::move(options), std::move(callback),
                   /*triggered_from_element=*/true);
+}
+
+void WebInstallServiceImpl::InstallFromManifest(
+    blink::mojom::ManifestInstallOptionsPtr options,
+    InstallFromManifestCallback callback) {
+  InstallFromManifestInternal(std::move(options), std::move(callback),
+                              /*triggered_from_element=*/false);
+}
+
+void WebInstallServiceImpl::InstallFromManifestInternal(
+    blink::mojom::ManifestInstallOptionsPtr options,
+    InstallFromManifestCallback callback,
+    bool triggered_from_element) {
+  if (IsInstallInProgress()) {
+    std::move(callback).Run(blink::mojom::WebInstallServiceResult::kAbortError);
+    return;
+  }
+  base::ScopedClosureRunner install_guard = ReserveInstallInProgress();
+
+  // Wrap the callback so the install guard is released on every exit path.
+  // TODO(crbug.com/525409692): Include manifest URL telemetry. This should
+  // eventually mirror `callback_with_metrics`.
+  auto callback_with_guard = base::BindOnce(
+      [](InstallFromManifestCallback callback,
+         base::ScopedClosureRunner install_guard,
+         blink::mojom::WebInstallServiceResult result) {
+        std::move(callback).Run(result);
+      },
+      std::move(callback), std::move(install_guard));
+
+  const GURL install_target = options->manifest_url;
+
+  // Exclude file://, chrome://, data:, blob:, etc.
+  bool can_fetch_manifest = install_target.SchemeIs(url::kHttpsScheme) ||
+                            (install_target.SchemeIs(url::kHttpScheme) &&
+                             net::IsLocalhost(install_target));
+  if (!can_fetch_manifest) {
+    std::move(callback_with_guard)
+        .Run(blink::mojom::WebInstallServiceResult::kDataError);
+    return;
+  }
+
+  // Fetch the manifest even in Incognito/off-the-record profiles so that
+  // DataErrors (invalid JSON, missing id) are returned accurately. This
+  // prevents sites from using error differences to detect Incognito mode.
+  auto* profile =
+      Profile::FromBrowserContext(render_frame_host().GetBrowserContext());
+
+  manifest_fetcher_ = std::make_unique<WebInstallManifestFetcher>(
+      install_target, profile->GetURLLoaderFactory());
+
+  manifest_fetcher_->Fetch(base::BindOnce(
+      &WebInstallServiceImpl::OnManifestFetched, weak_ptr_factory_.GetWeakPtr(),
+      std::move(callback_with_guard), std::move(options),
+      triggered_from_element));
+}
+
+void WebInstallServiceImpl::OnManifestFetched(
+    InstallFromManifestCallbackWithGuard callback_with_guard,
+    blink::mojom::ManifestInstallOptionsPtr options,
+    bool triggered_from_element,
+    base::expected<std::string, WebInstallManifestFetchError> result) {
+  manifest_fetcher_.reset();
+
+  if (!result.has_value()) {
+    std::move(callback_with_guard)
+        .Run(blink::mojom::WebInstallServiceResult::kDataError);
+    return;
+  }
+
+  // Select the profile where web apps are enabled to access the command system
+  // for parsing. The provider lives on the original profile for desktop
+  // Incognito, but on the off-the-record profile for ChromeOS guest sessions.
+  auto* profile =
+      Profile::FromBrowserContext(render_frame_host().GetBrowserContext());
+  Profile* provider_profile =
+      AreWebAppsEnabled(profile) ? profile : profile->GetOriginalProfile();
+  auto* provider = WebAppProvider::GetForWebApps(provider_profile);
+  if (!provider) {
+    std::move(callback_with_guard)
+        .Run(blink::mojom::WebInstallServiceResult::kAbortError);
+    return;
+  }
+
+  const GURL manifest_url = options->manifest_url;
+  provider->command_manager().ScheduleCommand(
+      std::make_unique<ParseManifestFromManifestUrlCommand>(
+          manifest_url, std::move(*result),
+          base::BindOnce(&WebInstallServiceImpl::OnManifestParsed,
+                         weak_ptr_factory_.GetWeakPtr(),
+                         std::move(callback_with_guard), std::move(options),
+                         triggered_from_element)));
+}
+
+void WebInstallServiceImpl::OnManifestParsed(
+    InstallFromManifestCallbackWithGuard callback_with_guard,
+    blink::mojom::ManifestInstallOptionsPtr options,
+    bool triggered_from_element,
+    blink::mojom::ManifestPtr parsed_manifest) {
+  // Null manifest means the command failed (invalid JSON, empty, or missing
+  // required fields like start_url/name).
+  if (!parsed_manifest) {
+    std::move(callback_with_guard)
+        .Run(blink::mojom::WebInstallServiceResult::kDataError);
+    return;
+  }
+
+  // If the developer provided a manifest ID, it should match what was just
+  // parsed and computed.
+  if (options->manifest_id.has_value()) {
+    if (parsed_manifest->id != *options->manifest_id) {
+      std::move(callback_with_guard)
+          .Run(blink::mojom::WebInstallServiceResult::kDataError);
+      return;
+    }
+  } else {
+    // The developer did not provide a manifest ID, so the parsed manifest
+    // must have declared one.
+    if (!parsed_manifest->has_custom_id) {
+      std::move(callback_with_guard)
+          .Run(blink::mojom::WebInstallServiceResult::kDataError);
+      return;
+    }
+  }
+
+  // Manifest was successfully parsed and meets all web install requirements.
+  // Check if web app installs are supported in this profile (fails for
+  // Incognito/Guest). This check intentionally comes after fetch+parse so that
+  // DataErrors surface identically regardless of profile type.
+  auto* profile =
+      Profile::FromBrowserContext(render_frame_host().GetBrowserContext());
+  if (!AreWebAppsUserInstallable(profile)) {
+    WebAppUiManager::TriggerInstallNotSupportedDialog(
+        content::WebContents::FromRenderFrameHost(&render_frame_host()),
+        profile,
+        base::BindOnce(
+            &WebInstallServiceImpl::OnManifestInstallNotSupportedDialogClosed,
+            weak_ptr_factory_.GetWeakPtr(), std::move(callback_with_guard)));
+    return;
+  }
+
+  // Verify that the calling document has the Web Install permissions policy
+  // set. Both the JS API and the <install> element are gated by this policy.
+  // This check intentionally comes after the manifest fetch/parse so that
+  // DataErrors remain reachable regardless of permission outcome.
+  if (!render_frame_host().IsFeatureEnabled(
+          network::mojom::PermissionsPolicyFeature::kWebAppInstallation)) {
+    std::move(callback_with_guard)
+        .Run(blink::mojom::WebInstallServiceResult::kAbortError);
+    return;
+  }
+
+  // Skip requesting the user permission prompt when install is triggered from
+  // the <install> element. The element handles user consent via its own UI
+  // (trusted user gesture on the element itself).
+  // TODO(liahiscock): Add test coverage for this branch once its publicly
+  // reachable.
+  if (triggered_from_element) {
+    ContinueManifestInstall(std::move(callback_with_guard), std::move(options));
+    return;
+  }
+
+  RequestWebInstallPermission(
+      base::BindOnce(&WebInstallServiceImpl::OnManifestPermissionDecided,
+                     weak_ptr_factory_.GetWeakPtr(),
+                     std::move(callback_with_guard), std::move(options)));
+}
+
+void WebInstallServiceImpl::OnManifestInstallNotSupportedDialogClosed(
+    InstallFromManifestCallbackWithGuard callback_with_guard) {
+  // This dialog is informational only; No "accepted" value is needed, closure
+  // always results in an abort error.
+  std::move(callback_with_guard)
+      .Run(blink::mojom::WebInstallServiceResult::kAbortError);
+}
+
+void WebInstallServiceImpl::OnManifestPermissionDecided(
+    InstallFromManifestCallbackWithGuard callback_with_guard,
+    blink::mojom::ManifestInstallOptionsPtr options,
+    const std::vector<content::PermissionResult>& permission_result) {
+  CHECK(options);
+  CHECK_EQ(permission_result.size(), 1u);
+
+  if (permission_result[0].status != PermissionStatus::GRANTED) {
+    std::move(callback_with_guard)
+        .Run(blink::mojom::WebInstallServiceResult::kAbortError);
+    return;
+  }
+
+  ContinueManifestInstall(std::move(callback_with_guard), std::move(options));
+}
+
+void WebInstallServiceImpl::ContinueManifestInstall(
+    InstallFromManifestCallbackWithGuard callback_with_guard,
+    blink::mojom::ManifestInstallOptionsPtr options) {
+  CHECK(options);
+
+  // TODO(liahiscock): Initiate installation process.
+  NOTIMPLEMENTED();
+  std::move(callback_with_guard)
+      .Run(blink::mojom::WebInstallServiceResult::kAbortError);
 }
 
 void WebInstallServiceImpl::InstallInternal(

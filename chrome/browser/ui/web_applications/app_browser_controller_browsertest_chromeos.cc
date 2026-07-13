@@ -18,6 +18,7 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/browser/ui/extensions/extensions_container.h"
@@ -137,7 +138,9 @@ class AppBrowserControllerBrowserTestCrOs : public InProcessBrowserTest {
     ash::BrowserDelegate* delegate = ash::LaunchSystemWebAppImpl(
         profile(), test_system_web_app_installation_->GetType(),
         test_system_web_app_installation_->GetAppUrl(), *params);
-    app_browser_ = delegate ? &delegate->GetBrowser() : nullptr;
+    app_browser_ = delegate
+                       ? delegate->GetBrowser().GetBrowserForMigrationOnly()
+                       : nullptr;
   }
 
   Browser* LaunchMockSWA() {
@@ -150,7 +153,8 @@ class AppBrowserControllerBrowserTestCrOs : public InProcessBrowserTest {
     ash::BrowserDelegate* delegate = ash::LaunchSystemWebAppImpl(
         profile(), test_system_web_app_installation_->GetType(),
         test_system_web_app_installation_->GetAppUrl(), *params);
-    return delegate ? &delegate->GetBrowser() : nullptr;
+    return delegate ? delegate->GetBrowser().GetBrowserForMigrationOnly()
+                    : nullptr;
   }
 
   Browser* InstallAndLaunchMockApp() {
@@ -346,8 +350,8 @@ IN_PROC_BROWSER_TEST_F(AppBrowserControllerBrowserTestCrOs,
   EXPECT_NE(nullptr, second_browser);
   EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 3u);
 
-  auto bounds1 = first_browser->window()->GetRestoredBounds();
-  auto bounds2 = second_browser->window()->GetRestoredBounds();
+  auto bounds1 = first_browser->GetWindow()->GetRestoredBounds();
+  auto bounds2 = second_browser->GetWindow()->GetRestoredBounds();
   // We've already hit the bottom bounds, so the y axis didn't move.
   EXPECT_EQ(bounds1.x() + WindowSizer::kWindowTilePixels, bounds2.x());
 
@@ -356,11 +360,11 @@ IN_PROC_BROWSER_TEST_F(AppBrowserControllerBrowserTestCrOs,
   gfx::Rect previous_bounds = bounds2;
   for (int i = 0; i < 10; i++) {
     Browser* next_browser = LaunchMockSWA();
-    if (previous_bounds == next_browser->window()->GetRestoredBounds()) {
+    if (previous_bounds == next_browser->GetWindow()->GetRestoredBounds()) {
       hit_the_bottom_right = true;
       break;
     }
-    previous_bounds = next_browser->window()->GetRestoredBounds();
+    previous_bounds = next_browser->GetWindow()->GetRestoredBounds();
   }
 
   EXPECT_TRUE(hit_the_bottom_right);
@@ -383,7 +387,7 @@ class AppBrowserControllerChromeUntrustedBrowserTest
   Browser* InstallAndLaunchMockApp() {
     test_system_web_app_installation_->WaitForAppInstall();
     Browser* app_browser = web_app::LaunchWebAppBrowser(
-        browser()->profile(), test_system_web_app_installation_->GetAppId());
+        browser()->GetProfile(), test_system_web_app_installation_->GetAppId());
     CHECK(content::NavigateToURL(
         app_browser->tab_strip_model()->GetActiveWebContents(),
         test_system_web_app_installation_->GetAppUrl()));

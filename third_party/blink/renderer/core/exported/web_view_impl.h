@@ -576,6 +576,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   // browser has processed it.
   void SendWindowRectToMainFrameHost(const gfx::Rect& bounds,
                                      base::OnceClosure ack_callback);
+  void SendMoveWindowToMainFrameHost(const gfx::Point& origin,
+                                     base::OnceClosure ack_callback);
+  void SendResizeWindowToMainFrameHost(const gfx::Size& size,
+                                       base::OnceClosure ack_callback);
 
   // Tells the browser that another page has accessed the DOM of the initial
   // empty document of a main frame.
@@ -694,10 +698,6 @@ class CORE_EXPORT WebViewImpl final : public WebView,
   // browser.
   void DoDeferredCloseWindowSoon();
 
-#if BUILDFLAG(IS_CHROMEOS)
-  void UpdateUseOverlayScrollbar(bool use_overlay_scrollbar);
-#endif
-
   WebViewImpl(
       WebViewClient*,
       mojom::blink::PageVisibilityState visibility,
@@ -738,10 +738,10 @@ class CORE_EXPORT WebViewImpl final : public WebView,
 
   LocalFrame* FocusedLocalFrameInWidget() const;
 
-  // Clear focus and text input state of the page. If there was a focused
-  // element, this will trigger updates to observers and send focus, selection,
-  // and text input-related events.
-  void RemoveFocusAndTextInputState();
+  // Clear text input state of the page, and optionally clear DOM focus too.
+  // If there was a focused element, this may trigger updates to observers and
+  // send focus, selection, and text input-related events.
+  void RemoveFocusAndTextInputState(bool clear_focus);
 
   // Finds the zoom and scroll parameters for zooming into an editable element
   // with bounds |element_bounds_in_root_frame| and caret bounds

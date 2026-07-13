@@ -4,6 +4,7 @@
 
 #include "content/browser/devtools/devtools_instrumentation.h"
 
+#include "base/byte_size.h"
 #include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/notreached.h"
@@ -265,132 +266,131 @@ BuildAttributionReportingIssue(
 }
 
 protocol::Audits::FederatedAuthRequestIssueReason
-FederatedAuthRequestResultToProtocol(
-    blink::mojom::FederatedAuthRequestResult result) {
-  using blink::mojom::FederatedAuthRequestResult;
+FederatedRequestResultToProtocol(blink::mojom::FederatedRequestResult result) {
+  using blink::mojom::FederatedRequestResult;
   namespace FederatedAuthRequestIssueReasonEnum =
       protocol::Audits::FederatedAuthRequestIssueReasonEnum;
   switch (result) {
-    case FederatedAuthRequestResult::kShouldEmbargo: {
+    case FederatedRequestResult::kShouldEmbargo: {
       return FederatedAuthRequestIssueReasonEnum::ShouldEmbargo;
     }
-    case FederatedAuthRequestResult::kDisabledInSettings: {
+    case FederatedRequestResult::kDisabledInSettings: {
       return FederatedAuthRequestIssueReasonEnum::DisabledInSettings;
     }
-    case FederatedAuthRequestResult::kDisabledInFlags: {
+    case FederatedRequestResult::kDisabledInFlags: {
       return FederatedAuthRequestIssueReasonEnum::DisabledInFlags;
     }
-    case FederatedAuthRequestResult::kIdpNotPotentiallyTrustworthy: {
+    case FederatedRequestResult::kIdpNotPotentiallyTrustworthy: {
       return FederatedAuthRequestIssueReasonEnum::IdpNotPotentiallyTrustworthy;
     }
-    case FederatedAuthRequestResult::kTooManyRequests: {
+    case FederatedRequestResult::kTooManyRequests: {
       return FederatedAuthRequestIssueReasonEnum::TooManyRequests;
     }
-    case FederatedAuthRequestResult::kWellKnownHttpNotFound: {
+    case FederatedRequestResult::kWellKnownHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownHttpNotFound;
     }
-    case FederatedAuthRequestResult::kWellKnownNoResponse: {
+    case FederatedRequestResult::kWellKnownNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownNoResponse;
     }
-    case FederatedAuthRequestResult::kWellKnownInvalidResponse: {
+    case FederatedRequestResult::kWellKnownInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownInvalidResponse;
     }
-    case FederatedAuthRequestResult::kWellKnownListEmpty: {
+    case FederatedRequestResult::kWellKnownListEmpty: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownListEmpty;
     }
-    case FederatedAuthRequestResult::kWellKnownInvalidContentType: {
+    case FederatedRequestResult::kWellKnownInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownInvalidContentType;
     }
-    case FederatedAuthRequestResult::kConfigNotInWellKnown: {
+    case FederatedRequestResult::kConfigNotInWellKnown: {
       return FederatedAuthRequestIssueReasonEnum::ConfigNotInWellKnown;
     }
-    case FederatedAuthRequestResult::kWellKnownTooBig: {
+    case FederatedRequestResult::kWellKnownTooBig: {
       return FederatedAuthRequestIssueReasonEnum::WellKnownTooBig;
     }
-    case FederatedAuthRequestResult::kConfigHttpNotFound: {
+    case FederatedRequestResult::kConfigHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::ConfigHttpNotFound;
     }
-    case FederatedAuthRequestResult::kConfigNoResponse: {
+    case FederatedRequestResult::kConfigNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::ConfigNoResponse;
     }
-    case FederatedAuthRequestResult::kConfigInvalidResponse: {
+    case FederatedRequestResult::kConfigInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::ConfigInvalidResponse;
     }
-    case FederatedAuthRequestResult::kConfigInvalidContentType: {
+    case FederatedRequestResult::kConfigInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::ConfigInvalidContentType;
     }
-    case FederatedAuthRequestResult::kAccountsHttpNotFound: {
+    case FederatedRequestResult::kAccountsHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::AccountsHttpNotFound;
     }
-    case FederatedAuthRequestResult::kAccountsNoResponse: {
+    case FederatedRequestResult::kAccountsNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::AccountsNoResponse;
     }
-    case FederatedAuthRequestResult::kAccountsInvalidResponse: {
+    case FederatedRequestResult::kAccountsInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::AccountsInvalidResponse;
     }
-    case FederatedAuthRequestResult::kAccountsListEmpty: {
+    case FederatedRequestResult::kAccountsListEmpty: {
       return FederatedAuthRequestIssueReasonEnum::AccountsListEmpty;
     }
-    case FederatedAuthRequestResult::kAccountsInvalidContentType: {
+    case FederatedRequestResult::kAccountsInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::AccountsInvalidContentType;
     }
-    case FederatedAuthRequestResult::kIdTokenHttpNotFound: {
+    case FederatedRequestResult::kIdTokenHttpNotFound: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenHttpNotFound;
     }
-    case FederatedAuthRequestResult::kIdTokenNoResponse: {
+    case FederatedRequestResult::kIdTokenNoResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenNoResponse;
     }
-    case FederatedAuthRequestResult::kIdTokenInvalidResponse: {
+    case FederatedRequestResult::kIdTokenInvalidResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenInvalidResponse;
     }
-    case FederatedAuthRequestResult::kIdTokenIdpErrorResponse: {
+    case FederatedRequestResult::kIdTokenIdpErrorResponse: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenIdpErrorResponse;
     }
-    case FederatedAuthRequestResult::kIdTokenCrossSiteIdpErrorResponse: {
+    case FederatedRequestResult::kIdTokenCrossSiteIdpErrorResponse: {
       return FederatedAuthRequestIssueReasonEnum::
           IdTokenCrossSiteIdpErrorResponse;
     }
-    case FederatedAuthRequestResult::kIdTokenInvalidContentType: {
+    case FederatedRequestResult::kIdTokenInvalidContentType: {
       return FederatedAuthRequestIssueReasonEnum::IdTokenInvalidContentType;
     }
-    case FederatedAuthRequestResult::kCanceled: {
+    case FederatedRequestResult::kCanceled: {
       return FederatedAuthRequestIssueReasonEnum::Canceled;
     }
-    case FederatedAuthRequestResult::kRpPageNotVisible:
+    case FederatedRequestResult::kRpPageNotVisible:
       return FederatedAuthRequestIssueReasonEnum::RpPageNotVisible;
-    case FederatedAuthRequestResult::kError: {
+    case FederatedRequestResult::kError: {
       return FederatedAuthRequestIssueReasonEnum::ErrorIdToken;
     }
-    case FederatedAuthRequestResult::kSilentMediationFailure: {
+    case FederatedRequestResult::kSilentMediationFailure: {
       return FederatedAuthRequestIssueReasonEnum::SilentMediationFailure;
     }
-    case FederatedAuthRequestResult::kNotSignedInWithIdp: {
+    case FederatedRequestResult::kNotSignedInWithIdp: {
       return FederatedAuthRequestIssueReasonEnum::NotSignedInWithIdp;
     }
-    case FederatedAuthRequestResult::kMissingTransientUserActivation: {
+    case FederatedRequestResult::kMissingTransientUserActivation: {
       return FederatedAuthRequestIssueReasonEnum::
           MissingTransientUserActivation;
     }
-    case FederatedAuthRequestResult::kReplacedByActiveMode: {
+    case FederatedRequestResult::kReplacedByActiveMode: {
       return FederatedAuthRequestIssueReasonEnum::ReplacedByActiveMode;
     }
-    case FederatedAuthRequestResult::kRelyingPartyOriginIsOpaque: {
+    case FederatedRequestResult::kRelyingPartyOriginIsOpaque: {
       return FederatedAuthRequestIssueReasonEnum::RelyingPartyOriginIsOpaque;
     }
-    case FederatedAuthRequestResult::kTypeNotMatching: {
+    case FederatedRequestResult::kTypeNotMatching: {
       return FederatedAuthRequestIssueReasonEnum::TypeNotMatching;
     }
-    case FederatedAuthRequestResult::kUiDismissedNoEmbargo: {
+    case FederatedRequestResult::kUiDismissedNoEmbargo: {
       return FederatedAuthRequestIssueReasonEnum::UiDismissedNoEmbargo;
     }
-    case FederatedAuthRequestResult::kCorsError: {
+    case FederatedRequestResult::kCorsError: {
       return FederatedAuthRequestIssueReasonEnum::CorsError;
     }
-    case FederatedAuthRequestResult::kSuppressedBySegmentationPlatform: {
+    case FederatedRequestResult::kSuppressedBySegmentationPlatform: {
       return FederatedAuthRequestIssueReasonEnum::
           SuppressedBySegmentationPlatform;
     }
-    case FederatedAuthRequestResult::kSuccess: {
+    case FederatedRequestResult::kSuccess: {
       NOTREACHED();
     }
   }
@@ -398,17 +398,17 @@ FederatedAuthRequestResultToProtocol(
 
 std::unique_ptr<protocol::Audits::InspectorIssue>
 BuildFederatedAuthRequestIssue(
-    const blink::mojom::FederatedAuthRequestIssueDetailsPtr& issue_details) {
-  auto federated_auth_request_details =
+    const blink::mojom::FederatedRequestIssueDetailsPtr& issue_details) {
+  auto federated_request_details =
       protocol::Audits::FederatedAuthRequestIssueDetails::Create()
           .SetFederatedAuthRequestIssueReason(
-              FederatedAuthRequestResultToProtocol(issue_details->status))
+              FederatedRequestResultToProtocol(issue_details->status))
           .Build();
 
   auto protocol_issue_details =
       protocol::Audits::InspectorIssueDetails::Create()
           .SetFederatedAuthRequestIssueDetails(
-              std::move(federated_auth_request_details))
+              std::move(federated_request_details))
           .Build();
 
   auto issue = protocol::Audits::InspectorIssue::Create()
@@ -582,6 +582,9 @@ EmailVerificationRequestResultToProtocol(
         kTokenVerificationSdJwtUnsupportedHeaderAlg:
       return EmailVerificationRequestIssueReasonEnum::
           TokenVerificationSdJwtUnsupportedHeaderAlg;
+    case EmailVerificationRequestResult::kTokenVerificationSdJwtInvalidTyp:
+      return EmailVerificationRequestIssueReasonEnum::
+          TokenVerificationSdJwtInvalidTyp;
     case EmailVerificationRequestResult::kTokenVerificationSdJwtMissingIss:
       return EmailVerificationRequestIssueReasonEnum::
           TokenVerificationSdJwtMissingIss;
@@ -873,6 +876,60 @@ void OnFetchKeepAliveRequestComplete(
   DispatchToAgents(frame_tree_node, &protocol::NetworkHandler::LoadingComplete,
                    request_id, protocol::Network::ResourceTypeEnum::Fetch,
                    status);
+}
+
+void OnPrefetchActivationBeaconWillBeSent(
+    FrameTreeNodeId frame_tree_node_id,
+    const std::string& request_id,
+    const network::ResourceRequest& request,
+    std::optional<std::pair<const GURL&,
+                            const network::mojom::URLResponseHeadDevToolsInfo&>>
+        redirect_info) {
+  auto timestamp = base::TimeTicks::Now();
+  FrameTreeNode* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
+  if (!ftn) {
+    return;
+  }
+  std::string frame_token =
+      ftn->current_frame_host()->devtools_frame_token().ToString();
+  GURL initiator_url;
+  if (request.request_initiator.has_value()) {
+    initiator_url = request.request_initiator->GetURL();
+  }
+  DispatchToAgents(
+      ftn, &protocol::NetworkHandler::PrefetchActivationBeaconWillBeSent,
+      request_id, request, initiator_url, frame_token, timestamp,
+      redirect_info);
+}
+
+void OnPrefetchActivationBeaconResponseReceived(
+    FrameTreeNodeId frame_tree_node_id,
+    const std::string& request_id,
+    const GURL& url,
+    const network::mojom::URLResponseHead& head) {
+  FrameTreeNode* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
+  if (!ftn) {
+    return;
+  }
+  std::string frame_token =
+      ftn->current_frame_host()->devtools_frame_token().ToString();
+  network::mojom::URLResponseHeadDevToolsInfoPtr head_info =
+      network::ExtractDevToolsInfo(head);
+  DispatchToAgents(ftn, &protocol::NetworkHandler::ResponseReceived, request_id,
+                   request_id, url, protocol::Network::ResourceTypeEnum::Ping,
+                   *head_info, frame_token);
+}
+
+void OnPrefetchActivationBeaconRequestComplete(
+    FrameTreeNodeId frame_tree_node_id,
+    const std::string& request_id,
+    const network::URLLoaderCompletionStatus& status) {
+  FrameTreeNode* ftn = FrameTreeNode::GloballyFindByID(frame_tree_node_id);
+  if (!ftn) {
+    return;
+  }
+  DispatchToAgents(ftn, &protocol::NetworkHandler::LoadingComplete, request_id,
+                   protocol::Network::ResourceTypeEnum::Ping, status);
 }
 
 void BackForwardCacheNotUsed(
@@ -1637,6 +1694,31 @@ void ApplyNetworkRequestOverrides(
 }
 
 }  // namespace
+
+void ApplyExtraHeadersForWebSocket(const GlobalRenderFrameHostId& frame_id,
+                                   net::HttpRequestHeaders* headers) {
+  auto* frame = RenderFrameHostImpl::FromID(frame_id);
+  if (!frame) {
+    return;
+  }
+
+  FrameTreeNode* ftn = frame->frame_tree_node();
+  if (!ftn) {
+    return;
+  }
+
+  DevToolsAgentHostImpl* agent_host =
+      GetDevToolsAgentHostForNetworkOverrides(ftn);
+  if (!agent_host) {
+    return;
+  }
+
+  bool disable_cache = false;
+  bool skip_service_worker = false;
+  ApplyNetworkRequestOverrides(agent_host, headers, &disable_cache, nullptr,
+                               &skip_service_worker, nullptr, nullptr, nullptr,
+                               nullptr);
+}
 
 void ApplyAuctionNetworkRequestOverrides(
     FrameTreeNode* frame_tree_node,
@@ -2474,7 +2556,7 @@ void BuildAndReportBrowserInitiatedIssue(
   } else if (info->code ==
              blink::mojom::InspectorIssueCode::kFederatedAuthRequestIssue) {
     issue = BuildFederatedAuthRequestIssue(
-        info->details->federated_auth_request_details);
+        info->details->federated_request_details);
   } else if (info->code ==
              blink::mojom::InspectorIssueCode::kDeprecationIssue) {
     issue = BuildDeprecationIssue(info->details->deprecation_issue_details);
@@ -2595,7 +2677,7 @@ void OnServiceWorkerMainScriptFetchingFailed(
           worker_token,
           status.completion_time.ToInternalValue() /
               static_cast<double>(base::Time::kMicrosecondsPerSecond),
-          status.encoded_data_length);
+          status.encoded_data_length.InBytes());
     }
   } else if (agent_host) {
     for (auto* network_handler :

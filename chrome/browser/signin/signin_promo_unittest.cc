@@ -12,6 +12,7 @@
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
@@ -108,8 +109,11 @@ class SigninPromoUrlTest : public testing::Test {
 
 TEST_F(SigninPromoUrlTest, SigninURLForDice) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(
-      syncer::kReplaceSyncPromosWithSignInPromos);
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{},
+      /*disabled_features=*/{
+          syncer::kReplaceSyncPromosWithSignInPromos,
+          syncer::kReplaceSyncPromosWithSigninPromosNewSignin});
 
   EXPECT_EQ(
       "https://accounts.google.com/signin/chrome/sync?ssp=1&"
@@ -162,14 +166,63 @@ TEST_F(SigninPromoUrlTest, SigninURLForDiceWithHistorySyncOptin) {
 
 TEST_F(SigninPromoUrlTest, SigninURLForDiceMagiChromeExperiments) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      switches::kMagiChromeSignInExperimentsBatch1,
-      {{"magichrome_fre_exp_branch", "test_branch"}});
+  feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/{{switches::kMagiChromeSignInExperimentsBatch1,
+                             {{"magichrome_fre_exp_branch", "test_branch"}}},
+                            {syncer::kReplaceSyncPromosWithSignInPromos, {}}},
+      /*disabled_features=*/{});
 
   EXPECT_EQ(
       "https://accounts.google.com/signin/chrome/sync?ssp=1&"
-      "theme=mn&magichrome_fre_exp_branch=test_branch",
+      "flow=history_opt_in&theme=mn&magichrome_fre_exp_branch=test_branch",
       GetChromeSyncURLForDice({}));
+}
+
+TEST(SigninPromoTest, IsHybridTransportSupportedForQrCodeSignin) {
+  base::test::SingleThreadTaskEnvironment task_environment;
+
+  // Case 1: LE is not supported.
+  {
+    auto bluetooth_override_values =
+        device::BluetoothAdapterFactory::Get()->InitGlobalOverrideValues();
+    bluetooth_override_values->SetLESupported(false);
+
+    base::test::TestFuture<bool> future;
+    IsHybridTransportSupportedForQrCodeSignin(future.GetCallback());
+    EXPECT_FALSE(future.Get());
+  }
+
+  // Case 2: LE is supported, Bluetooth adapter is present.
+  {
+    auto mock_adapter =
+        base::MakeRefCounted<testing::NiceMock<device::MockBluetoothAdapter>>();
+    ON_CALL(*mock_adapter, IsPresent()).WillByDefault(testing::Return(true));
+    device::BluetoothAdapterFactory::SetAdapterForTesting(mock_adapter);
+
+    auto bluetooth_override_values =
+        device::BluetoothAdapterFactory::Get()->InitGlobalOverrideValues();
+    bluetooth_override_values->SetLESupported(true);
+
+    base::test::TestFuture<bool> future;
+    IsHybridTransportSupportedForQrCodeSignin(future.GetCallback());
+    EXPECT_TRUE(future.Get());
+  }
+
+  // Case 3: LE is supported, Bluetooth adapter is NOT present.
+  {
+    auto mock_adapter =
+        base::MakeRefCounted<testing::NiceMock<device::MockBluetoothAdapter>>();
+    ON_CALL(*mock_adapter, IsPresent()).WillByDefault(testing::Return(false));
+    device::BluetoothAdapterFactory::SetAdapterForTesting(mock_adapter);
+
+    auto bluetooth_override_values =
+        device::BluetoothAdapterFactory::Get()->InitGlobalOverrideValues();
+    bluetooth_override_values->SetLESupported(true);
+
+    base::test::TestFuture<bool> future;
+    IsHybridTransportSupportedForQrCodeSignin(future.GetCallback());
+    EXPECT_FALSE(future.Get());
+  }
 }
 
 TEST(SigninPromoTest, IsSignInPromo_AutofillTypes) {

@@ -139,6 +139,16 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
   mixer[kColorExtensionsMenuText] = {ui::kColorSysOnSurface};
   mixer[kColorExtensionsMenuSecondaryText] = {ui::kColorSysOnSurfaceSubtle};
 
+  // Extension manager WebUI colors.
+  mixer[kColorExtensionManagerHighlightText] = {ui::kColorSysPrimary};
+
+  // Settings columned header colors.
+  mixer[kColorSettingsColumnedSectionDescriptionHeader] = {
+      ui::kColorSysPrimary};
+
+  // Settings info card colors.
+  mixer[kColorSettingsInfoCardBackground] = {ui::kColorSysBaseContainer};
+
   // Lens overlay colors.
   mixer[kColorLensOverlayToastBackground] = {ui::kColorSysInverseSurface};
   mixer[kColorLensOverlayToastButtonBorder] = {ui::kColorSysInverseOnSurface};
@@ -226,6 +236,13 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
   // Side Panel colors.
   mixer[kColorSidePanelBackground] = {ui::kColorSysBaseContainer};
 
+  // Contextual Tasks Banner Promo colors.
+  mixer[kColorContextualTasksBannerPromoBackground] = {
+      ui::kColorSysBaseContainer};
+  mixer[kColorContextualTasksBannerPromoText] = {ui::kColorSysOnSurface};
+  mixer[kColorContextualTasksBannerPromoIconBackground] = {
+      ui::kColorSysTonalContainer};
+
   // Read Anything (in the side panel) colors.
   mixer[kColorReadAnythingCurrentReadAloudHighlight] = {
       ui::kColorSysStateHoverOnSubtle};
@@ -254,7 +271,11 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
 
   // Feature Showcase colors.
   mixer[kColorFeatureShowcaseStepperCheck] = {ui::kColorSysPrimary};
-  mixer[kColorFeatureShowcaseStepperDot] = {ui::kColorSysPrimaryContainer};
+  mixer[kColorFeatureShowcaseStepperDot] = {ui::kColorSysPrimary};
+  mixer[kColorFeatureShowcaseThemePickerWrapperBackground] = {
+      ui::kColorSysSurface5};
+  mixer[kColorFeatureShowcaseThemePickerBackground] = {ui::kColorSysSurface};
+  mixer[kColorFeatureShowcaseThemeColorBorder] = {ui::kColorSysPrimary};
 
   // WebAuthn modal dialog colors.
   mixer[kColorWebAuthnBackArrowButtonIcon] = {ui::kColorSysPrimary};
@@ -427,13 +448,6 @@ void AddMaterialChromeColorMixer(ui::ColorProvider* provider,
       ui::kColorSysBaseContainerElevated};
   mixer[kColorOmniboxChipOnSystemBlockedActivityIndicatorForeground] = {
       ui::kColorSysError};
-
-  // Settings columned header colors.
-  mixer[kColorSettingsColumnedSectionDescriptionHeader] = {
-      ui::kColorSysPrimary};
-
-  // Settings info card colors.
-  mixer[kColorSettingsInfoCardBackground] = {ui::kColorSysBaseContainer};
 
   // Tabstrip tab alert colors.
   mixer[kColorTabAlertAudioPlayingActiveFrameActive] = {

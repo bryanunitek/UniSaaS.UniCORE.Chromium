@@ -268,7 +268,13 @@ targets.mixin(
         # cros_test_tags_exclude will honor the suite's settings. for
         # chrome_all_tast_tests suite, all informational or
         # dep:no_chrome_dcheck tests will be filtered out.
-        cros_test_names_from_file = ["chromeos/tast_control_cq_tests.txt"],
+        cros_test_names_from_file = [
+            "chromeos/tast_control_cq_tests.txt",
+        ],
+        cros_test_names_exclude_from_file = [
+            "chromeos/tast_control_disabled_tests.txt",
+            "chromeos/tast_control_flaky_tests.txt",
+        ],
         cros_test_max_in_shard = 20,
     ),
 )
@@ -944,13 +950,6 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "gpu_force_angle_d3d9",
-    args = [
-        "--extra-browser-args=--use-angle=d3d9",
-    ],
-)
-
-targets.mixin(
     name = "gpu_force_angle_gles",
     args = [
         "--extra-browser-args=--use-angle=gles",
@@ -1146,6 +1145,18 @@ targets.mixin(
             swarming.cache(
                 name = "runtime_ios_26_5",
                 path = "Runtime-ios-26.5",
+            ),
+        ],
+    ),
+)
+
+targets.mixin(
+    name = "ios_runtime_cache_27_0",
+    swarming = targets.swarming(
+        named_caches = [
+            swarming.cache(
+                name = "runtime_ios_27_0",
+                path = "Runtime-ios-27.0",
             ),
         ],
     ),
@@ -1390,7 +1401,24 @@ targets.mixin(
     swarming = targets.swarming(
         dimensions = {
             "cpu": "arm64",  # fallback on bare metal if no VMs are available
-            "os": "Mac-15",
+            # TODO(crbug.com/521856600): Remove OR when Mac-26 once upgrade
+            # process is complete and CQ migrates to mac26-arm64-rel-tests.
+            "os": "Mac-15|Mac-26",
+        },
+        optional_dimensions = {
+            30: {
+                "cpu": "Apple_(Virtual)",
+            },
+        },
+    ),
+)
+
+targets.mixin(
+    name = "mac_26_vm_optional",
+    swarming = targets.swarming(
+        dimensions = {
+            "cpu": "arm64",  # fallback on bare metal if no VMs are available
+            "os": "Mac-26",
         },
         optional_dimensions = {
             30: {
@@ -1491,16 +1519,6 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "mac_15_beta_arm64",
-    swarming = targets.swarming(
-        dimensions = {
-            "cpu": "arm64",
-            "os": "Mac-15|Mac-26",
-        },
-    ),
-)
-
-targets.mixin(
     name = "mac_15_arm64",
     swarming = targets.swarming(
         dimensions = {
@@ -1515,6 +1533,16 @@ targets.mixin(
     swarming = targets.swarming(
         dimensions = {
             "cpu": "arm64",
+            "os": "Mac-26",
+        },
+    ),
+)
+
+targets.mixin(
+    name = "mac_26_x64",
+    swarming = targets.swarming(
+        dimensions = {
+            "cpu": "x86-64",
             "os": "Mac-26",
         },
     ),
@@ -1565,7 +1593,7 @@ targets.mixin(
             "cpu": "arm64",
             "gpu": "apple:m2",
             "mac_model": "Mac14,7",
-            "os": "Mac-14.4.1",
+            "os": "Mac-26.5.1",
             "pool": "chromium.tests.gpu",
             "display_attached": "1",
             "hidpi": "1",
@@ -1580,7 +1608,7 @@ targets.mixin(
             "cpu": "arm64",
             "gpu": "apple:m2",
             "mac_model": "Mac14,7",
-            "os": "Mac-14.4.1",
+            "os": "Mac-14.4.1|Mac-26.5.1",
             "pool": "chromium.tests.gpu",
             "display_attached": "1",
             "hidpi": "1",
@@ -1664,7 +1692,7 @@ targets.mixin(
         dimensions = {
             "cpu": "x86-64",
             "gpu": "8086:3e9b",
-            "os": "Mac-14.5",
+            "os": "Mac-15.5",
             "display_attached": "1",
         },
     ),
@@ -1839,11 +1867,6 @@ targets.mixin(
         "--record-video",
         "failed_only",
     ],
-)
-
-targets.mixin(
-    name = "retry_only_failed_tests",
-    retry_only_failed_tests = True,
 )
 
 targets.mixin(
@@ -2291,15 +2314,15 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "xcode_26_beta",
+    name = "xcode_27_beta",
     args = [
         "--xcode-build-version",
-        "17f42",
+        "27a5218g",
     ],
     swarming = targets.swarming(
         named_caches = [
             swarming.cache(
-                name = "xcode_ios_17f42",
+                name = "xcode_ios_27a5218g",
                 path = "Xcode.app",
             ),
         ],
@@ -2357,4 +2380,15 @@ targets.mixin(
     args = [
         "--force-main-user",
     ],
+)
+
+# Shards the slower x64 bot to 8 shards (overriding the default of 4 shards).
+# Since these bots run sequentially to avoid resource starvation, they
+# take longer to complete the test suite, requiring more shards to keep
+# the total run time within the builder's limit.
+targets.mixin(
+    name = "mac_x64_ai_wpt_shards",
+    swarming = targets.swarming(
+        shards = 8,
+    ),
 )

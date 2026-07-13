@@ -54,7 +54,6 @@
 #include "url/origin.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/glic/browser_ui/glic_nudge_controller_android.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #else
@@ -129,27 +128,19 @@ ContextualCueingHelper::ContextualCueingHelper(
 ContextualCueingHelper::~ContextualCueingHelper() = default;
 
 glic::GlicNudgeController* ContextualCueingHelper::GetGlicNudgeController() {
-#if !BUILDFLAG(IS_ANDROID)
   if (!IsContextualCueingEnabled()) {
     return nullptr;
   }
-
-  BrowserWindowInterface* browser =
-      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
-          web_contents());
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents());
+  if (!tab) {
+    return nullptr;
+  }
+  BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
   if (!browser) {
     return nullptr;
   }
-  return browser->GetFeatures().glic_nudge_controller();
-#else
-  if (!glic_nudge_controller_) {
-    TabListInterface* tab_list =
-        TabModelList::GetTabModelForWebContents(web_contents());
-    glic_nudge_controller_ =
-        std::make_unique<glic::GlicNudgeControllerAndroid>(tab_list);
-  }
-  return glic_nudge_controller_.get();
-#endif
+  return glic::GlicNudgeController::From(browser);
 }
 
 void ContextualCueingHelper::PrimaryPageChanged(content::Page& page) {
@@ -208,7 +199,6 @@ void ContextualCueingHelper::DidFinishNavigation(
   if (glic_nudge_controller) {
     glic_nudge_controller->UpdateNudgeLabel(
         web_contents(), std::string(), /*prompt_suggestion=*/std::nullopt,
-        /*anchored_message_text=*/std::string(),
         glic::GlicNudgeActivity::kNudgeIgnoredNavigation, base::DoNothing());
   }
 
@@ -458,16 +448,20 @@ void ContextualCueingHelper::OnCueingDecision(
     return;
   }
 
-  GetGlicNudgeController()->UpdateNudgeLabel(
+  auto* glic_nudge_controller = GetGlicNudgeController();
+  if (!glic_nudge_controller) {
+    return;
+  }
+
+  glic_nudge_controller->UpdateNudgeLabel(
       web_contents(), decision_result->cue_label,
       decision_result->prompt_suggestion.empty()
           ? std::nullopt
           : std::make_optional(decision_result->prompt_suggestion),
-      decision_result->anchored_message_text,
       /*activity=*/std::nullopt,
       base::BindRepeating(&ContextualCueingService::OnNudgeActivity,
                           contextual_cueing_service_->GetWeakPtr(),
-                          web_contents(), document_available_time,
+                          web_contents()->GetWeakPtr(), document_available_time,
                           decision_result->is_dynamic));
 }
 

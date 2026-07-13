@@ -106,7 +106,7 @@ public class FeedV2NewTabPageTest {
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(
                             ChromeRenderTestRule.Component.UI_BROWSER_CONTENT_SUGGESTIONS_FEED)
-                    .setRevision(3)
+                    .setRevision(4)
                     .build();
 
     private Tab mTab;
@@ -188,7 +188,8 @@ public class FeedV2NewTabPageTest {
     @CommandLineFlags.Add({
         "force-prefers-no-reduced-motion",
         // Resampling can make scroll offsets non-deterministic so turn it off.
-        "disable-features=ResamplingScrollEvents",
+        // AndroidNavigationBlurTransitionAnimation suppresses input, so turn it off.
+        "disable-features=ResamplingScrollEvents,AndroidNavigationBlurTransitionAnimation",
         "hide-scrollbars"
     })
     @DisableIf.Build(

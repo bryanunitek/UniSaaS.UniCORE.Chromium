@@ -15,8 +15,8 @@
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
-@interface InactiveTabsViewController () <UINavigationBarDelegate,
-                                          LayoutStateObserver>
+@interface InactiveTabsViewController () <LayoutStateObserver,
+                                          UINavigationBarDelegate>
 
 // The embedded navigation bar.
 @property(nonatomic, readonly) UINavigationBar* navigationBar;
@@ -142,16 +142,11 @@
   [_bottomBar layoutIfNeeded];
   NSString* buttonTitle =
       l10n_util::GetNSString(IDS_IOS_INACTIVE_TABS_CLOSE_ALL_BUTTON);
-  __weak __typeof(self) weakSelf = self;
-  UIAction* closeAllInactiveAction =
-      [UIAction actionWithTitle:buttonTitle
-                          image:nil
-                     identifier:nil
-                        handler:^(UIAction* action) {
-                          [weakSelf didTapCloseAllInactive];
-                        }];
-  _closeAllInactiveButton =
-      [[UIBarButtonItem alloc] initWithPrimaryAction:closeAllInactiveAction];
+  _closeAllInactiveButton = [[UIBarButtonItem alloc]
+      initWithTitle:buttonTitle
+              style:UIBarButtonItemStylePlain
+             target:self
+             action:@selector(didTapCloseAllInactive)];
   _closeAllInactiveButton.accessibilityIdentifier =
       kInactiveTabGridCloseAllButtonIdentifier;
   UIBarButtonItem* flexibleSpace = [[UIBarButtonItem alloc]
@@ -217,7 +212,7 @@
 - (void)updateBottomBarConstraints {
   _bottomBarBottomConstraint.constant =
       self.layoutState.appBarPosition == AppBarPosition::kBottom
-          ? -kAppBarHeight
+          ? -AppBarHeightPortrait()
           : 0;
 }
 

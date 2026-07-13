@@ -143,7 +143,7 @@ class TabHoverCardInteractiveUiTest
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     // Because Ozone makes it impossible to target a point not in a window in
     // tests, instead target the extreme upper left of the browser window.
-    upper_left = browser()->window()->GetBounds().origin();
+    upper_left = browser()->GetWindow()->GetBounds().origin();
 #endif
     ui_controls::SendMouseMoveNotifyWhenDone(upper_left.x(), upper_left.y(),
                                              run_loop.QuitClosure());
@@ -894,7 +894,7 @@ IN_PROC_BROWSER_TEST_F(TabHoverCardSystemWebAppTest,
                        HideDomainNameFromHoverCard) {
   test_system_web_app_installation_->WaitForAppInstall();
   auto* const app_browser = web_app::LaunchWebAppBrowser(
-      browser()->profile(), test_system_web_app_installation_->GetAppId());
+      browser()->GetProfile(), test_system_web_app_installation_->GetAppId());
   const char kTabToHover[] = "Tab to hover";
 
   RunTestSequenceInContext(

@@ -32,6 +32,7 @@ import {VoiceLanguageController} from '../read_aloud/voice_language_controller.j
 import type {VoiceLanguageListener} from '../read_aloud/voice_language_controller.js';
 import {VoiceNotificationManager} from '../read_aloud/voice_notification_manager.js';
 import {getWordCount, isDistilledByReadability, minOverflowLengthToScroll} from '../shared/common.js';
+import {isPlayPauseShortcut} from '../shared/keyboard_util.js';
 import {ReadAnythingLogger, TimeFrom} from '../shared/read_anything_logger.js';
 
 import {getCss} from './app.css.js';
@@ -232,7 +233,7 @@ export class AppElement extends AppElementBase implements SpeechListener,
       }
 
       const selection = this.getSelection();
-      this.selectionController_.onSelectionChange(selection);
+      this.selectionController_.onSelectionChange(selection, this.$.container);
       const position = this.selectionController_.hasSelection() ?
           this.selectionController_.getCurrentSelectionStart() :
           null;
@@ -334,6 +335,11 @@ export class AppElement extends AppElementBase implements SpeechListener,
 
     chrome.readingMode.onRenderedTextMappingReady = () => {
       this.contentController_.onRenderedTextMappingReady();
+    };
+
+    chrome.readingMode.onMainFrameSameDocumentNavigation = (url: string) => {
+      assert(this.shadowRoot);
+      this.contentController_.scrollToAnchor(url, this.shadowRoot);
     };
   }
 
@@ -704,8 +710,21 @@ export class AppElement extends AppElementBase implements SpeechListener,
     this.setLineFocusStyle_();
   }
 
-  protected onThemeChange_() {
+  protected onThemeChange_(event: CustomEvent<{data: number}>) {
+    if (chrome.readingMode.isImprovedReadAloudEnabled && event.detail &&
+        event.detail.data !== undefined) {
+      this.settingsPrefs_ = {
+        ...this.settingsPrefs_,
+        theme: event.detail.data,
+      };
+    }
     this.styleUpdater_.setTheme();
+  }
+
+  protected onPresentationChange_(event: CustomEvent<{data: number}>) {
+    if (event.detail && event.detail.data !== undefined) {
+      this.presentationState_ = event.detail.data;
+    }
   }
 
   protected onResetToolbar_() {
@@ -793,12 +812,13 @@ export class AppElement extends AppElementBase implements SpeechListener,
   }
 
   protected onKeyDown_(e: KeyboardEvent) {
-    if (e.key === 'k') {
+    if (isPlayPauseShortcut(e)) {
       e.stopPropagation();
       e.preventDefault();
       this.speechController_.onPlayPauseKeyPress(this.$.container);
-    } else if (this.lineFocusController_.onKeyDown(
-                   e, this.$.container, this.$.appFlexParent.offsetHeight)) {
+    } else if (
+        this.lineFocusController_.onKeyDown(
+            e, this.$.container, this.$.appFlexParent.offsetHeight)) {
       e.stopPropagation();
       e.preventDefault();
     }

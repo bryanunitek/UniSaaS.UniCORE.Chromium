@@ -4,104 +4,23 @@
 
 #include "third_party/blink/renderer/core/css/parser/navigation_parser.h"
 
-#include "third_party/blink/renderer/bindings/core/v8/v8_union_urlpatterninit_usvstring.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_url_pattern_init.h"
 #include "third_party/blink/renderer/core/css/navigation_query.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
-#include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/css/properties/css_parsing_utils.h"
 #include "third_party/blink/renderer/core/route_matching/navigation_phase.h"
-#include "third_party/blink/renderer/core/url_pattern/url_pattern.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
-namespace {
-
-// Even if the URLPattern is parsed now, we need to keep the original string for
-// serialization. The URLPattern API deliberately doesn't provide this.
-struct URLPatternParseResult {
-  STACK_ALLOCATED();
-
- public:
-  URLPatternParseResult() = default;
-  URLPatternParseResult(URLPattern* url_pattern,
-                        const AtomicString& original_string)
-      : url_pattern(url_pattern), original_string(original_string) {
-    DCHECK(url_pattern);
-  }
-
-  bool IsSuccess() const { return !!url_pattern; }
-
-  URLPattern* url_pattern = nullptr;
-  AtomicString original_string;
-};
-
-URLPatternParseResult ParseURLPattern(CSSParserTokenStream& stream,
-                                      const Document& document) {
-  if (stream.Peek().GetType() != kFunctionToken ||
-      stream.Peek().Value() != "url-pattern") {
-    return URLPatternParseResult();
-  }
-
-  CSSParserTokenStream::BlockGuard guard(stream);
-  stream.ConsumeWhitespace();
-  if (stream.Peek().GetType() != kStringToken) {
-    return URLPatternParseResult();
-  }
-  const CSSParserToken& pattern = stream.ConsumeIncludingWhitespace();
-  if (pattern.GetType() == kBadStringToken || !stream.UncheckedAtEnd()) {
-    return URLPatternParseResult();
-  }
-
-  AtomicString pattern_str = pattern.Value().ToAtomicString();
-  V8URLPatternInput* url_pattern_input =
-      MakeGarbageCollected<V8URLPatternInput>(pattern_str);
-  return URLPatternParseResult(
-      URLPattern::Create(document.GetExecutionContext()->GetIsolate(),
-                         url_pattern_input, document.Url(), IGNORE_EXCEPTION),
-      pattern_str);
-}
-
-std::optional<NavigationPreposition> PrepositionFromIdent(
-    CSSParserToken token) {
-  DCHECK_EQ(token.GetType(), kIdentToken);
-  if (EqualIgnoringAsciiCase(token.Value(), "at")) {
-    return NavigationPreposition::kAt;
-  }
-  if (EqualIgnoringAsciiCase(token.Value(), "from")) {
-    return NavigationPreposition::kFrom;
-  }
-  if (EqualIgnoringAsciiCase(token.Value(), "to")) {
-    return NavigationPreposition::kTo;
-  }
-  if (EqualIgnoringAsciiCase(token.Value(), "with")) {
-    return NavigationPreposition::kWith;
-  }
-  return std::nullopt;
-}
-
-// https://drafts.csswg.org/css-navigation-1/#typedef-navigation-test
-// https://github.com/w3c/csswg-drafts/blob/main/css-view-transitions-2/two-phase-transition-explainer.md
-//
-// <navigation-test> = <navigation-location-test> | <navigation-type-test> |
-// preview
-//
-// <navigation-location-test> =
-//   <navigation-location-keyword> : <navigation-location>
-// <navigation-location-keyword> = at | from | to
-// <navigation-location> = <route-name> | <url-pattern()>
-// <route-name> = <dashed-ident>
-//
-// <navigation-type-test> = history : <navigation-type-keyword>
-// <navigation-type-keyword> = traverse | back | forward | reload
-NavigationTestExpression* ParseNavigationTest(CSSParserTokenStream& stream,
-                                              const Document& document) {
+NavigationTestExpression* NavigationParser::ParseNavigationTest(
+    CSSParserTokenStream& stream) {
   if (stream.Peek().GetType() != kIdentToken) {
     return nullptr;
   }
   CSSParserToken token = stream.ConsumeIncludingWhitespace();
   if (EqualIgnoringAsciiCase(token.Value(), "preview") &&
       RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled()) {
+    // TODO(crbug.com/436805487): Not in the spec.
     return MakeGarbageCollected<NavigationPreviewTestExpression>();
   }
   if (stream.Peek().GetType() != kColonToken) {
@@ -109,7 +28,8 @@ NavigationTestExpression* ParseNavigationTest(CSSParserTokenStream& stream,
   }
   stream.ConsumeIncludingWhitespace();
   if (EqualIgnoringAsciiCase(token.Value(), "history")) {
-    // <navigation-type-test>
+    // <navigation-type-test> = history : <navigation-type-keyword>
+    // <navigation-type-keyword> = traverse | back | forward | reload
     if (stream.Peek().GetType() != kIdentToken) {
       return nullptr;
     }
@@ -131,7 +51,8 @@ NavigationTestExpression* ParseNavigationTest(CSSParserTokenStream& stream,
   }
 
   if (EqualIgnoringAsciiCase(token.Value(), "phase")) {
-    // <navigation-phase-test>
+    // <navigation-phase-test> = phase : <navigation-phase-keyword>
+    // <navigation-phase-keyword> = loading | ready | committed
     if (stream.Peek().GetType() != kIdentToken) {
       return nullptr;
     }
@@ -150,44 +71,53 @@ NavigationTestExpression* ParseNavigationTest(CSSParserTokenStream& stream,
     return MakeGarbageCollected<NavigationPhaseTestExpression>(phase);
   }
 
+  if (EqualIgnoringAsciiCase(token.Value(), "between")) {
+    // <navigation-location-between-test> =
+    //   between : <route-location> and <route-location>
+    RouteLocation* route_location1 = ParseLocation(stream);
+    if (!route_location1) {
+      return nullptr;
+    }
+    stream.ConsumeWhitespace();
+    if (stream.Peek().GetType() != kIdentToken) {
+      return nullptr;
+    }
+    CSSParserToken and_token = stream.ConsumeIncludingWhitespace();
+    if (and_token.GetType() != kIdentToken ||
+        !EqualIgnoringAsciiCase(and_token.Value(), "and")) {
+      return nullptr;
+    }
+    RouteLocation* route_location2 = ParseLocation(stream);
+    if (!route_location2 || !stream.AtEnd()) {
+      return nullptr;
+    }
+
+    return MakeGarbageCollected<NavigationLocationBetweenTestExpression>(
+        *route_location1, *route_location2);
+  }
+
+  // <navigation-location-test> =
+  //   <navigation-location-keyword> : <route-location>
+  // <navigation-location-keyword> = at | from | to | with
+  // <route-location> = <route-name> | <url-pattern()>
+  // <route-name> = <dashed-ident>
   std::optional<NavigationPreposition> preposition =
-      PrepositionFromIdent(token);
+      ParsePrepositionIdent(token);
   if (!preposition) {
     return nullptr;
   }
 
-  AtomicString route_name;
-  URLPatternParseResult url_pattern_result;
-  if (stream.Peek().GetType() == kIdentToken) {
-    route_name = stream.ConsumeIncludingWhitespace().Value().ToAtomicString();
-  } else {
-    url_pattern_result = ParseURLPattern(stream, document);
-    if (!url_pattern_result.IsSuccess()) {
-      return nullptr;
-    }
-  }
-  if (!stream.AtEnd()) {
+  RouteLocation* route_location = ParseLocation(stream);
+  if (!route_location || !stream.AtEnd()) {
     return nullptr;
-  }
-
-  RouteLocation* route_location;
-  if (url_pattern_result.IsSuccess()) {
-    route_location = MakeGarbageCollected<RouteLocation>(
-        url_pattern_result.url_pattern, url_pattern_result.original_string);
-  } else {
-    DCHECK(!route_name.empty());
-    route_location = MakeGarbageCollected<RouteLocation>(route_name);
   }
 
   return MakeGarbageCollected<NavigationLocationTestExpression>(*route_location,
                                                                 *preposition);
 }
 
-}  // anonymous namespace
-
-NavigationQuery* NavigationParser::ParseQuery(CSSParserTokenStream& stream,
-                                              const Document& document) {
-  NavigationParser parser(document);
+NavigationQuery* NavigationParser::ParseQuery(CSSParserTokenStream& stream) {
+  NavigationParser parser;
   const ConditionalExpNode* root = parser.ConsumeCondition(stream);
   if (!root) {
     return nullptr;
@@ -195,30 +125,72 @@ NavigationQuery* NavigationParser::ParseQuery(CSSParserTokenStream& stream,
   return MakeGarbageCollected<NavigationQuery>(*root);
 }
 
-RouteLocation* NavigationParser::ParseLocation(CSSParserTokenStream& stream,
-                                               const Document& document) {
-  if (stream.Peek().GetType() == kIdentToken) {
+RouteLocation* NavigationParser::ParseLocation(CSSParserTokenStream& stream) {
+  if (css_parsing_utils::IsDashedIdent(stream.Peek())) {
+    // <route-name>
     AtomicString route_name(
         stream.ConsumeIncludingWhitespace().Value().ToString());
-    return MakeGarbageCollected<RouteLocation>(route_name);
+    return MakeGarbageCollected<RouteLocation>(RouteLocation::kRouteName,
+                                               route_name);
   }
-  URLPatternParseResult result = ParseURLPattern(stream, document);
-  if (result.IsSuccess()) {
-    return MakeGarbageCollected<RouteLocation>(result.url_pattern,
-                                               result.original_string);
+
+  RouteLocation::Type type;
+  AtomicString value;
+  if (stream.Peek().GetType() == kUrlToken) {
+    // Unquoted url().
+    CSSParserToken token = stream.ConsumeIncludingWhitespace();
+    type = RouteLocation::kUrl;
+    value = token.Value().ToAtomicString();
+  } else {
+    // url-pattern() or quoted url().
+    if (stream.Peek().GetType() != kFunctionToken) {
+      return nullptr;
+    }
+    const AtomicString arg(stream.Peek().Value());
+    if (EqualIgnoringAsciiCase(arg, "url-pattern")) {
+      type = RouteLocation::kUrlPattern;
+    } else if (EqualIgnoringAsciiCase(arg, "url")) {
+      type = RouteLocation::kUrl;
+    } else {
+      return nullptr;
+    }
+
+    CSSParserTokenStream::BlockGuard guard(stream);
+    stream.ConsumeWhitespace();
+    if (stream.Peek().GetType() != kStringToken) {
+      return nullptr;
+    }
+    const CSSParserToken& token = stream.ConsumeIncludingWhitespace();
+    if (token.GetType() == kBadStringToken || !stream.UncheckedAtEnd()) {
+      return nullptr;
+    }
+    value = token.Value().ToAtomicString();
   }
-  return nullptr;
+
+  return MakeGarbageCollected<RouteLocation>(type, value);
 }
 
 std::optional<NavigationPreposition> NavigationParser::ParsePrepositionIdent(
     CSSParserToken token) {
-  return PrepositionFromIdent(token);
+  DCHECK_EQ(token.GetType(), kIdentToken);
+  if (EqualIgnoringAsciiCase(token.Value(), "at")) {
+    return NavigationPreposition::kAt;
+  }
+  if (EqualIgnoringAsciiCase(token.Value(), "from")) {
+    return NavigationPreposition::kFrom;
+  }
+  if (EqualIgnoringAsciiCase(token.Value(), "to")) {
+    return NavigationPreposition::kTo;
+  }
+  if (EqualIgnoringAsciiCase(token.Value(), "with")) {
+    return NavigationPreposition::kWith;
+  }
+  return std::nullopt;
 }
 
 const ConditionalExpNode* NavigationParser::ConsumeLeaf(
     CSSParserTokenStream& stream) {
-  NavigationTestExpression* navigation_test =
-      ParseNavigationTest(stream, document_);
+  NavigationTestExpression* navigation_test = ParseNavigationTest(stream);
   if (!navigation_test) {
     return nullptr;
   }

@@ -14,6 +14,7 @@
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
@@ -28,6 +29,7 @@
 #include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/navigator/browser_navigator_params_utils.h"
+#include "chrome/browser/ui/navigator/browser_navigator_tab_modal.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
@@ -37,7 +39,9 @@
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/captive_portal/core/buildflags.h"
@@ -187,7 +191,7 @@ Browser* BrowserNavigatorTest::CreateEmptyBrowserForApp(Profile* profile) {
 
 std::unique_ptr<WebContents> BrowserNavigatorTest::CreateWebContents(
     bool initialize_renderer) {
-  WebContents::CreateParams create_params(browser()->profile());
+  WebContents::CreateParams create_params(browser()->GetProfile());
   create_params.desired_renderer_state =
       initialize_renderer
           ? WebContents::CreateParams::kInitializeAndWarmupRendererProcess
@@ -238,11 +242,11 @@ void BrowserNavigatorTest::RunDoNothingIfIncognitoIsForcedTest(
   Browser* browser = CreateIncognitoBrowser();
 
   // Set kIncognitoModeAvailability to FORCED.
-  PrefService* prefs1 = browser->profile()->GetPrefs();
+  PrefService* prefs1 = browser->GetProfile()->GetPrefs();
   prefs1->SetInteger(
       policy::policy_prefs::kIncognitoModeAvailability,
       static_cast<int>(policy::IncognitoModeAvailability::kForced));
-  PrefService* prefs2 = browser->profile()->GetOriginalProfile()->GetPrefs();
+  PrefService* prefs2 = browser->GetProfile()->GetOriginalProfile()->GetPrefs();
   prefs2->SetInteger(
       policy::policy_prefs::kIncognitoModeAvailability,
       static_cast<int>(policy::IncognitoModeAvailability::kForced));
@@ -428,7 +432,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   // Open a foreground tab in a window that cannot open popups when there is an
   // existing compatible window somewhere else that they can be opened within.
   Browser* popup =
-      CreateEmptyBrowserForType(Browser::TYPE_POPUP, browser()->profile());
+      CreateEmptyBrowserForType(Browser::TYPE_POPUP, browser()->GetProfile());
   NavigateParams params(MakeNavigateParams(popup));
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   Navigate(&params);
@@ -461,7 +465,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   // profile is a quick and dirty way of achieving this.
   Browser* popup = CreateEmptyBrowserForType(
       Browser::TYPE_POPUP,
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+      browser()->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
   NavigateParams params(MakeNavigateParams(popup));
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   Navigate(&params);
@@ -485,9 +489,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
       1,
       params.browser->GetBrowserForMigrationOnly()->tab_strip_model()->count());
   EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()->is_type_normal());
-  EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()
-                  ->window()
-                  ->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
 }
 
 // This test verifies that navigating with WindowOpenDisposition = NEW_POPUP
@@ -503,12 +505,10 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopup) {
   EXPECT_NE(browser(), params.browser);
 #if 0
   // TODO(stevenjb): Enable this test. See: crbug.com/41360906
-  EXPECT_TRUE(browser->window()->IsActive());
+  EXPECT_TRUE(browser->GetWindow()->IsActive());
 #endif
   EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()->is_type_popup());
-  EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()
-                  ->window()
-                  ->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
 
   // We should have two windows, the browser() provided by the framework and the
   // new popup window.
@@ -534,9 +534,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopup_ExtensionId) {
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(
       params.browser->GetBrowserForMigrationOnly()->is_type_app_popup());
-  EXPECT_FALSE(params.browser->GetBrowserForMigrationOnly()
-                   ->window()
-                   ->IsToolbarVisible());
+  EXPECT_FALSE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
 
   // We should have two windows, the browser() provided by the framework and the
   // new popup window.
@@ -564,9 +562,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupFromPopup) {
   // Navigate() should have opened a new normal popup window.
   EXPECT_NE(params1.browser, params2.browser);
   EXPECT_TRUE(params2.browser->GetBrowserForMigrationOnly()->is_type_popup());
-  EXPECT_TRUE(params2.browser->GetBrowserForMigrationOnly()
-                  ->window()
-                  ->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(params2.browser)->IsToolbarVisible());
 
   // We should have three windows, the browser() provided by the framework,
   // the first popup window, and the second popup window.
@@ -584,7 +580,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupFromPopup) {
 // from an app frame results in a new Browser with TYPE_APP_POPUP.
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
                        Disposition_NewPopupFromAppWindow) {
-  Browser* app_browser = CreateEmptyBrowserForApp(browser()->profile());
+  Browser* app_browser = CreateEmptyBrowserForApp(browser()->GetProfile());
   NavigateParams params(MakeNavigateParams(app_browser));
   params.disposition = WindowOpenDisposition::NEW_POPUP;
   params.window_features.bounds = gfx::Rect(0, 0, 200, 200);
@@ -595,9 +591,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(
       params.browser->GetBrowserForMigrationOnly()->is_type_app_popup());
-  EXPECT_FALSE(params.browser->GetBrowserForMigrationOnly()
-                   ->window()
-                   ->IsToolbarVisible());
+  EXPECT_FALSE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
 
   // We should now have three windows, the app window, the app popup it created,
   // and the original browser() provided by the framework.
@@ -613,7 +607,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
 // This test verifies that navigating with WindowOpenDisposition = NEW_POPUP
 // from an app popup results in a new Browser also of TYPE_APP_POPUP.
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupFromAppPopup) {
-  Browser* app_browser = CreateEmptyBrowserForApp(browser()->profile());
+  Browser* app_browser = CreateEmptyBrowserForApp(browser()->GetProfile());
   // Open an app popup.
   NavigateParams params1(MakeNavigateParams(app_browser));
   params1.disposition = WindowOpenDisposition::NEW_POPUP;
@@ -630,9 +624,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupFromAppPopup) {
   EXPECT_NE(params1.browser, params2.browser);
   EXPECT_TRUE(
       params2.browser->GetBrowserForMigrationOnly()->is_type_app_popup());
-  EXPECT_FALSE(params2.browser->GetBrowserForMigrationOnly()
-                   ->window()
-                   ->IsToolbarVisible());
+  EXPECT_FALSE(BrowserWindow::FromBrowser(params2.browser)->IsToolbarVisible());
 
   // We should now have four windows, the app window, the first app popup,
   // the second app popup, and the original browser() provided by the framework.
@@ -667,12 +659,10 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupUnfocused) {
   // Navigate() should have opened a new, unfocused, popup window.
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()->is_type_popup());
-  EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()
-                  ->window()
-                  ->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
 #if 0
 // TODO(stevenjb): Enable this test. See: crbug.com/41360906
-  EXPECT_FALSE(p.browser->window()->IsActive());
+  EXPECT_FALSE(p.browser->GetWindow()->IsActive());
 #endif
 }
 
@@ -691,11 +681,8 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupTrusted) {
   // toolbar.
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()->is_type_popup());
-  EXPECT_TRUE(
-      params.browser->GetBrowserForMigrationOnly()->is_trusted_source());
-  EXPECT_FALSE(params.browser->GetBrowserForMigrationOnly()
-                   ->window()
-                   ->IsToolbarVisible());
+  EXPECT_TRUE(WindowFeatureController::From(params.browser)->IsTrustedSource());
+  EXPECT_FALSE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
 }
 
 #if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
@@ -716,9 +703,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   // toolbar.
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()->is_type_popup());
-  EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()
-                  ->window()
-                  ->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
   EXPECT_TRUE(captive_portal::CaptivePortalTabHelper::FromWebContents(
                   params.navigated_or_inserted_contents)
                   ->is_captive_portal_window());
@@ -729,12 +714,15 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
 // and is_tab_modal_popup_deprecated = true results in a new WebContents that is
 // a popup and behaves like a tab modal.
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupTabModal) {
-  NavigateParams params(MakeNavigateParams());
-  params.disposition = WindowOpenDisposition::NEW_POPUP;
-  params.is_tab_modal_popup_deprecated = true;
-  params.window_features.bounds = gfx::Rect(0, 0, 200, 200);
-  // Wait for new popup to load and gain focus.
-  ui_test_utils::NavigateToURL(&params);
+  auto handle = BrowserNavigatorTabModal::ShowForTesting(
+      GetGoogleURL(), *browser()->GetActiveTabInterface()->GetContents(),
+      gfx::Size(200, 200));
+  ASSERT_TRUE(handle);
+  content::WebContents* const contents = handle->GetWebContents();
+  ASSERT_NE(nullptr, contents);
+  content::WaitForLoadStop(contents);
+  const auto* const popup =
+      tabs::TabModel::GetFromContents(contents)->GetBrowserWindowInterface();
 
   // Add a new tab.
   chrome::AddTabAt(browser(), GURL("about:blank"), -1, true);
@@ -743,18 +731,16 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupTabModal) {
   browser()->tab_strip_model()->ActivateTabAt(1);
 
   // Verify the popup window is hidden.
-  EXPECT_FALSE(params.browser->GetWindow()->IsVisible());
+  EXPECT_FALSE(popup->GetWindow()->IsVisible());
 
   // Switch back to the original tab.
   browser()->tab_strip_model()->ActivateTabAt(0);
 
   // Verify the popup window is visible again.
-  EXPECT_TRUE(params.browser->GetWindow()->IsVisible());
+  EXPECT_TRUE(popup->GetWindow()->IsVisible());
 
   // Verify the popup window is set as tab model popup.
-  EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()
-                  ->window()
-                  ->IsTabModalPopupDeprecated());
+  EXPECT_TRUE(popup->IsTabModalPopup());
 }
 
 // This test verifies that navigating with WindowOpenDisposition = NEW_WINDOW
@@ -767,9 +753,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewWindow) {
   // Navigate() should have opened a new toplevel window.
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()->is_type_normal());
-  EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()
-                  ->window()
-                  ->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
 
   // We should now have two windows, the browser() provided by the framework and
   // the new normal window.
@@ -902,7 +886,8 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, SaveAfterFocusTabSwitchTest) {
   NavigateHelper(second_url, browser(),
                  WindowOpenDisposition::NEW_FOREGROUND_TAB, true);
 
-  LocationBar* location_bar = browser()->window()->GetLocationBar();
+  LocationBar* location_bar =
+      BrowserWindow::FromBrowser(browser())->GetLocationBar();
   location_bar->FocusLocation(/*is_user_initiated=*/true,
                               /*clear_focus_if_failed=*/false);
 
@@ -1114,7 +1099,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, MAYBE_Disposition_Incognito) {
   // Navigate() should have opened a new toplevel incognito window.
   EXPECT_NE(browser(), params.browser);
   EXPECT_EQ(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
+      browser()->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
       params.browser->GetProfile());
 
   // |source_contents| should be set to NULL because the profile for the new
@@ -1135,7 +1120,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, MAYBE_Disposition_Incognito) {
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_IncognitoRefocus) {
   Browser* incognito_browser = CreateEmptyBrowserForType(
       Browser::TYPE_NORMAL,
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+      browser()->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true));
   NavigateParams params(MakeNavigateParams());
   params.disposition = WindowOpenDisposition::OFF_THE_RECORD;
   Navigate(&params);
@@ -1193,9 +1178,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, DISABLED_TargetContents_Popup) {
   // Navigate() should have opened a new popup window.
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()->is_type_popup());
-  EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()
-                  ->window()
-                  ->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(params.browser)->IsToolbarVisible());
 
   // The web platform is weird. The window bounds specified in
   // `params.window_features.bounds` are used as follows:
@@ -1626,7 +1609,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   params.url = chrome::ChromeUINewTabURLAsGURL();
   ui_test_utils::NavigateToURL(&params);
   EXPECT_EQ(1, browser()->tab_strip_model()->count());
-  EXPECT_EQ(ntp_test_utils::GetFinalNtpUrl(browser()->profile()),
+  EXPECT_EQ(ntp_test_utils::GetFinalNtpUrl(browser()->GetProfile()),
             browser()
                 ->tab_strip_model()
                 ->GetActiveWebContents()
@@ -1801,7 +1784,8 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
                                   ui::PAGE_TRANSITION_LINK);
     observer.Wait();
   }
-  Browser* app_browser = CreateBrowserForApp("TestApp", browser()->profile());
+  Browser* app_browser =
+      CreateBrowserForApp("TestApp", browser()->GetProfile());
 
   // This load should cause a window and tab switch.
   ShowSingletonTab(app_browser, GetSettingsURL());
@@ -1900,7 +1884,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, NavigateWithoutBrowser) {
   // First navigate using the profile of the existing browser window, and
   // check that the window is reused.
-  NavigateParams params(browser()->profile(), GetGoogleURL(),
+  NavigateParams params(browser()->GetProfile(), GetGoogleURL(),
                         ui::PAGE_TRANSITION_LINK);
   ui_test_utils::NavigateToURL(&params);
   EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
@@ -1908,7 +1892,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, NavigateWithoutBrowser) {
   // Now navigate using the incognito profile and check that a new window
   // is created.
   NavigateParams params_incognito(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
+      browser()->GetProfile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
       GetGoogleURL(), ui::PAGE_TRANSITION_LINK);
   ui_test_utils::NavigateToURL(&params_incognito);
   EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
@@ -2039,18 +2023,47 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   EXPECT_EQ(GURL(expected_url).spec(),
             params.navigated_or_inserted_contents->GetURL().spec());
   // Check the omnibox text. It should have escaped RTL with unescaped text.
-  LocationBar* location_bar = browser()->window()->GetLocationBar();
+  LocationBar* location_bar =
+      BrowserWindow::FromBrowser(browser())->GetLocationBar();
   OmniboxView* omnibox_view = location_bar->GetOmniboxView();
   EXPECT_EQ(base::UTF8ToUTF16(expected_url), omnibox_view->GetText());
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
+// Dual-mode fixture for the Document Picture-in-Picture creation tests. The
+// bool parameter toggles `kDocumentPipStandaloneWindow`, so each test runs
+// against both the legacy Browser-backed path (param == false) and the
+// standalone `DocumentPipHost` path (param == true). See
+// chrome/browser/ui/views/picture_in_picture for the standalone host.
+class BrowserNavigatorPictureInPictureTest
+    : public BrowserNavigatorTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  BrowserNavigatorPictureInPictureTest() {
+    pip_feature_list_.InitWithFeatureState(
+        features::kDocumentPipStandaloneWindow, standalone_enabled());
+  }
+
+ protected:
+  bool standalone_enabled() const { return GetParam(); }
+
+ private:
+  base::test::ScopedFeatureList pip_feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         BrowserNavigatorPictureInPictureTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Standalone" : "BrowserBacked";
+                         });
+
+IN_PROC_BROWSER_TEST_P(BrowserNavigatorPictureInPictureTest,
                        Disposition_PictureInPicture_Open) {
   // Create the params for the PiP request.
   auto pip_options = blink::mojom::PictureInPictureWindowOptions::New();
 
   // The WebContents holds the parameters from the PiP request.
-  WebContents::CreateParams web_contents_params(browser()->profile());
+  WebContents::CreateParams web_contents_params(browser()->GetProfile());
   web_contents_params.picture_in_picture_options = *pip_options;
 
   // Opening a picture in picture window should create a new browser.
@@ -2069,6 +2082,20 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   params.contents_to_insert = WebContents::Create(web_contents_params);
   Navigate(&params);
 
+  if (standalone_enabled()) {
+    // Standalone path: no Browser is created. The window is hosted by a
+    // DocumentPipHost and driven through the PictureInPictureWindowManager, so
+    // Navigate() returns without a Browser. Assert via the manager's public
+    // API to avoid depending on the views/picture_in_picture target.
+    EXPECT_EQ(nullptr, params.browser);
+    auto* manager = PictureInPictureWindowManager::GetInstance();
+    ASSERT_NE(nullptr, manager->GetChildWebContents());
+    EXPECT_NE(tab, manager->GetChildWebContents());
+    EXPECT_TRUE(PictureInPictureWindowManager::IsChildWebContents(
+        manager->GetChildWebContents()));
+    return;
+  }
+
   // Should not reuse the browser.
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(params.browser->GetBrowserForMigrationOnly()
@@ -2084,13 +2111,13 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   EXPECT_DOUBLE_EQ(1.0, aspect_ratio);
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
+IN_PROC_BROWSER_TEST_P(BrowserNavigatorPictureInPictureTest,
                        Disposition_PictureInPicture_OpenWithWidthAndHeight) {
   // Set width/height with equivalent aspect ratio of 1.0.
   auto pip_options = blink::mojom::PictureInPictureWindowOptions::New();
   pip_options->width = 500;
   pip_options->height = 500;
-  WebContents::CreateParams web_contents_params(browser()->profile());
+  WebContents::CreateParams web_contents_params(browser()->GetProfile());
   web_contents_params.picture_in_picture_options = *pip_options;
 
   // Opening a picture in picture window should create a new browser.
@@ -2111,10 +2138,21 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   // The bounds may have small adjustments for window decorations, since the
   // requested size is the inner size.  We can't get the inner size easily here,
   // so just verify that the aspect ratio is closer to 1.0 than 0.5.
-  const gfx::Rect override_bounds =
-      params.browser->GetBrowserForMigrationOnly()->override_bounds();
-  float expected_aspect_ratio =
-      static_cast<float>(override_bounds.width()) / override_bounds.height();
+  gfx::Rect bounds;
+  if (standalone_enabled()) {
+    // Standalone path: the aspect-ratio logic lives on the DocumentPipHost, so
+    // validate the PiP window's outer bounds via the manager. These include
+    // platform decorations, hence the same loose tolerance as the Browser path.
+    std::optional<gfx::Rect> pip_bounds =
+        PictureInPictureWindowManager::GetInstance()
+            ->GetPictureInPictureWindowBoundsInScreen();
+    ASSERT_TRUE(pip_bounds.has_value());
+    bounds = *pip_bounds;
+  } else {
+    bounds = params.browser->GetBrowserForMigrationOnly()->override_bounds();
+  }
+  const float expected_aspect_ratio =
+      static_cast<float>(bounds.width()) / bounds.height();
   EXPECT_NEAR(expected_aspect_ratio, 1.0f, 0.2);
 }
 
@@ -2123,7 +2161,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   // Make sure that attempting to open a picture in picture window from a
   // picture in picture window fails.
   Browser* pip = CreateEmptyBrowserForType(Browser::TYPE_PICTURE_IN_PICTURE,
-                                           browser()->profile());
+                                           browser()->GetProfile());
   NavigateParams params = MakeNavigateParams(pip);
   params.disposition = WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;
 
@@ -2145,7 +2183,7 @@ IN_PROC_BROWSER_TEST_F(
     Disposition_PictureInPicture_CantWithoutASourceContents) {
   // Opening a picture-in-picture window without a source contents should fail.
   Browser* pip = CreateEmptyBrowserForType(Browser::TYPE_PICTURE_IN_PICTURE,
-                                           browser()->profile());
+                                           browser()->GetProfile());
   NavigateParams params = MakeNavigateParams(pip);
   params.disposition = WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;
   params.source_contents = nullptr;
@@ -2158,7 +2196,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   // Disallow document PiP windows from opening from a window with about:blank
   // in the omnibox
   Browser* pip = CreateEmptyBrowserForType(Browser::TYPE_PICTURE_IN_PICTURE,
-                                           browser()->profile());
+                                           browser()->GetProfile());
   NavigateParams params = MakeNavigateParams(pip);
   params.disposition = WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;
 
@@ -2174,7 +2212,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   auto pip_options = blink::mojom::PictureInPictureWindowOptions::New();
 
   // The WebContents holds the parameters from the PiP request.
-  WebContents::CreateParams web_contents_params(browser()->profile());
+  WebContents::CreateParams web_contents_params(browser()->GetProfile());
   web_contents_params.picture_in_picture_options = *pip_options;
 
   // Opening a picture in picture window should create a new browser.
@@ -2282,7 +2320,7 @@ IN_PROC_BROWSER_TEST_F(MAYBE_BrowserNavigatorTestWithMockScreen,
   auto pip_options = blink::mojom::PictureInPictureWindowOptions::New();
   pip_options->width = 500;
   pip_options->height = 400;
-  WebContents::CreateParams web_contents_params(browser()->profile());
+  WebContents::CreateParams web_contents_params(browser()->GetProfile());
   web_contents_params.picture_in_picture_options = *pip_options;
 
   // Ensure we have the two displays.
@@ -2293,7 +2331,7 @@ IN_PROC_BROWSER_TEST_F(MAYBE_BrowserNavigatorTestWithMockScreen,
   {
 #if BUILDFLAG(IS_CHROMEOS)
     // Put the opener on display 1.
-    browser()->window()->SetBounds(display1.work_area());
+    browser()->GetWindow()->SetBounds(display1.work_area());
 #else
     // Make the MockScreen report the opener as being on display 1.
     mock_screen().set_display_nearest_window(display1);
@@ -2327,7 +2365,7 @@ IN_PROC_BROWSER_TEST_F(MAYBE_BrowserNavigatorTestWithMockScreen,
   {
 #if BUILDFLAG(IS_CHROMEOS)
     // Put the opener on display 2.
-    browser()->window()->SetBounds(display2.work_area());
+    browser()->GetWindow()->SetBounds(display2.work_area());
 #else
     // Make the MockScreen report the opener as being on display 2.
     mock_screen().set_display_nearest_window(display2);
@@ -2430,8 +2468,10 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, VisibleUrlInNewTab) {
   EXPECT_EQ(slow_url, new_contents->GetVisibleURL());
 
   {
-    std::u16string omnibox_text =
-        browser()->window()->GetLocationBar()->GetOmniboxView()->GetText();
+    std::u16string omnibox_text = BrowserWindow::FromBrowser(browser())
+                                      ->GetLocationBar()
+                                      ->GetOmniboxView()
+                                      ->GetText();
     EXPECT_NE(url::kAboutBlankURL16, omnibox_text);
     EXPECT_TRUE(omnibox_text.find(base::UTF8ToUTF16(slow_url.host())) !=
                 std::u16string::npos);
@@ -2444,8 +2484,10 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, VisibleUrlInNewTab) {
 
   // The visible URL and omnibox should now revert to `about:blank`.
   EXPECT_EQ(GURL(), new_contents->GetVisibleURL());
-  EXPECT_EQ(url::kAboutBlankURL16,
-            browser()->window()->GetLocationBar()->GetOmniboxView()->GetText());
+  EXPECT_EQ(url::kAboutBlankURL16, BrowserWindow::FromBrowser(browser())
+                                       ->GetLocationBar()
+                                       ->GetOmniboxView()
+                                       ->GetText());
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewSplitView) {
@@ -2491,6 +2533,26 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   EXPECT_EQ(source_contents, returned_contents);
   // No new tab should have been created; the other pane was navigated.
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
+                       Disposition_NewSplitView_ActiveTabInGroup) {
+  chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), -1,
+                   /*foreground=*/false);
+  ASSERT_EQ(2, browser()->GetTabStripModel()->count());
+  browser()->GetTabStripModel()->AddToNewGroup({0, 1});
+
+  browser()->GetTabStripModel()->ActivateTabAt(0);
+  ASSERT_EQ(0, browser()->GetTabStripModel()->active_index());
+
+  NavigateParams params(MakeNavigateParams());
+  params.disposition = WindowOpenDisposition::NEW_SPLIT_VIEW;
+  Navigate(&params);
+
+  // The newly added split tab should be the active tab.
+  ASSERT_TRUE(params.navigated_or_inserted_contents);
+  EXPECT_EQ(params.navigated_or_inserted_contents,
+            browser()->GetTabStripModel()->GetActiveWebContents());
 }
 
 }  // namespace

@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/callback_list.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
@@ -31,6 +31,7 @@
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "base/version.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "components/component_updater/component_updater_paths.h"
 #include "components/component_updater/component_updater_service.h"
@@ -124,7 +125,7 @@ base::FilePath GetComponentInstallDirectory() {
 
 void GetComponentFreeDiskSpace(
     const base::FilePath& path,
-    base::OnceCallback<void(std::optional<base::ByteCount>)> callback) {
+    base::OnceCallback<void(std::optional<base::ByteSize>)> callback) {
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::MayBlock(),
@@ -133,13 +134,13 @@ void GetComponentFreeDiskSpace(
            ? base::TaskPriority::USER_VISIBLE
            : base::TaskPriority::BEST_EFFORT},
       base::BindOnce(
-          [](const base::FilePath& path) -> std::optional<base::ByteCount> {
-            std::optional<int64_t> amount_of_free_disk_space =
-                base::SysInfo::AmountOfFreeDiskSpace(path);
-            if (!amount_of_free_disk_space) {
+          [](const base::FilePath& path) -> std::optional<base::ByteSize> {
+            std::optional<base::SysInfo::DiskSpaceInfo> disk_space =
+                base::SysInfo::AmountOfDiskSpace(path);
+            if (!disk_space) {
               return std::nullopt;
             }
-            return base::ByteCount(*amount_of_free_disk_space);
+            return disk_space->available;
           },
           path),
       std::move(callback));
@@ -273,9 +274,17 @@ class OnDeviceModelComponentStateManagerDelegate final
   }
 
   void GetFreeDiskSpace(const base::FilePath& path,
-                        base::OnceCallback<void(std::optional<base::ByteCount>)>
+                        base::OnceCallback<void(std::optional<base::ByteSize>)>
                             callback) override {
+#if BUILDFLAG(CHROME_FOR_TESTING)
+    // No need for free disk space check in CfT, so invoke the callback
+    // asynchronously so that large size on device components are updated after
+    // all other components.
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), base::ByteSize::Max()));
+#else
     GetComponentFreeDiskSpace(path, std::move(callback));
+#endif
   }
 
   void RegisterInstaller(
@@ -498,7 +507,7 @@ class ManifestAssetManagerDelegateImpl final
     return subscription;
   }
 
-  void GetFreeDiskSpace(base::OnceCallback<void(std::optional<base::ByteCount>)>
+  void GetFreeDiskSpace(base::OnceCallback<void(std::optional<base::ByteSize>)>
                             callback) const override {
     GetComponentFreeDiskSpace(GetComponentInstallDirectory(),
                               std::move(callback));

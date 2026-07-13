@@ -4,6 +4,9 @@
 
 #include "ui/ozone/platform/x11/x11_window.h"
 #include "ui/platform_window/extensions/x11_extension_delegate.h"
+#include "base/nix/xdg_util.h"
+#include "ui/base/x/x11_util.h"
+#include "ui/gfx/x/atom_cache.h"
 
 #include <memory>
 #include <utility>
@@ -557,6 +560,226 @@ TEST_F(X11WindowOzoneTest, SetOverrideRedirectSelfDeleteUaf) {
                         "synchronously from SetOverrideRedirect";
 
   connection->DestroyWindow({new_parent});
+}
+
+// Verifies that X11Window::DispatchUiEvent() does not cause a use-after-free
+// if the located_events_grabber is synchronously deleted during geometry fetch
+// (GetBoundsInPixels()).
+TEST_F(X11WindowOzoneTest, DispatchUiEventGrabberFreedDuringGeometryFetch) {
+  // Setup window1 (grabber)
+  testing::NiceMock<MockPlatformWindowDelegate> delegate1;
+  gfx::AcceleratedWidget widget1;
+  constexpr gfx::Rect bounds1(30, 80, 800, 600);
+  std::unique_ptr<PlatformWindow> window1 =
+      CreatePlatformWindow(&delegate1, bounds1, &widget1, nullptr);
+
+  // Setup window2 (target)
+  testing::NiceMock<MockPlatformWindowDelegate> delegate2;
+  gfx::AcceleratedWidget widget2;
+  constexpr gfx::Rect bounds2(900, 80, 800, 600);
+  std::unique_ptr<PlatformWindow> window2 =
+      CreatePlatformWindow(&delegate2, bounds2, &widget2, nullptr);
+
+  auto* connection = x11::Connection::Get();
+  auto xwindow1 = static_cast<x11::Window>(widget1);
+
+  // Set window1 as the grabber.
+  window1->SetCapture();
+  EXPECT_TRUE(window1->HasCapture());
+
+  // Force the grabber window's GeometryCache (and its parent chain) to
+  // become Ready.
+  window1->GetBoundsInPixels();
+
+  // Create a real parent window at a non-zero offset so that after reparenting,
+  // the absolute origin changes. override_redirect avoids any WM interference.
+  x11::Window new_parent = connection->GenerateId<x11::Window>();
+  connection->CreateWindow({
+      .wid = new_parent,
+      .parent = connection->default_root(),
+      .x = 200,
+      .y = 200,
+      .width = 1000,
+      .height = 1000,
+      .c_class = x11::WindowClass::InputOnly,
+      .override_redirect = x11::Bool32(true),
+  });
+
+  // Synthesize the ReparentNotify WM reparent event.
+  x11::ReparentNotifyEvent reparent{};
+  reparent.event = xwindow1;
+  reparent.window = xwindow1;
+  reparent.parent = new_parent;
+  reparent.x = 0;
+  reparent.y = 0;
+  x11::Event reparent_event(/*send_event=*/false, std::move(reparent));
+  connection->DispatchEvent(reparent_event);
+
+  // Arm the grabber window's delegate to free window1 during OnBoundsChanged.
+  bool armed = true;
+  bool freed = false;
+  EXPECT_CALL(delegate1, OnBoundsChanged(_))
+      .WillRepeatedly([&](const PlatformWindowDelegate::BoundsChange&) {
+        if (armed) {
+          armed = false;
+          freed = true;
+          window1.reset();
+        }
+      });
+
+  // Prepare a located event (e.g. mouse press) targeting window2 (widget2).
+  ScopedXI2Event xi_event;
+  xi_event.InitGenericButtonEvent(kPointerDeviceId, EventType::kMousePressed,
+                                  gfx::Point(100, 100), EF_NONE);
+
+  // Dispatch the event to window2.
+  DispatchXEvent(xi_event, widget2);
+
+  // Verify that window1 was indeed synchronously freed during the geometry
+  // fetch.
+  EXPECT_TRUE(freed) << "grabber delegate was never invoked synchronously";
+
+  connection->DestroyWindow({new_parent});
+}
+
+// Verifies that X11Window::DispatchEvent() does not cause a use-after-free
+// if the window is synchronously deleted during MouseOnWindow().
+TEST_F(X11WindowOzoneTest, DispatchEventSelfFreedDuringMouseOnWindow) {
+  testing::NiceMock<MockPlatformWindowDelegate> delegate;
+  gfx::AcceleratedWidget widget;
+  constexpr gfx::Rect bounds(30, 80, 800, 600);
+  std::unique_ptr<PlatformWindow> window =
+      CreatePlatformWindow(&delegate, bounds, &widget, nullptr);
+
+  auto* connection = x11::Connection::Get();
+  auto xwindow = static_cast<x11::Window>(widget);
+
+  // Step 1: Force the X11Window's GeometryCache (and its parent chain) to
+  // become Ready and record last_notified_geometry_.
+  window->GetBoundsInPixels();
+
+  // Step 2: Create a real parent window at a non-zero offset so that after
+  // reparenting, only the absolute origin changes.
+  x11::Window new_parent = connection->GenerateId<x11::Window>();
+  connection->CreateWindow({
+      .wid = new_parent,
+      .parent = connection->default_root(),
+      .x = 200,
+      .y = 200,
+      .width = 1000,
+      .height = 1000,
+      .c_class = x11::WindowClass::InputOnly,
+      .override_redirect = x11::Bool32(true),
+  });
+
+  // Step 3: Synthesize the ReparentNotify WM reparent event.
+  x11::ReparentNotifyEvent reparent{};
+  reparent.event = xwindow;
+  reparent.window = xwindow;
+  reparent.parent = new_parent;
+  reparent.x = 0;
+  reparent.y = 0;
+  x11::Event reparent_event(/*send_event=*/false, std::move(reparent));
+  connection->DispatchEvent(reparent_event);
+
+  // Step 4: Mock delegate->OnCursorUpdate() to call
+  // window->GetBoundsInPixels(), modelling production
+  // WindowTreeHostPlatform::OnCursorUpdate() -> etc.
+  ON_CALL(delegate, OnCursorUpdate()).WillByDefault([&]() {
+    if (window) {
+      window->GetBoundsInPixels();
+    }
+  });
+
+  // Step 5: Arm the delegate so that the *next* synchronous OnBoundsChanged
+  // frees the X11Window.
+  bool armed = true;
+  bool freed = false;
+  EXPECT_CALL(delegate, OnBoundsChanged(_))
+      .WillRepeatedly([&](const PlatformWindowDelegate::BoundsChange&) {
+        if (armed) {
+          armed = false;
+          freed = true;
+          window.reset();
+        }
+      });
+
+  // Step 6: Prepare a located event (e.g. mouse press) targeting widget.
+  ScopedXI2Event xi_event;
+  xi_event.InitGenericButtonEvent(kPointerDeviceId, EventType::kMousePressed,
+                                  gfx::Point(100, 100), EF_NONE);
+
+  // Step 7: Dispatch the event to widget. This will trigger DispatchEvent.
+  DispatchXEvent(xi_event, widget);
+
+  // If we got here without ASAN/crash tripping, verify the window was indeed
+  // freed.
+  EXPECT_TRUE(freed) << "delegate was never invoked synchronously";
+
+  connection->DestroyWindow({new_parent});
+}
+
+TEST_F(X11WindowOzoneTest, StartupIdProperty) {
+  // Set a startup ID.
+  const std::string kStartupId = "test-startup-id-123";
+  base::nix::SetActivationToken(kStartupId);
+
+  MockPlatformWindowDelegate delegate;
+  gfx::AcceleratedWidget widget;
+  // CreatePlatformWindow calls Initialize, which should consume the token
+  // and set the _NET_STARTUP_ID property.
+  auto window = CreatePlatformWindow(&delegate, gfx::Rect(0, 0, 100, 100),
+                                     &widget, nullptr);
+
+  // Verify that the token was consumed from global state.
+  EXPECT_FALSE(base::nix::TakeXdgActivationToken().has_value());
+
+  x11::Window xid = static_cast<x11::Window>(widget);
+
+  // Read the _NET_STARTUP_ID property from the window.
+  scoped_refptr<base::RefCountedMemory> data;
+  x11::Atom type;
+  ASSERT_TRUE(GetRawBytesOfProperty(xid, x11::GetAtom("_NET_STARTUP_ID"),
+                                    &data, &type));
+
+  EXPECT_EQ(type, x11::Atom::STRING);
+  std::string value(reinterpret_cast<const char*>(data->data()), data->size());
+  EXPECT_EQ(value, kStartupId);
+}
+
+TEST_F(X11WindowOzoneTest, StartupIdPropertyFromInitProperties) {
+  const std::string kStartupId = "test-startup-id-properties";
+  const std::string kGlobalToken = "global-token-should-not-be-used";
+  base::nix::SetActivationToken(kGlobalToken);
+
+  MockPlatformWindowDelegate delegate;
+  gfx::AcceleratedWidget widget;
+  EXPECT_CALL(delegate, OnAcceleratedWidgetAvailable(_))
+      .WillOnce(StoreWidget(&widget));
+
+  PlatformWindowInitProperties properties;
+  properties.bounds = gfx::Rect(0, 0, 100, 100);
+  properties.startup_id = kStartupId;
+
+  auto window = std::make_unique<X11Window>(&delegate);
+  window->Initialize(std::move(properties));
+
+  // Verify that the global token was NOT consumed.
+  auto global_token = base::nix::TakeXdgActivationToken();
+  ASSERT_TRUE(global_token.has_value());
+  EXPECT_EQ(global_token.value(), kGlobalToken);
+
+  x11::Window xid = static_cast<x11::Window>(widget);
+
+  // Read the _NET_STARTUP_ID property from the window.
+  scoped_refptr<base::RefCountedMemory> data;
+  x11::Atom type;
+  ASSERT_TRUE(GetRawBytesOfProperty(xid, x11::GetAtom("_NET_STARTUP_ID"),
+                                    &data, &type));
+
+  EXPECT_EQ(type, x11::Atom::STRING);
+  std::string value(reinterpret_cast<const char*>(data->data()), data->size());
+  EXPECT_EQ(value, kStartupId);
 }
 
 }  // namespace ui

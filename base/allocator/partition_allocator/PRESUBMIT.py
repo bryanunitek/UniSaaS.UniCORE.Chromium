@@ -250,6 +250,11 @@ def CheckNoCpp23Features(input_api, output_api):
         r'find_last|find_last_if|find_last_if_not|iota|shift_left|'
         r'shift_right|fold_left|fold_left_first|fold_right|fold_right_last|'
         r'fold_left_with_iter|fold_left_first_with_iter)',
+        # C++23 range constructor for std::string_view (and u16/w variants)
+        # constructed from a single identifier (excludes literals, function
+        # calls, and multiple arguments).
+        r'\bstd::(?:u16|w)?string_view\s*'
+        r'(?:\(\s*([a-zA-Z_]\w*)\s*\)|\{\s*([a-zA-Z_]\w*)\s*\})',
     )
 
     sources = lambda affected_file: input_api.FilterSourceFile(
@@ -356,12 +361,9 @@ def CheckUnexpectedPreprocessorDefines(input_api, output_api):
         'HAS_HW_CAPS',
         'HAVE_BACKTRACE',
         'LINUX_NAME_REGION',
-        'MEMORY_TOOL_REPLACES_ALLOCATOR',
         'NDEBUG',
         'NEEDS_HANDLING_OF_HW_CAPABILITIES',
     }
-
-
     target_path_prefix = (
         'base/allocator/partition_allocator/src/partition_alloc/')
 

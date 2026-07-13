@@ -19,6 +19,8 @@
 #include "third_party/blink/public/mojom/frame/intrinsic_sizing_info.mojom-forward.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom.h"
 #include "third_party/blink/public/mojom/frame/viewport_intersection_state.mojom.h"
+#include "ui/accessibility/ax_node_id_forward.h"
+#include "ui/accessibility/ax_tree_id.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/compositor/compositor.h"
 #include "ui/display/screen_infos.h"
@@ -70,6 +72,9 @@ class CONTENT_EXPORT SurfaceEmbedConnectorImpl
   const viz::FrameSinkId& GetFrameSinkId() const override;
   double GetCssZoomFactorForTesting() override;
   const gfx::Size& GetLocalFrameSizeInPixelsForTesting() override;
+  void SetParentAccessibilityInfo(ui::AXNodeID ax_node_id,
+                                  const ui::AXTreeID& ax_tree_id) override;
+  ui::AXTreeID GetParentAXTreeID() const override;
 
   // FrameConnector:
   void SetKeepSurfaceAlive(bool keep_alive) override;
@@ -98,7 +103,6 @@ class CONTENT_EXPORT SurfaceEmbedConnectorImpl
   const viz::LocalSurfaceId& GetLocalSurfaceId() override;
   const blink::mojom::ViewportIntersectionState& GetIntersectionState()
       override;
-  uint32_t GetCaptureSequenceNumber() override;
   const gfx::Rect& GetRectInParentViewInDip() override;
   const gfx::Size& GetLocalFrameSizeInDip() override;
   const gfx::Size& GetLocalFrameSizeInPixels() override;
@@ -126,7 +130,7 @@ class CONTENT_EXPORT SurfaceEmbedConnectorImpl
   input::RenderWidgetHostViewInput* GetParentViewInput() override;
   input::RenderWidgetHostViewInput* GetRootViewInput() override;
 
-  void OnRenderFrameCreated();
+  void UpdateAccessibilityTree();
 
   // Updates the `view_` member to track the current RenderWidgetHostView
   // associated with the child WebContents.
@@ -186,6 +190,16 @@ class CONTENT_EXPORT SurfaceEmbedConnectorImpl
   // The last received FrameSinkId from the guest WebContents's view.
   viz::FrameSinkId frame_sink_id_;
 
+  ui::AXNodeID container_accessibility_node_id_ = ui::kInvalidAXNodeID;
+  ui::AXTreeID container_accessibility_tree_id_;
+
+  // The AXTreeID of the parent (embedder) accessibility tree that the child's
+  // tree is currently stitched into, or ui::AXTreeIDUnknown() when not
+  // stitched. Established by UpdateAccessibilityTree() and read back by
+  // RenderFrameHostImpl (via RenderFrameHostDelegate::GetSurfaceEmbedConnector)
+  // to answer the embedded child main frame's AX-parent queries.
+  ui::AXTreeID embed_parent_ax_tree_id_;
+
   // The last received LocalSurfaceId from the SurfaceEmbed.
   viz::LocalSurfaceId local_surface_id_;
 
@@ -193,8 +207,6 @@ class CONTENT_EXPORT SurfaceEmbedConnectorImpl
   // process which is set through CSS or scrolling.
   blink::mojom::FrameVisibility visibility_ =
       blink::mojom::FrameVisibility::kRenderedInViewport;
-
-  uint32_t capture_sequence_number_ = 0u;
 
   display::ScreenInfos screen_infos_;
   blink::mojom::ViewportIntersectionState intersection_state_;

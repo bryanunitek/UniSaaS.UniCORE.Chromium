@@ -4,6 +4,7 @@
 
 #include "chrome/browser/glic/widget/glic_side_panel_ui_android.h"
 
+#include "base/android/jni_android.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/scoped_observation.h"
@@ -21,11 +22,16 @@
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "printing/buildflags/buildflags.h"
 #include "ui/android/window_android.h"
 #include "ui/base/base_window.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_util.h"
 #include "ui/snapshot/snapshot.h"
+
+#if BUILDFLAG(ENABLE_PRINTING)
+#include "components/printing/browser/print_composite_client.h"
+#endif
 
 namespace glic {
 
@@ -33,7 +39,13 @@ GlicSidePanelUi::GlicSidePanelUi(Profile* profile,
                                  base::WeakPtr<tabs::TabInterface> tab,
                                  GlicUiEmbedder::Delegate& delegate,
                                  GlicInstanceMetrics& instance_metrics)
-    : tab_(tab), delegate_(delegate), instance_metrics_(instance_metrics) {
+    : web_contents_delegate_android::WebContentsDelegateAndroid(
+          base::android::AttachCurrentThread(),
+          /*obj=*/nullptr),  // Null peer is safely handled and falls back to
+                             // base behavior.
+      tab_(tab),
+      delegate_(delegate),
+      instance_metrics_(instance_metrics) {
   auto* glic_side_panel_coordinator = GetGlicSidePanelCoordinator();
   if (!glic_side_panel_coordinator) {
     return;
@@ -276,6 +288,19 @@ void GlicSidePanelUi::RunFileChooser(
     const blink::mojom::FileChooserParams& params) {
   FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),
                                    params);
+}
+
+void GlicSidePanelUi::PrintCrossProcessSubframe(
+    content::WebContents* web_contents,
+    const gfx::Rect& rect,
+    int document_cookie,
+    content::RenderFrameHost* subframe_host) const {
+#if BUILDFLAG(ENABLE_PRINTING)
+  auto* client = printing::PrintCompositeClient::FromWebContents(web_contents);
+  if (client) {
+    client->PrintCrossProcessSubframe(rect, document_cookie, subframe_host);
+  }
+#endif
 }
 
 }  // namespace glic

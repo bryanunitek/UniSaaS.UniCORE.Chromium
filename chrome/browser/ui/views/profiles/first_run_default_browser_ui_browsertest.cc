@@ -72,8 +72,11 @@ class FirstRunDefaultBrowserPixelTest
  public:
   FirstRunDefaultBrowserPixelTest()
       : ProfilesPixelTestBaseT<UiBrowserTest>(GetParam().pixel_test_param) {
-    scoped_feature_list_.InitWithFeatureState(switches::kFirstRunDesktopRefresh,
-                                              GetParam().use_refreshed_ui);
+    scoped_feature_list_.InitWithFeatureStates(
+        {{switches::kFirstRunDesktopRefresh, GetParam().use_refreshed_ui},
+         // Explicitly disable the revamp flag as this UI is being deprecated
+         // with this flag.
+         {switches::kFirstRunDesktopRevamp, false}});
   }
 
   ~FirstRunDefaultBrowserPixelTest() override {
@@ -95,13 +98,16 @@ class FirstRunDefaultBrowserPixelTest
         policy::EnterpriseManagementAuthority::NONE);
 
     profile_picker_view_ = new ProfileManagementStepTestView(
-        ProfilePicker::Params::ForFirstRun(browser()->profile()->GetPath(),
+        ProfilePicker::Params::ForFirstRun(browser()->GetProfile()->GetPath(),
                                            base::DoNothing()),
         ProfileManagementFlowController::Step::kDefaultBrowser,
         /*step_controller_factory=*/
-        base::BindRepeating([](ProfilePickerWebContentsHost* host) {
-          return CreateDefaultBrowserStep(host, base::DoNothing());
-        }));
+        base::BindRepeating(
+            [](Profile* profile, ProfilePickerWebContentsHost* host)
+                -> std::unique_ptr<ProfileManagementStepController> {
+              return CreateDefaultBrowserStep(host, profile, base::DoNothing());
+            },
+            browser()->profile()));
     profile_picker_view_->views::View::AddObserver(this);
     profile_picker_view_->ShowAndWait(GetParam().pixel_test_param.window_size);
   }

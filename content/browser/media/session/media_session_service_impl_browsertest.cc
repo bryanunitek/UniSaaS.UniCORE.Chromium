@@ -10,7 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "content/browser/media/session/media_session_impl.h"
-#include "content/browser/media/session/media_session_player_observer.h"
+#include "content/public/browser/media_session_player_observer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
@@ -22,6 +22,7 @@
 #include "media/base/picture_in_picture_events_info.h"
 #include "services/media_session/public/cpp/test/mock_media_session.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace content {
 
@@ -57,7 +58,9 @@ class MockMediaSessionPlayerObserver : public MediaSessionPlayerObserver {
   void OnSeekTo(int player_id, base::TimeDelta seek_time) override {}
   void OnSetVolumeMultiplier(int player_id, double volume_multiplier) override {
   }
-  void OnEnterPictureInPicture(int player_id) override {}
+  void OnEnterPictureInPicture(
+      int player_id,
+      const std::optional<gfx::Size>& min_size) override {}
   void OnSetAudioSinkId(int player_id,
                         const std::string& raw_device_id) override {}
   void OnSetMute(int player_id, bool mute) override {}

@@ -89,6 +89,7 @@
 #include "net/test/gtest_util.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/referrer_policy.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -1888,26 +1889,15 @@ class WaitingHandshakeClient : public network::mojom::WebSocketHandshakeClient {
 class NetworkContextConfigurationProxySettingsBrowserTest
     : public NetworkContextConfigurationHttpPacBrowserTest {
  public:
-  const size_t kDefaultMaxConnectionsPerProxy = 64;
+  const size_t kDefaultMaxConnectionsPerProxy = 128;
 
   NetworkContextConfigurationProxySettingsBrowserTest() {
-    // Enable `kTcpSocketPoolProxyLimit`, and set to match
-    // `kDefaultMaxConnectionsPerProxy` to prevent changes via field trials.
     // Disable `kPermitTcpSocketPoolConnectBackupJobs`, as backup jobs
     // cause extra connections without opening new WebSockets, breaking tests.
     // Disable `kTcpSocketPoolLimitRandomization`, as randomization makes size
     // expectations impossible to test.
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/
-        {
-            {net::features::kTcpSocketPoolProxyLimit,
-             {
-                 {"TcpSocketPoolProxyLimitNormal",
-                  base::NumberToString(kDefaultMaxConnectionsPerProxy)},
-                 {"TcpSocketPoolProxyLimitWebSocket",
-                  base::NumberToString(kDefaultMaxConnectionsPerProxy)},
-             }},
-        },
+        /*enabled_features=*/{},
         /*disabled_features=*/{
             net::features::kPermitTcpSocketPoolConnectBackupJobs,
             net::features::kTcpSocketPoolLimitRandomization,
@@ -2055,7 +2045,8 @@ class NetworkContextConfigurationProxySettingsBrowserTest
                                                    frame->GetRoutingID())),
           mojo::NullRemote(), mojo::NullRemote(),
           /*throttling_profile_id=*/std::nullopt,
-          /*network_restrictions_id=*/std::nullopt);
+          /*network_restrictions_id=*/
+          network::GetTestNetworkRestrictionsId());
       waiters.emplace_back(std::move(client));
     }
     expected_connections_run_loop.Run();

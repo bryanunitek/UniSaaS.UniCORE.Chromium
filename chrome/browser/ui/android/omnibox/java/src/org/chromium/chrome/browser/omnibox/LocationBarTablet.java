@@ -11,6 +11,7 @@ import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.os.Handler;
 import android.util.AttributeSet;
@@ -23,6 +24,7 @@ import android.view.ViewOutlineProvider;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
+import androidx.annotation.ColorInt;
 import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.build.annotations.Initializer;
@@ -33,6 +35,7 @@ import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxSta
 import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
+import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.LocalizationUtils;
@@ -51,6 +54,7 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
     private final LayerDrawable mFocusedPopupDrawable;
     private final GradientDrawable mOuterRect;
     private final GradientDrawable mInnerRect;
+    private final InsetDrawable mInsetStandbyBorder;
     private LayerDrawable mUnfocusedDrawable;
     private final LayerDrawable mHoverDrawable;
 
@@ -93,24 +97,27 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
     // toolbar.
     private View mHolder;
     private @FuseboxLayoutMode int mLayoutMode;
+    private boolean mIsReparentedToPopover;
     private @BrandedColorScheme int mBrandedColorScheme = BrandedColorScheme.APP_DEFAULT;
+    private boolean mShowStandbyRing;
+    private boolean mIsHovered;
 
     /** Constructor used to inflate from XML. */
     public LocationBarTablet(Context context, AttributeSet attrs) {
         super(context, attrs);
 
+        Resources resources = context.getResources();
         mToolbarButtonsWidth =
-                getResources().getDimensionPixelOffset(R.dimen.toolbar_button_width)
+                resources.getDimensionPixelOffset(R.dimen.toolbar_button_width)
                         * HIDEABLE_BUTTON_COUNT;
         int locationBarIconWidth =
-                getResources().getDimensionPixelOffset(R.dimen.location_bar_icon_width);
+                resources.getDimensionPixelOffset(R.dimen.location_bar_icon_width);
         mMicButtonWidth = locationBarIconWidth;
         mLensButtonWidth = locationBarIconWidth;
-        Resources resources = context.getResources();
         mFocusedPopupDrawable =
                 (LayerDrawable)
                         assumeNonNull(
-                                resources.getDrawable(
+                                context.getDrawable(
                                         R.drawable
                                                 .modern_toolbar_tablet_text_box_background_focused_popup));
         mFocusedPopupDrawable.mutate();
@@ -138,6 +145,13 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
                                         getContext(),
                                         R.drawable.modern_toolbar_text_box_background_highlight));
         mHoverDrawable.mutate();
+        mInsetStandbyBorder =
+                (InsetDrawable)
+                        assumeNonNull(
+                                AppCompatResources.getDrawable(
+                                        getContext(),
+                                        R.drawable.modern_toolbar_text_box_standby_border));
+        mInsetStandbyBorder.mutate();
         mHandler = new Handler();
     }
 
@@ -157,11 +171,9 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
                     @Override
                     public boolean onHover(View v, MotionEvent event) {
                         switch (event.getAction()) {
-                            case MotionEvent.ACTION_HOVER_ENTER:
-                                setForeground(mHoverDrawable);
-                                return true;
-                            case MotionEvent.ACTION_HOVER_EXIT:
-                                setForeground(null);
+                            case MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_EXIT:
+                                mIsHovered = event.getAction() == MotionEvent.ACTION_HOVER_ENTER;
+                                updateForeground();
                                 return true;
                             default:
                                 return false;
@@ -246,6 +258,16 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
             mScreenWidthDp = screenWidthDp;
             mHandler.post(() -> onFuseboxStateChanged(mFuseboxState));
         }
+    }
+
+    @Override
+    protected void setUrlFocusChangePercent(
+            float ntpSearchBoxScrollFraction,
+            float urlFocusChangeFraction,
+            boolean isUrlFocusChangeInProgress) {
+        super.setUrlFocusChangePercent(
+                ntpSearchBoxScrollFraction, urlFocusChangeFraction, isUrlFocusChangeInProgress);
+        updateForeground();
     }
 
     @Override
@@ -446,8 +468,11 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
         mBrandedColorScheme = brandedColorScheme;
         Context context = getContext();
         mOuterRect.setColor(
-                OmniboxResourceProvider.getSuggestionsDropdownBackgroundColor(
-                        context, mBrandedColorScheme));
+                mLayoutMode == FuseboxLayoutMode.SUGGESTIONS_POPOVER
+                        ? OmniboxResourceProvider.getStandardSuggestionBackgroundColor(
+                                context, mBrandedColorScheme)
+                        : OmniboxResourceProvider.getSuggestionsDropdownBackgroundColor(
+                                context, mBrandedColorScheme));
         mInnerRect.setColor(
                 OmniboxResourceProvider.getStandardSuggestionBackgroundColor(
                         context, mBrandedColorScheme));
@@ -455,9 +480,20 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
         GradientDrawable unfocusedRect =
                 (GradientDrawable) mUnfocusedDrawable.findDrawableByLayerId(R.id.unfocused_bg);
         if (unfocusedRect != null) {
-            unfocusedRect.setColor(
-                    OmniboxResourceProvider.getTabletToolbarTextBoxBackgroundColor(
-                            context, mBrandedColorScheme));
+            if (mShowStandbyRing) {
+                unfocusedRect.setColor(
+                        OmniboxResourceProvider.getTabletToolbarTextBoxStandbyBackgroundColor(
+                                context, mBrandedColorScheme));
+            } else {
+                final @ColorInt int color = mLocationBarDataProvider.getPrimaryColor();
+                final @ColorInt int textBoxColor =
+                        ThemeUtils.getTextBoxColorForToolbarBackgroundInNonNativePage(
+                                context,
+                                color,
+                                mBrandedColorScheme == BrandedColorScheme.INCOGNITO,
+                                /* isCustomTab= */ false);
+                unfocusedRect.setColor(textBoxColor);
+            }
         }
     }
 
@@ -506,6 +542,7 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
     void setFuseboxLayoutMode(@FuseboxLayoutMode int layoutMode) {
         super.setFuseboxLayoutMode(layoutMode);
         mLayoutMode = layoutMode;
+        updateForeground();
         // We don't expect that the layout mode will ever change back after becoming
         // SUGGESTIONS_POPOVER (it depends only on flags set at build time and startup) and thus
         // don't handle that case.
@@ -513,6 +550,9 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
             mOuterRect.setColor(
                     OmniboxResourceProvider.getStandardSuggestionBackgroundColor(
                             getContext(), mBrandedColorScheme));
+            mFocusedPopupDrawable.setLayerInsetRelative(
+                    mFocusedPopupDrawable.findIndexByLayerId(R.id.glif_border_layer), 0, 0, 0, 0);
+            mGlifBorderDrawable.setCornerRadius(mOmniboxSuggestionDropdownRoundCornerRadius);
         }
     }
 
@@ -520,17 +560,53 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
     public void onFuseboxStateChanged(@FuseboxState int state) {
         super.onFuseboxStateChanged(state);
         mFuseboxState = state;
-        adjustVerticalTranslationForFuseboxState(state);
+        updateLayoutAndBackground();
+    }
+
+    @Override
+    /* package */ void setReparentedToPopover(boolean isReparented) {
+        mIsReparentedToPopover = isReparented;
+        updateLayoutAndBackground();
+    }
+
+    @Override
+    void setShowStandbyRing(boolean showStandbyRing) {
+        if (showStandbyRing == mShowStandbyRing) return;
+        mShowStandbyRing = showStandbyRing;
+        updateLayoutAndBackground();
+        updateForeground();
+        updateVisualsForState(mBrandedColorScheme);
+    }
+
+    private void updateForeground() {
+        if (mShowStandbyRing) {
+            setForeground(mInsetStandbyBorder);
+        } else if (mIsHovered
+                && (mLayoutMode != FuseboxLayoutMode.SUGGESTIONS_POPOVER
+                        || !mUrlCoordinator.hasFocus())) {
+            setForeground(mHoverDrawable);
+        } else {
+            setForeground(null);
+        }
+    }
+
+    private void updateLayoutAndBackground() {
+        adjustVerticalTranslationForFuseboxState(mFuseboxState);
         FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) getLayoutParams();
         Resources resources = getResources();
         LinearLayout.LayoutParams parentParams =
                 (LinearLayout.LayoutParams) mHolder.getLayoutParams();
-        if (state == FuseboxState.COMPACT || state == FuseboxState.EXPANDED) {
+        boolean isPopover =
+            mLayoutMode == FuseboxLayoutMode.SUGGESTIONS_POPOVER && mIsReparentedToPopover;
+        if (!mShowStandbyRing
+                && (mFuseboxState == FuseboxState.COMPACT
+                        || mFuseboxState == FuseboxState.EXPANDED
+                        || isPopover)) {
             parentParams.height = ViewGroup.LayoutParams.WRAP_CONTENT;
             int expansionPx =
                     resources.getDimensionPixelSize(
                             R.dimen.location_bar_tablet_fusebox_popup_inset);
-            parentParams.topMargin = -expansionPx;
+            parentParams.topMargin = isPopover ? 0 : -expansionPx;
             setMarginsForWindowWidth(parentParams, expansionPx);
             parentParams.gravity = Gravity.TOP;
             setPadding(expansionPx, expansionPx, expansionPx, getPaddingBottom());
@@ -562,6 +638,7 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
             // state. Not setting this risks visual glitches when returning to the fusebox.
             setBackground(mUnfocusedDrawable);
         }
+
         adjustBackgroundForSuggestions();
         setLayoutParams(layoutParams);
         mHolder.setLayoutParams(parentParams);
@@ -571,7 +648,7 @@ class LocationBarTablet extends LocationBarLayout implements OnLongClickListener
         MarginLayoutParams statusViewLayoutParams =
                 (MarginLayoutParams) mStatusView.getLayoutParams();
         Resources resources = getResources();
-        if (state == FuseboxState.COMPACT) {
+        if (state == FuseboxState.COMPACT && !mShowStandbyRing) {
             // In the compact fusebox state, the location bar is taller than its inner background,
             // creating the appearance of vertical misalignment. We resolve this by translating
             // constituent views to be centered withing the 56 dp inner background, shifting them

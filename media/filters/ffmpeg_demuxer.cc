@@ -61,6 +61,10 @@ namespace media {
 
 namespace {
 
+perfetto::NamedTrack GetTracingTrack(const FFmpegDemuxer* demuxer) {
+  return perfetto::NamedTrack::FromPointer("media::FFmpegDemuxer", demuxer);
+}
+
 void SetAVStreamDiscard(AVStream* stream, AVDiscard discard) {
   DCHECK(stream);
   stream->discard = discard;
@@ -438,10 +442,9 @@ void FFmpegDemuxerStream::EnqueuePacket(ScopedAVPacket packet) {
   size_t data_offset = 0;
   if ((type() == DemuxerStream::AUDIO && audio_config_->is_encrypted()) ||
       (type() == DemuxerStream::VIDEO && video_config_->is_encrypted())) {
-    if (!WebMCreateDecryptConfig(
-            packet->data, packet->size,
-            reinterpret_cast<const uint8_t*>(encryption_key_id_.data()),
-            encryption_key_id_.size(), &decrypt_config, &data_offset)) {
+    if (!WebMCreateDecryptConfig(AVPacketData(*packet),
+                                 base::as_byte_span(encryption_key_id_),
+                                 &decrypt_config, &data_offset)) {
       MEDIA_LOG(ERROR, media_log_) << "Creation of DecryptConfig failed.";
     }
   }
@@ -911,6 +914,8 @@ DemuxerType FFmpegDemuxer::GetDemuxerType() const {
 void FFmpegDemuxer::Initialize(DemuxerHost* host,
                                PipelineStatusCallback init_cb) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  TRACE_EVENT_BEGIN("media", "FFmpegDemuxer::Initialize",
+                    GetTracingTrack(this));
   host_ = host;
   weak_this_ = cancel_pending_seek_factory_.GetWeakPtr();
   init_cb_ = std::move(init_cb);
@@ -1022,8 +1027,7 @@ void FFmpegDemuxer::CancelPendingSeek(base::TimeDelta seek_time) {
 void FFmpegDemuxer::Seek(base::TimeDelta time, PipelineStatusCallback cb) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   DCHECK(!pending_seek_cb_);
-  TRACE_EVENT_BEGIN("media", "FFmpegDemuxer::Seek",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN("media", "FFmpegDemuxer::Seek", GetTracingTrack(this));
   pending_seek_cb_ = std::move(cb);
   SeekInternal(time, base::BindOnce(&FFmpegDemuxer::OnSeekFrameDone,
                                     weak_factory_.GetWeakPtr()));
@@ -1116,9 +1120,9 @@ base::Time FFmpegDemuxer::GetTimelineOffset() const {
   return timeline_offset_;
 }
 
-std::vector<DemuxerStream*> FFmpegDemuxer::GetAllStreams() {
+std::vector<raw_ptr<DemuxerStream>> FFmpegDemuxer::GetAllStreams() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  std::vector<DemuxerStream*> result;
+  std::vector<raw_ptr<DemuxerStream>> result;
   // Put enabled streams at the beginning of the list so that
   // MediaResource::GetFirstStream returns the enabled stream if there is one.
   // TODO(servolk): Revisit this after media track switching is supported.
@@ -1903,7 +1907,7 @@ void FFmpegDemuxer::SetLiveness(StreamLiveness liveness) {
 void FFmpegDemuxer::RunInitCB(PipelineStatus status) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   DCHECK(init_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   PipelineStatusToString(status));
   std::move(init_cb_).Run(status);
 }
@@ -1911,7 +1915,7 @@ void FFmpegDemuxer::RunInitCB(PipelineStatus status) {
 void FFmpegDemuxer::RunPendingSeekCB(PipelineStatus status) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   DCHECK(pending_seek_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   PipelineStatusToString(status));
   std::move(pending_seek_cb_).Run(status);
 }

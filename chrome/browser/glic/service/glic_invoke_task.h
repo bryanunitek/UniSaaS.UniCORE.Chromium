@@ -157,19 +157,6 @@ class WaitForClientConnectedTask : public GlicInvokeTask,
   base::OnceClosure done_callback_;
 };
 
-// Task that notifies the host of invoking state.
-class NotifyIsInvokingTask : public GlicInvokeTask {
- public:
-  explicit NotifyIsInvokingTask(Host& host);
-  ~NotifyIsInvokingTask() override;
-  void Start(base::OnceClosure done_callback) override;
-  void OnSequenceCompleted(bool success) override;
-
- private:
-  const base::raw_ref<Host> host_;
-  bool did_start_ = false;
-};
-
 // Task that posts a callback asynchronously.
 class PostCallbackTask : public GlicInvokeTask {
  public:
@@ -285,6 +272,7 @@ class ClipboardPolicyTask : public GlicInvokeTask {
   raw_ptr<GlicInstanceImpl> instance_;
   content::GlobalRenderFrameHostId source_rfh_id_;
   std::vector<uint8_t> thumbnail_data_;
+  std::u16string text_data_;
   GURL src_url_;
   bool is_drag_and_drop_ = false;
   base::OnceClosure done_callback_;

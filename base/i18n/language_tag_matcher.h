@@ -14,10 +14,11 @@
 #include "base/i18n/tags.h"
 #include "third_party/rust/cxx/v1/cxx.h"
 
-namespace base {
-namespace i18n::internal {
+namespace base::i18n_internal {
 struct IcuFallbacker;
 }
+
+namespace base::i18n {
 
 // A class that matches a preferred language tag against a set of supported
 // language tags using ICU fallback rules and precomputed distances.
@@ -25,22 +26,22 @@ struct IcuFallbacker;
 // Example usage:
 //   const LanguageTagConverter& builder = LanguageTagConverter::GetInstance();
 //   LanguageTagMatcher matcher = LanguageTagMatcher::Create({
-//      language_tags::ENGLISH_US(),
-//      language_tags::FRENCH_FRANCE(),
-//      language_tags::SPANISH_ARGENTINA(),
+//      GetKnownLanguageTag<"en-US">(),
+//      GetKnownLanguageTag<"fr-FR">(),
+//      GetKnownLanguageTag<"es-AR">(),
 //   });
 //
 //   // Exact match:
-//   matcher.Match(language_tags::ENGLISH_US()); // Returns "en-US"
+//   matcher.Match(GetKnownLanguageTag<"en-US">()); // Returns "en-US"
 //
 //   // Fallback match:
-//   matcher.Match(language_tags::BRITISH_ENGLISH()); // Returns "en-US"
+//   matcher.Match(GetKnownLanguageTag<"en-GB">()); // Returns "en-US"
 //
 //   // Macro-region match:
-//   matcher.Match(language_tags::SPANISH_MEXICO()); // Returns "es-419"
+//   matcher.Match(GetKnownLanguageTag<"es-MX">()); // Returns "es-419"
 //
 //   // No match:
-//   matcher.Match(language_tags::GERMAN()); // Returns nullopt
+//   matcher.Match(GetKnownLanguageTag<"de">()); // Returns nullopt
 class BASE_I18N_EXPORT LanguageTagMatcher {
  public:
   // Creates a new matcher for the given set of supported locales.
@@ -55,6 +56,9 @@ class BASE_I18N_EXPORT LanguageTagMatcher {
 
   LanguageTagMatcher(const LanguageTagMatcher&) = delete;
   LanguageTagMatcher& operator=(const LanguageTagMatcher&) = delete;
+
+  LanguageTagMatcher(LanguageTagMatcher&&) noexcept;
+  LanguageTagMatcher& operator=(LanguageTagMatcher&&) noexcept;
 
   // Finds the best match between the supported tags and the preferred
   // tag. Returns the matched LanguageTag from the supported list, or
@@ -79,12 +83,12 @@ class BASE_I18N_EXPORT LanguageTagMatcher {
  private:
   explicit LanguageTagMatcher(
       base::flat_map<LanguageTag, LanguageTag> closest_supported_tag,
-      rust::Box<i18n::internal::IcuFallbacker> icu_fallbacker);
+      rust::Box<i18n_internal::IcuFallbacker> icu_fallbacker);
 
-  const base::flat_map<LanguageTag, LanguageTag> closest_supported_tag_;
-  rust::Box<i18n::internal::IcuFallbacker> icu_fallbacker_;
+  base::flat_map<LanguageTag, LanguageTag> closest_supported_tag_;
+  rust::Box<i18n_internal::IcuFallbacker> icu_fallbacker_;
 };
 
-}  // namespace base
+}  // namespace base::i18n
 
 #endif  // BASE_I18N_LANGUAGE_TAG_MATCHER_H_

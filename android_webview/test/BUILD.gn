@@ -8,6 +8,7 @@ import("//android_webview/variables.gni")
 import("//build/config/android/rules.gni")
 import("//build/config/python.gni")
 import("//device/vr/buildflags/buildflags.gni")
+import("//printing/buildflags/buildflags.gni")
 import("//testing/test.gni")
 import("//third_party/jni_zero/jni_zero.gni")
 import("//tools/grit/repack.gni")
@@ -126,35 +127,8 @@ script_test("system_webview_wpt") {
   ]
 }
 
-script_test("trichrome_webview_wpt") {
-  script = "//third_party/blink/tools/run_wpt_tests.py"
-  args = _common_web_test_options + [
-           "--product",
-           "android_webview",
-           "--test-type",
-           "testharness",
-           "reftest",
-           "crashtest",
-           "print-reftest",
-           "--zero-tests-executed-ok",
-           "--webview-provider",
-           "@WrappedPath(apks/TrichromeWebView.apk)",
-           "--browser-apk",
-           "@WrappedPath(apks/SystemWebViewShell.apk)",
-           "--additional-apk",
-           "@WrappedPath(apks/TrichromeLibrary.apk)",
-         ]
-  data_deps = [
-    "//android_webview:trichrome_webview_apk",
-    "//android_webview/tools/system_webview_shell:system_webview_shell_layout_test_apk",
-    "//chrome/test/chromedriver:chromedriver_server($host_toolchain)",
-    "//third_party/blink/tools:wpt_tests_android_isolate",
-    "//third_party/blink/web_tests:wpt_tests",
-  ]
-}
-
 if (android_64bit_target_cpu) {
-  script_test("trichrome_webview_wpt_64") {
+  script_test("system_webview_wpt_64") {
     script = "//third_party/blink/tools/run_wpt_tests.py"
     args = _common_web_test_options + [
              "--product",
@@ -166,14 +140,12 @@ if (android_64bit_target_cpu) {
              "print-reftest",
              "--zero-tests-executed-ok",
              "--webview-provider",
-             "@WrappedPath(apks/TrichromeWebView64.apk)",
+             "@WrappedPath(apks/SystemWebView64.apk)",
              "--browser-apk",
              "@WrappedPath(apks/SystemWebViewShell.apk)",
-             "--additional-apk",
-             "@WrappedPath(apks/TrichromeLibrary64.apk)",
            ]
     data_deps = [
-      "//android_webview:trichrome_webview_64_apk",
+      "//android_webview:system_webview_64_apk",
       "//android_webview/tools/system_webview_shell:system_webview_shell_layout_test_apk",
       "//chrome/test/chromedriver:chromedriver_server($host_toolchain)",
       "//third_party/blink/tools:wpt_tests_android_isolate",
@@ -447,6 +419,7 @@ base_webview_instrumentation_test_apk("webview_instrumentation_test_apk") {
     "../javatests/src/org/chromium/android_webview/test/AwPacProcessorTest.java",
     "../javatests/src/org/chromium/android_webview/test/AwPageLoadMetricsTest.java",
     "../javatests/src/org/chromium/android_webview/test/AwParameterizedTest.java",
+    "../javatests/src/org/chromium/android_webview/test/AwPerformanceManagerTest.java",
     "../javatests/src/org/chromium/android_webview/test/AwPermissionManagerTest.java",
     "../javatests/src/org/chromium/android_webview/test/AwPermissionQueryApiTest.java",
     "../javatests/src/org/chromium/android_webview/test/AwPersistentOriginTrialTest.java",
@@ -489,6 +462,7 @@ base_webview_instrumentation_test_apk("webview_instrumentation_test_apk") {
     "../javatests/src/org/chromium/android_webview/test/GetTitleTest.java",
     "../javatests/src/org/chromium/android_webview/test/HeapProfilingTest.java",
     "../javatests/src/org/chromium/android_webview/test/HttpAuthDatabaseTest.java",
+    "../javatests/src/org/chromium/android_webview/test/HttpCacheQuotaTest.java",
     "../javatests/src/org/chromium/android_webview/test/JsJavaInteractionTest.java",
     "../javatests/src/org/chromium/android_webview/test/KeySystemTest.java",
     "../javatests/src/org/chromium/android_webview/test/LoadDataWithBaseUrlTest.java",
@@ -693,6 +667,7 @@ android_library("webview_instrumentation_test_mock_services_java") {
 android_library("webview_instrumentation_test_utils_java") {
   testonly = true
   sources = [
+    "../javatests/src/org/chromium/android_webview/test/util/AwPerformanceManagerTestUtil.java",
     "../javatests/src/org/chromium/android_webview/test/util/AwPrefetchTestUtil.java",
     "../javatests/src/org/chromium/android_webview/test/util/DisableOriginTrialsSafeModeTestUtils.java",
     "../javatests/src/org/chromium/android_webview/test/util/ManifestMetadataMockApplicationContext.java",
@@ -708,6 +683,7 @@ android_library("webview_instrumentation_test_utils_java") {
     "//base:base_java_test_support",
     "//build/android:build_java",
     "//components/variations/android:variations_java",
+    "//content/public/android:content_java",
     "//third_party/android_deps:protobuf_lite_runtime_java",
     "//third_party/blink/public/common",
     "//third_party/jni_zero:jni_zero_java",
@@ -719,6 +695,7 @@ android_library("webview_instrumentation_test_utils_java") {
 generate_jni("webview_instrumentation_test_native_jni") {
   testonly = true
   sources = [
+    "../javatests/src/org/chromium/android_webview/test/util/AwPerformanceManagerTestUtil.java",
     "../javatests/src/org/chromium/android_webview/test/util/AwPrefetchTestUtil.java",
     "../javatests/src/org/chromium/android_webview/test/util/DisableOriginTrialsSafeModeTestUtils.java",
     "../javatests/src/org/chromium/android_webview/test/util/RendererProcessMetricsProviderUtils.java",
@@ -730,6 +707,7 @@ generate_jni("webview_instrumentation_test_native_jni") {
 
 source_set("webview_instrumentation_test_native_jni_impl") {
   sources = [
+    "browser/aw_performance_manager_test_util.cc",
     "browser/aw_prefetch_manager_test_utils.cc",
     "browser/disable_origin_trials_safemode_test_utils.cc",
     "browser/renderer_process_metrics_provider_utils.cc",
@@ -746,7 +724,9 @@ source_set("webview_instrumentation_test_native_jni_impl") {
     "//base",
     "//base/test:test_support",
     "//components/embedder_support/origin_trials",
+    "//components/performance_manager",
     "//components/prefs:test_support",
+    "//content/public/browser",
     "//content/public/common",
     "//net:test_support",
     "//third_party/protobuf:protobuf_lite",
@@ -803,6 +783,7 @@ test("android_webview_unittests") {
     "//components/safe_browsing/core/common",
     "//components/tracing:background_tracing_utils",
     "//components/variations",
+    "//components/visitedlink/browser",
     "//components/viz/service",
     "//components/webui/flags",
     "//content",
@@ -861,6 +842,7 @@ test("android_webview_unittests") {
     "../browser/metrics/aw_server_side_allowlist_metrics_provider_unittest.cc",
     "../browser/metrics/visibility_metrics_logger_unittest.cc",
     "../browser/network_service/aw_proxying_restricted_cookie_manager_unittest.cc",
+    "../browser/network_service/aw_proxying_url_loader_factory_unittest.cc",
     "../browser/permission/media_access_permission_request_unittest.cc",
     "../browser/permission/permission_request_handler_unittest.cc",
     "../browser/prefetch/aw_prefetch_manager_unittest.cc",
@@ -875,6 +857,16 @@ test("android_webview_unittests") {
     "../js_sandbox/service/js_sandbox_memory_budget_unittest.cc",
     "../lib/webview_tests.cc",
   ]
+
+  if (enable_printing) {
+    sources += [ "../browser/aw_print_manager_unittest.cc" ]
+    deps += [
+      "//components/printing/common",
+      "//components/printing/common:mojo_interfaces",
+      "//printing",
+      "//printing:settings",
+    ]
+  }
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
   # enable the diagnostic by removing this line.
@@ -892,6 +884,7 @@ android_library("android_webview_unittests_java") {
     "//android_webview:android_webview_java",
     "//content/public/test/android:content_java_test_support",
     "//third_party/jni_zero:jni_zero_java",
+    "//third_party/mockito:mockito_java",
   ]
   sources = [ "../unittestjava/src/org/chromium/android_webview/unittest/MockAwContentsClientBridge.java" ]
   srcjar_deps = [ ":android_webview_unittests_jni" ]
@@ -922,7 +915,6 @@ robolectric_binary("android_webview_junit_tests") {
     "../junit/src/org/chromium/android_webview/robolectric/AwInsetsTest.java",
     "../junit/src/org/chromium/android_webview/robolectric/AwLayoutSizerTest.java",
     "../junit/src/org/chromium/android_webview/robolectric/AwScrollOffsetManagerTest.java",
-    "../junit/src/org/chromium/android_webview/robolectric/AwWebContentsMetricsRecorderTest.java",
     "../junit/src/org/chromium/android_webview/robolectric/PlatformSelectionActionMenuDelegateTest.java",
     "../junit/src/org/chromium/android_webview/robolectric/PrefetchOperationResultTest.java",
     "../junit/src/org/chromium/android_webview/robolectric/RectUtilsTest.java",

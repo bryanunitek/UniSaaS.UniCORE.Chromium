@@ -486,6 +486,7 @@ component("web_platform") {
     "//net",
     "//services/network/public/mojom:mojom_content_security_policy",
     "//services/network/public/mojom:mojom_cors_origin_pattern",
+    "//services/network/public/mojom:mojom_origin_or_wildcard_header_value",
     "//services/network/public/mojom:mojom_permissions_policy_shared",
     "//services/network/public/mojom:url_loader_base_shared",
     "//url",
@@ -941,6 +942,7 @@ source_set("tests") {
     "//services/network/public/mojom:mojom_ad_auction",
     "//services/network/public/mojom:mojom_permissions_policy",
     "//testing/gtest",
+    "//third_party/fuzztest",
   ]
 
   public_deps = [ ":buildflags" ]

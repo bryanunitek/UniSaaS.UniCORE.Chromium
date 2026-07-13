@@ -63,15 +63,6 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
-    builder = "android-internal-desktop-x64-rel",
-    cq_settings = try_.cq_settings(
-        experiment_percentage = 25,
-        on_default_cq = True,
-    ),
-    owner_whitelist = ["google/chrome-al-eng@google.com"],
-)
-
-chrome_internal_verifier(
     builder = "linux-chromeos-compile-chrome",
     cq_settings = try_.cq_settings(
         on_default_cq = True,
@@ -160,9 +151,10 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    branch_selector = branches.selector.CROS_LTS_BRANCHES,
     builder = "chromeos-betty-compile-chrome",
     cq_settings = try_.cq_settings(
-        equivalent_builder = "chrome:try/chromeos-betty-chrome-noop",
+        equivalent_builder = "{}:try/chromeos-betty-chrome-noop".format(settings.chrome_project),
         equivalent_builder_percentage = 100,
         equivalent_builder_whitelist = "googlers",
         on_default_cq = True,
@@ -170,11 +162,12 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    branch_selector = branches.selector.CROS_LTS_BRANCHES,
     builder = "chromeos-betty-chrome-gtest",
     cq_settings = try_.cq_settings(
-        equivalent_builder = "chrome:try/chromeos-betty-chrome-gtest-and-cqtast",
+        equivalent_builder = "{}:try/chromeos-betty-chrome-gtest-and-cqtast".format(settings.chrome_project),
         equivalent_builder_percentage = 100,
-        equivalent_builder_whitelist = "google/chromeos-pa",
+        equivalent_builder_whitelist = "google/chromeos-pa@google.com",
         on_default_cq = True,
     ),
     owner_whitelist = ["googlers", "project-chromium-robot-committers"],

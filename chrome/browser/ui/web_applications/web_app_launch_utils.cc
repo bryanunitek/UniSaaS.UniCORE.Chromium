@@ -155,9 +155,9 @@ const ash::SystemWebAppDelegate* GetSystemWebAppDelegate(
     Browser* browser,
     const webapps::AppId& app_id) {
   auto system_app_type =
-      ash::GetSystemWebAppTypeForAppId(browser->profile(), app_id);
+      ash::GetSystemWebAppTypeForAppId(browser->GetProfile(), app_id);
   if (system_app_type) {
-    return ash::SystemWebAppManager::Get(browser->profile())
+    return ash::SystemWebAppManager::Get(browser->GetProfile())
         ->GetSystemApp(*system_app_type);
   }
   return nullptr;
@@ -201,7 +201,7 @@ std::unique_ptr<AppBrowserController> MaybeCreateHostedAppBrowserController(
     const webapps::AppId& app_id) {
 #if BUILDFLAG(ENABLE_HOSTED_APPS)
   const extensions::Extension* extension =
-      extensions::ExtensionRegistry::Get(browser->profile())
+      extensions::ExtensionRegistry::Get(browser->GetProfile())
           ->GetExtensionById(app_id, extensions::ExtensionRegistry::EVERYTHING);
   if (extension && extension->is_hosted_app()) {
     return std::make_unique<extensions::HostedAppBrowserController>(browser,
@@ -252,7 +252,7 @@ bool IsNavigationCapturingReimplExperimentEnabled(
     return false;
   }
   // Enabling the generic flag turns it on for all navigations.
-  if (apps::features::IsNavigationCapturingReimplEnabled()) {
+  if (base::FeatureList::IsEnabled(features::kPwaNavigationCapturing)) {
     if (!features::kForcedOffCapturingAppsOnFirstNavigation.Get().empty() &&
         controlling_app_id.has_value()) {
       std::vector<std::string> forced_capturing_off_app_ids = base::SplitString(
@@ -483,10 +483,11 @@ bool MaybeHandleIntentPickerFocusExistingOrNavigateExisting(
   FocusAppContainer(existing_app_host->browser, existing_app_host->tab_index);
 
   webapps::LaunchParams launch_params;
-  launch_params.app_id = app_id;
-  launch_params.target_url = launch_url;
+  launch_params.set_app_id(app_id);
+  launch_params.set_target_url(launch_url);
   if (!time_reparent_started.is_null()) {
-    launch_params.time_navigation_started_for_enqueue = time_reparent_started;
+    launch_params.set_time_navigation_started_for_enqueue(
+        time_reparent_started);
   }
 
   if (client_mode == LaunchHandler::ClientMode::kNavigateExisting) {
@@ -499,12 +500,10 @@ bool MaybeHandleIntentPickerFocusExistingOrNavigateExisting(
     Navigate(&nav_params);
   } else {
     WebAppLaunchNavigationHandleUserData::DispatchLaunchParams(
-        preexisting_web_contents, std::move(launch_params));
+        preexisting_web_contents, std::move(launch_params),
+        apps::LaunchContainer::kLaunchContainerWindow,
+        apps::LaunchSource::kFromOmnibox);
   }
-
-  RecordLaunchMetrics(app_id, apps::LaunchContainer::kLaunchContainerWindow,
-                      apps::LaunchSource::kFromOmnibox, launch_url,
-                      preexisting_web_contents);
   return true;
 }
 
@@ -642,10 +641,9 @@ BrowserWindowInterface* ReparentWebContentsIntoAppBrowser(
       ReparentWebContentsIntoAppBrowser(contents, browser, app_id,
                                         as_pinned_home_tab);
 
-  UpdateLaunchStats(contents, app_id, launch_url);
-  RecordLaunchMetrics(app_id, apps::LaunchContainer::kLaunchContainerWindow,
-                      apps::LaunchSource::kFromReparenting, launch_url,
-                      contents);
+  UpdateLaunchMetricsAndStats(
+      app_id, apps::LaunchContainer::kLaunchContainerWindow,
+      apps::LaunchSource::kFromReparenting, launch_url, contents);
 
   std::move(completion_callback).Run(contents);
   return reparented_browser;
@@ -658,7 +656,7 @@ std::unique_ptr<AppBrowserController> MaybeCreateAppBrowserController(
   const webapps::AppId app_id =
       GetAppIdFromApplicationName(browser->app_name());
   auto* const provider =
-      WebAppProvider::GetForLocalAppsUnchecked(browser->profile());
+      WebAppProvider::GetForLocalAppsUnchecked(browser->GetProfile());
   if (provider && provider->registrar_unsafe().AppMatches(
                       app_id, WebAppFilter::IsAppSurfaceableToUser())) {
 #if BUILDFLAG(IS_CHROMEOS)
@@ -704,14 +702,11 @@ void MaybeAddPinnedHomeTab(BrowserWindowInterface* browser,
 void MaybeShowNavigationCaptureIph(webapps::AppId app_id,
                                    Profile* profile,
                                    Browser* browser) {
-  // Prevent ChromeOS from reaching this function in tests.
-#if !BUILDFLAG(IS_CHROMEOS)
   web_app::WebAppProvider* provider =
       web_app::WebAppProvider::GetForWebApps(profile);
   CHECK(provider);
   provider->ui_manager().MaybeShowIPHPromoForAppsLaunchedViaLinkCapturing(
       browser, profile, app_id);
-#endif
 }
 
 Browser::CreateParams CreateParamsForApp(const webapps::AppId& app_id,
@@ -772,12 +767,11 @@ content::WebContents* NavigateWebAppUsingParams(NavigateParams& nav_params) {
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
-  Browser* browser = nav_params.browser->GetBrowserForMigrationOnly();
+  Profile* profile = nav_params.browser->GetProfile();
   const std::optional<ash::SystemWebAppType> capturing_system_app_type =
-      ash::GetCapturingSystemAppForURL(browser->profile(), nav_params.url);
-  if (capturing_system_app_type &&
-      (!browser ||
-       !IsBrowserForSystemWebApp(browser, capturing_system_app_type.value()))) {
+      ash::GetCapturingSystemAppForURL(profile, nav_params.url);
+  if (capturing_system_app_type && GetSystemWebAppType(nav_params.browser) !=
+                                       capturing_system_app_type.value()) {
     // Web app launch process should receive the correct `NavigateParams`
     // argument from system web app launches, so that Navigate() call below
     // succeeds (i.e. don't trigger system web app link capture).
@@ -878,37 +872,12 @@ void RecordAppTabLaunchMetric(Profile* profile,
   RecordDiyOrCraftedAppLaunch(*web_app);
 }
 
-void RecordLaunchMetrics(const webapps::AppId& app_id,
-                         apps::LaunchContainer container,
-                         apps::LaunchSource launch_source,
-                         const GURL& launch_url,
-                         content::WebContents* web_contents) {
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents->GetBrowserContext());
-
-#if BUILDFLAG(IS_CHROMEOS)
-  // System web apps have different launch paths compared with web apps, and
-  // those paths aren't configurable. So their launch metrics shouldn't be
-  // reported to avoid skewing web app metrics.
-  DCHECK(!ash::GetSystemWebAppTypeForAppId(profile, app_id))
-      << "System web apps shouldn't be included in web app launch metrics";
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
-  if (container == apps::LaunchContainer::kLaunchContainerWindow) {
-    RecordAppWindowLaunchMetric(profile, app_id, launch_source);
-  }
-  if (container == apps::LaunchContainer::kLaunchContainerTab) {
-    RecordAppTabLaunchMetric(profile, app_id, launch_source);
-  }
-
-  base::UmaHistogramEnumeration("WebApp.LaunchSource", launch_source);
-  base::UmaHistogramEnumeration("WebApp.LaunchContainer", container);
-}
-
-void UpdateLaunchStats(content::WebContents* web_contents,
-                       const webapps::AppId& app_id,
-                       const GURL& launch_url) {
-  CHECK(web_contents != nullptr);
+void UpdateLaunchMetricsAndStats(const webapps::AppId& app_id,
+                                 apps::LaunchContainer container,
+                                 apps::LaunchSource launch_source,
+                                 const GURL& launch_url,
+                                 content::WebContents* web_contents) {
+  CHECK(web_contents);
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
 
@@ -927,6 +896,16 @@ void UpdateLaunchStats(content::WebContents* web_contents,
   // app launch will provide an engagement boost to the origin.
   site_engagement::SiteEngagementService::Get(profile)
       ->SetLastShortcutLaunchTime(web_contents, app_id, launch_url);
+
+  if (container == apps::LaunchContainer::kLaunchContainerWindow) {
+    RecordAppWindowLaunchMetric(profile, app_id, launch_source);
+  }
+  if (container == apps::LaunchContainer::kLaunchContainerTab) {
+    RecordAppTabLaunchMetric(profile, app_id, launch_source);
+  }
+
+  base::UmaHistogramEnumeration("WebApp.LaunchSource", launch_source);
+  base::UmaHistogramEnumeration("WebApp.LaunchContainer", container);
 }
 
 void LaunchWebApp(apps::AppLaunchParams params,

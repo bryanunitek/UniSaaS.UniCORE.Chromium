@@ -158,6 +158,7 @@
 #include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
+#include "net/base/url_util.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -167,6 +168,10 @@
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 #if BUILDFLAG(IS_WIN)
 // This is needed to resolve a conflict with a Windows specific macro for
@@ -193,7 +198,7 @@ using testing::UnorderedElementsAre;
 void MakeHistorySyncOptinUiAvailable(signin::IdentityManager& identity_manager,
                                      AccountInfo& account_info,
                                      bool eligible = true) {
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_can_show_history_sync_opt_ins_without_minor_mode_restrictions(
           eligible);
   signin::UpdateAccountInfoForAccount(&identity_manager, account_info);
@@ -296,7 +301,7 @@ AccountInfo FillAccountInfo(
                                  .SetAvatarUrl("https://get-avatar.com/foo")
                                  .Build();
   bool is_managed = hosted_domain != kNoHostedDomainFound;
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_is_subject_to_enterprise_features(is_managed);
   mutator.set_is_subject_to_account_level_enterprise_policies(is_managed);
   return account_info;
@@ -546,9 +551,12 @@ void WaitForBrowserUrl(const GURL& url, content::WebContents* target) {
 }
 
 GURL GetManagedUserProfileNoticeUrl() {
-  return base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)
-             ? GURL(chrome::kChromeUIManagedUserProfileNoticeRefreshURL)
-             : GURL(chrome::kChromeUIManagedUserProfileNoticeUrl);
+  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
+    const ManagedUserProfileNoticeUI::ScreenType default_type =
+        ManagedUserProfileNoticeUI::ScreenType::kProfilePicker;
+    return ManagedUserProfileNoticeUI::GetURLForType(default_type);
+  }
+  return GURL(chrome::kChromeUIManagedUserProfileNoticeUrl);
 }
 
 // Browser extra part used to be notified early enough to track the
@@ -825,7 +833,7 @@ class ProfilePickerCreationFlowBrowserTest
     if (is_supervised_profile) {
       supervised_user::EnableParentalControls(
           *profile_being_created->GetPrefs());
-      AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+      AccountCapabilitiesTestMutator mutator(&account_info);
       mutator.set_is_subject_to_parental_controls(true);
     }
 
@@ -1021,6 +1029,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest, ShowPicker) {
 }
 
 IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest, ShowChoice) {
+  base::HistogramTester histogram_tester;
   ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
       ProfilePicker::EntryPoint::kProfileMenuAddNewProfile));
   EXPECT_TRUE(ProfilePicker::IsOpen());
@@ -1031,15 +1040,21 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest, ShowChoice) {
   EXPECT_NE(delegate->GetWindowTitle(), delegate->GetAccessibleWindowTitle());
   WaitForLoadStop(GURL("chrome://profile-picker/new-profile"));
   EXPECT_NE(delegate->GetWindowTitle(), delegate->GetAccessibleWindowTitle());
+  histogram_tester.ExpectUniqueSample(
+      "Signin.SignIn.Offered", signin_metrics::AccessPoint::kUserManager, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
                        ShowChoiceWithInitialEmail) {
+  base::HistogramTester histogram_tester;
   constexpr char kEmail[] = "test@gmail.com";
   ProfilePicker::Show(ProfilePicker::Params::FromStartupWithEmail(kEmail));
   EXPECT_TRUE(ProfilePicker::IsOpen());
   WaitForPickerWidgetCreated();
   WaitForLoadStop(GetSigninChromeSyncDiceUrl(kEmail));
+  histogram_tester.ExpectUniqueSample(
+      "Signin.SignIn.Offered",
+      signin_metrics::AccessPoint::kUserManagerWithPrefilledEmail, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
@@ -1165,15 +1180,15 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
 }
 
 // TODO(https://crbug.com/447636989): Flaky on Linux Wayland
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
-#define MAYBE_CreateSignedInProfileClosePicker \
-  DISABLED_CreateSignedInProfileClosePicker
-#else
 #define MAYBE_CreateSignedInProfileClosePicker CreateSignedInProfileClosePicker
-#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
 // Regression test for https://crbug.com/40902259
 IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
                        MAYBE_CreateSignedInProfileClosePicker) {
+#if BUILDFLAG(IS_OZONE)
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Flaky on Linux Wayland";
+  }
+#endif
   // Closes the picker at the same time the new browser is created.
   class ClosePickerOnBrowserAddedObserver : public BrowserCollectionObserver {
    public:
@@ -2796,11 +2811,12 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
   EXPECT_EQ(new_browser->GetProfile()->GetPath(), other_path);
   WaitForPickerClosed();
 
-  // When InitialWebUI is enabled, the browser window is intentionally hidden
-  // initially, which causes FirstWebContentsFinishReason to be
-  // kAbandonNoInitiallyVisibleContent and prevents
-  // FirstWebContentsNonEmptyPaint from being recorded.
-  if (base::FeatureList::IsEnabled(features::kInitialWebUI)) {
+  if (base::FeatureList::IsEnabled(features::kWebUIReloadButton) &&
+      features::kWebUIReloadButtonDeferBrowserViewShow.Get()) {
+    // When kWebUIReloadButtonDeferBrowserViewShow is enabled, the browser
+    // window is intentionally hidden initially, which causes
+    // FirstWebContentsFinishReason to be kAbandonNoInitiallyVisibleContent and
+    // prevents FirstWebContentsNonEmptyPaint from being recorded.
     histogram_tester.ExpectTotalCount(
         "ProfilePicker.FirstProfileTime.FirstWebContentsNonEmptyPaint", 0);
     histogram_tester.ExpectUniqueSample(
@@ -2910,7 +2926,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerCreationFlowBrowserTest,
 
   // Close the browser window.
   ui_test_utils::BrowserDestroyedObserver observer(browser());
-  chrome::CloseAllBrowsersWithProfile(browser()->profile());
+  chrome::CloseAllBrowsersWithProfile(browser()->GetProfile());
   observer.Wait();
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
@@ -3895,12 +3911,12 @@ class ProfilePickerCreationFlowEphemeralProfileBrowserTest
       ProfileAttributesEntry* entry =
           profile_manager()
               ->GetProfileAttributesStorage()
-              .GetProfileAttributesWithPath(browser()->profile()->GetPath());
+              .GetProfileAttributesWithPath(browser()->GetProfile()->GetPath());
       ASSERT_NE(entry, nullptr);
       entry->SetLocalProfileName(kOriginalProfileName,
                                  entry->IsUsingDefaultName());
     }
-    CheckPolicyApplied(browser()->profile());
+    CheckPolicyApplied(browser()->GetProfile());
   }
 
  private:
@@ -4137,7 +4153,7 @@ IN_PROC_BROWSER_TEST_P(ProfilePickerWithGlicParamBrowserTest,
 
   base::FilePath initial_profile_path = browser()->profile()->GetPath();
   // Destroy the current profile to make sure no profiles are loaded.
-  ProfileDestructionWaiter profile_destruction_waiter(browser()->profile());
+  ProfileDestructionWaiter profile_destruction_waiter(browser()->GetProfile());
   CloseBrowserSynchronously(browser());
   profile_destruction_waiter.Wait();
   ASSERT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
@@ -4151,7 +4167,7 @@ IN_PROC_BROWSER_TEST_P(ProfilePickerWithGlicParamBrowserTest,
   profile_picker_handler()->HandleOnLearnMoreClicked(base::ListValue());
   Browser* new_browser = ui_test_utils::WaitForBrowserToOpen();
   EXPECT_TRUE(new_browser);
-  EXPECT_EQ(new_browser->profile()->GetPath(), initial_profile_path);
+  EXPECT_EQ(new_browser->GetProfile()->GetPath(), initial_profile_path);
 
   ui_test_utils::TabAddedWaiter tab_waiter(new_browser);
   content::WebContents* learn_more_content = tab_waiter.Wait();

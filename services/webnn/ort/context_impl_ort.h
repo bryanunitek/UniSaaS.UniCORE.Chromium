@@ -34,6 +34,7 @@ class ContextImplOrt : public WebNNContextImpl {
       mojo::ScopedDataPipeConsumerHandle write_tensor_consumer,
       mojo::ScopedDataPipeProducerHandle read_tensor_producer,
       scoped_refptr<Environment> env,
+      scoped_refptr<SessionOptions> session_options,
       std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
       scoped_refptr<gpu::MemoryTracker> memory_tracker,
       scoped_refptr<base::SingleThreadTaskRunner> owning_task_runner,
@@ -85,7 +86,6 @@ class ContextImplOrt : public WebNNContextImpl {
 
  private:
   void CreateGraphImpl(
-      mojo::PendingReceiver<mojom::WebNNGraph> receiver,
       mojom::GraphInfoPtr graph_info,
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
@@ -118,6 +118,11 @@ class ContextImplOrt : public WebNNContextImpl {
   // The device allocator used for device tensor creation. May be nullptr if
   // device tensor is not supported.
   scoped_refptr<DeviceAllocator> device_allocator_;
+
+  // The importer for external resources like D3D12 buffers. It is used for
+  // importing D3D12 buffers into ORT tensors. May be nullptr if the EP does
+  // not support external resource import.
+  ScopedOrtExternalResourceImporter external_resource_importer_;
 
   // Cancels pending graph compilation tasks when destructing.
   base::CancelableTaskTracker cancelable_task_tracker_;

@@ -7,10 +7,13 @@ import './reload_button.js';
 import './location_bar.js';
 import './split_tabs_button.js';
 import './home_button.js';
+import './battery_saver_button.js';
 import './pinned_toolbar_actions.js';
+import './extensions.js';
+import './app_menu_button.js';
 import './avatar_button.js';
-import './icon_table.js';
-import './icon_from_table.js';
+import '/shared/icon_table.js';
+import '/shared/icon_from_table.js';
 import './icons.html.js';
 
 import {assert} from '//resources/js/assert.js';
@@ -18,6 +21,7 @@ import {loadTimeData} from '//resources/js/load_time_data.js';
 import {TrackedElementManager} from '//resources/js/tracked_element/tracked_element_manager.js';
 import {CrLitElement, nothing} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import {IconTable} from '/shared/icon_table.js';
 import {ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {HelpBubbleMixinLit} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin_lit.js';
 
@@ -25,42 +29,60 @@ import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
 import {BrowserProxyImpl, EventDispositionFlag, INVALID_NAVIGATION_CONTROLS_STATE_LISTENER_HANDLE} from './browser_proxy.js';
 import type {BrowserProxy, IconUpdate, NavigationControlsState, NavigationControlsStateListenerHandle} from './browser_proxy.js';
-import {IconTable} from './icon_table.js';
 import {MetricsRecorder} from './metrics_recorder.js';
-import {AppMenuIconType, AppMenuSeverity} from './toolbar_ui_api_data_model.mojom-webui.js';
+import {setHasHelpBubble} from './toolbar_button.js';
+
 // clang-format off
 // Helper so tests can find what they needed when optimization is on.
-// This should probably be a separate file, but rollup support only
-// handles 2 at most now.
+// Exporting from this file, the rollup file, ensures that we test the
+// same code that we ship in optimized builds.
+import type {IconFromTableElement} from '/shared/icon_from_table.js';
 import {
+  AppMenuIconType,
+  AppMenuSeverity,
+  AvatarToolbarButtonState,
   ContentSettingImageType,
-  IconType,
+  ContextMenuType,
+  FocusRequestTarget,
   LhsChipIdentifier,
   OmniboxTextColor,
+  PageActionId,
+  PageActionTrigger,
   PermissionAction,
   PermissionChipTheme,
   PermissionPromptStyle,
   SplitTabActiveLocation,
-} from './toolbar_ui_api_data_model.mojom-webui.js';
-import type {OmniboxAction, LocationBarState, PermissionChipState} from './toolbar_ui_api_data_model.mojom-webui.js';
+} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
+import {IconType} from '/shared/icon_handle.mojom-webui.js';
+import type {OmniboxAction, LocationBarState, PageActionState, PermissionChipState, PermissionDashboardState} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
+
 import {INVALID_FOCUS_REQUEST_HANDLE} from './browser_proxy.js';
+import {AppMenuButtonElement} from './app_menu_button.js';
 import {ContentSettingIconElement} from './content_setting_icon.js';
 import {ContentSettingsIconsElement} from './content_settings_icons.js';
-import type {IconFromTableElement} from './icon_from_table.js';
 import {LocationBarElement} from './location_bar.js';
 import {LocationIconElement} from './location_icon.js';
+import {PageActionIconElement} from './page_action_icon.js';
+import {PageActionIconsElement} from './page_action_icons.js';
 import {PointerProxyImpl} from './pointer_proxy.js';
 import type {PointerProxy} from './pointer_proxy.js';
 import {PermissionChipElement} from './permission_chip.js';
+import type {PermissionDashboardElement} from './permission_dashboard.js';
 import {ReadonlyOmniboxElement} from './readonly_omnibox.js';
 import {getClickSourceType, getContextMenuSourceType, PressHandler} from './toolbar_button.js';
+import {ToolbarChipButtonElement} from './toolbar_chip_button.js';
 
 export {
+  AppMenuButtonElement,
+  AppMenuIconType,
+  AppMenuSeverity,
   BrowserProxyImpl,
+  ContextMenuType,
   ContentSettingIconElement,
   ContentSettingImageType,
   ContentSettingsIconsElement,
   EventDispositionFlag,
+  FocusRequestTarget,
   getClickSourceType,
   getContextMenuSourceType,
   PressHandler,
@@ -72,19 +94,27 @@ export {
   LocationBarElement,
   LocationIconElement,
   OmniboxTextColor,
+  PageActionIconElement,
+  PageActionIconsElement,
+  PageActionId,
+  PageActionTrigger,
   PermissionAction,
   PermissionChipElement,
   PermissionChipTheme,
   PermissionPromptStyle,
   PointerProxyImpl,
   ReadonlyOmniboxElement,
+  ToolbarChipButtonElement,
   TrackedElementManager,
 };
 export type {
   IconFromTableElement,
   LocationBarState,
   OmniboxAction,
+  PageActionState,
   PermissionChipState,
+  PermissionDashboardElement,
+  PermissionDashboardState,
   PointerProxy,
 };
 // clang-format on
@@ -96,7 +126,9 @@ const TRACKED_ELEMENTS: Array<{selector: string, id: string}> = [
   {selector: '#split-tabs', id: 'kToolbarSplitTabsToolbarButtonElementId'},
   {selector: '#location-bar', id: 'kLocationBarElementId'},
   {selector: '#home', id: 'kToolbarHomeButtonElementId'},
+  {selector: '#app-menu', id: 'kToolbarAppMenuButtonElementId'},
   {selector: '#avatar', id: 'kToolbarAvatarButtonElementId'},
+  {selector: '#battery-saver', id: 'kToolbarBatterySaverButtonElementId'},
 ];
 
 const AppElementBase = HelpBubbleMixinLit(CrLitElement);
@@ -125,12 +157,15 @@ export class ToolbarAppElement extends AppElementBase {
   static override get properties() {
     return {
       isReloadButtonEnabled_: {type: Boolean},
+      isAppMenuButtonEnabled_: {type: Boolean},
       isSplitTabsButtonEnabled_: {type: Boolean},
       isHomeButtonEnabled_: {type: Boolean},
+      isBatterySaverButtonEnabled_: {type: Boolean},
       isLocationBarEnabled_: {type: Boolean},
       navigationControlsState_: {type: Object},
       isBackForwardButtonEnabled_: {type: Boolean},
       isPinnedToolbarActionsEnabled_: {type: Boolean},
+      isExtensionsContainerEnabled_: {type: Boolean},
       isAvatarButtonEnabled_: {type: Boolean},
       isInitialized_: {type: Boolean},
     };
@@ -138,16 +173,22 @@ export class ToolbarAppElement extends AppElementBase {
 
   protected accessor isReloadButtonEnabled_: boolean =
       loadTimeData.getBoolean('enableReloadButton');
+  protected accessor isAppMenuButtonEnabled_: boolean =
+      loadTimeData.getBoolean('enableAppMenuButton');
   protected accessor isSplitTabsButtonEnabled_: boolean =
       loadTimeData.getBoolean('enableSplitTabsButton');
   protected accessor isHomeButtonEnabled_: boolean =
       loadTimeData.getBoolean('enableHomeButton');
+  protected accessor isBatterySaverButtonEnabled_: boolean =
+      loadTimeData.getBoolean('enableBatterySaverButton');
   protected accessor isLocationBarEnabled_: boolean =
       loadTimeData.getBoolean('enableLocationBar');
   protected accessor isBackForwardButtonEnabled_: boolean =
       loadTimeData.getBoolean('enableBackForwardButtons');
   protected accessor isPinnedToolbarActionsEnabled_: boolean =
       loadTimeData.getBoolean('enablePinnedToolbarActions');
+  protected accessor isExtensionsContainerEnabled_: boolean =
+      loadTimeData.getBoolean('enableExtensionsContainer');
   protected accessor isAvatarButtonEnabled_: boolean =
       loadTimeData.getBoolean('enableAvatarButton');
   /**
@@ -170,7 +211,7 @@ export class ToolbarAppElement extends AppElementBase {
     splitTabsControlState: {
       isCurrentTabSplit: false,
       location: SplitTabActiveLocation.kStart,
-      isPinned: false,
+      shouldBeShown: false,
       isContextMenuVisible: false,
     },
     backForwardControlState: {
@@ -193,15 +234,19 @@ export class ToolbarAppElement extends AppElementBase {
       isContextMenuVisible: false,
       trailingMargin: 0,
     },
+
+    batterySaverButtonVisible: false,
     locationBarState: {
       omniboxViewState: {
         browserVersion: 0,
         uiVersion: 0,
+        formattedFullUrl: '',
         textPieces: [],
         inlineAutocompletion: '',
         additionalText: '',
         selection: null,
         textIsUrl: false,
+        userInputInProgress: false,
       },
       locationBarFlags: {
         userInputInProgress: false,
@@ -225,16 +270,22 @@ export class ToolbarAppElement extends AppElementBase {
         activityIndicators: [],
         permissionDashboard: null,
       },
+      pageActionStates: [],
     },
     avatarControlState: {
-      iconUrl: '',
+      state: AvatarToolbarButtonState.kNormal,
+      icon: {handleId: 0n},
       text: '',
       tooltip: '',
       accessibilityName: '',
       accessibilityDescription: '',
+      enabled: true,
+      hasAiRing: false,
     },
     layoutConstantsVersion: 0,
+    touchUi: false,
     pinnedToolbarActionsState: [],
+    extensionsState: [],
   };
 
   private browserProxy_: BrowserProxy;
@@ -329,12 +380,21 @@ export class ToolbarAppElement extends AppElementBase {
           onHighlightChanged: (highlighted: boolean) => {
             el.classList.toggle('anchor-highlight', highlighted);
           },
+          onHelpBubbleShown: () => setHasHelpBubble(el, true),
+          onHelpBubbleHidden: () => setHasHelpBubble(el, false),
         });
       }
     }
 
-    const waitSelectors =
-        ['#back', '#forward', '#reload', '#split-tabs', '#home', '#avatar'];
+    const waitSelectors = [
+      '#back',
+      '#forward',
+      '#reload',
+      '#split-tabs',
+      '#home',
+      '#app-menu',
+      '#avatar',
+    ];
     const promises =
         waitSelectors.map(s => this.shadowRoot.querySelector<CrLitElement>(s))
             .filter(el => !!el)
@@ -499,8 +559,12 @@ export class ToolbarAppElement extends AppElementBase {
   protected onDragOver_(e: DragEvent) {
     if (e.dataTransfer &&
         (e.dataTransfer.types.includes('text/uri-list') ||
+         e.dataTransfer.types.includes('text/plain') ||
          e.dataTransfer.types.includes('Files'))) {
       e.preventDefault();
+      // By default, we show an allowed cursor over the general toolbar area.
+      // Individual components (like the Omnibox) that handle their own
+      // drag-and-drop will override this and call stopPropagation().
       e.dataTransfer.dropEffect = 'copy';
     }
   }
@@ -515,13 +579,19 @@ export class ToolbarAppElement extends AppElementBase {
       return;
     }
 
-    const url = e.dataTransfer.getData('text/uri-list');
-    if (url) {
-      this.browserProxy_.browserControlsHandler.navigate(
-          url.split('\n')[0]!);
+    if (e.dataTransfer.types.includes('text/uri-list')) {
+      const url = e.dataTransfer.getData('text/uri-list');
+      if (url) {
+        this.browserProxy_.browserControlsHandler.navigate(url.split('\n')[0]!);
+      }
     } else if (e.dataTransfer.types.includes('Files')) {
       this.browserProxy_.toolbarUIHandler.onToolbarDropFile(
           {x: e.clientX, y: e.clientY});
+    } else if (e.dataTransfer.types.includes('text/plain')) {
+      const text = e.dataTransfer.getData('text/plain');
+      if (text) {
+        this.browserProxy_.browserControlsHandler.navigateText(text);
+      }
     }
   }
 }

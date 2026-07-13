@@ -881,8 +881,8 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerBrowserTest,
                    /*foreground=*/true);
   navigation_observer.Wait();
 
-  new_browser->window()->Show();
-  new_browser->window()->SetBounds(expected_bounds);
+  new_browser->GetWindow()->Show();
+  new_browser->GetWindow()->SetBounds(expected_bounds);
 
   ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2u);
 
@@ -900,7 +900,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerBrowserTest,
 
   // Move the browser a bit and then close it. This is to make sure that when we
   // create a new browser, its bounds are actually coming from the template.
-  new_browser->window()->SetBounds(expected_bounds + gfx::Vector2d(10, 10));
+  new_browser->GetWindow()->SetBounds(expected_bounds + gfx::Vector2d(10, 10));
   web_app::CloseAndWait(new_browser);
 
   ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
@@ -1004,7 +1004,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
   SetShouldRestore(app_launch_handler.get());
 
   // Verify the restore window id.
-  app_window = CreateAppWindow(browser()->profile(), extension);
+  app_window = CreateAppWindow(browser()->GetProfile(), extension);
   ASSERT_TRUE(app_window);
 
   window = app_window->GetNativeWindow();
@@ -1073,7 +1073,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
   SetShouldRestore(app_launch_handler.get());
 
   // Tests that the created window is minimized.
-  app_window = CreateAppWindow(browser()->profile(), extension);
+  app_window = CreateAppWindow(browser()->GetProfile(), extension);
   ASSERT_TRUE(app_window);
   EXPECT_TRUE(app_window->GetBaseWindow()->IsMinimized());
 }
@@ -1109,7 +1109,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
   SetShouldRestore(app_launch_handler.get());
 
   // Verify the restore window id;
-  app_window1 = CreateAppWindow(browser()->profile(), extension);
+  app_window1 = CreateAppWindow(browser()->GetProfile(), extension);
   ASSERT_TRUE(app_window1);
   window1 = app_window1->GetNativeWindow();
   ASSERT_TRUE(window1);
@@ -1120,7 +1120,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
   EXPECT_TRUE(window_info->activation_index.has_value());
   EXPECT_EQ(INT32_MAX, window_info->activation_index.value());
 
-  app_window2 = CreateAppWindow(browser()->profile(), extension);
+  app_window2 = CreateAppWindow(browser()->GetProfile(), extension);
   ASSERT_TRUE(app_window2);
   window2 = app_window2->GetNativeWindow();
   ASSERT_TRUE(window2);
@@ -1132,7 +1132,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
   EXPECT_EQ(INT32_MAX, window_info->activation_index.value());
 
   // Create a new window, verity the restore window id is 0.
-  auto* app_window = CreateAppWindow(browser()->profile(), extension);
+  auto* app_window = CreateAppWindow(browser()->GetProfile(), extension);
   ASSERT_TRUE(app_window);
   auto* window = app_window->GetNativeWindow();
   ASSERT_TRUE(window);
@@ -1172,7 +1172,7 @@ IN_PROC_BROWSER_TEST_F(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
   SetShouldRestore(app_launch_handler.get());
 
   // Tests that the created window is not fullscreen.
-  app_window = CreateAppWindow(browser()->profile(), extension);
+  app_window = CreateAppWindow(browser()->GetProfile(), extension);
   ASSERT_TRUE(app_window);
   EXPECT_FALSE(app_window->GetBaseWindow()->IsFullscreenOrPending());
 }

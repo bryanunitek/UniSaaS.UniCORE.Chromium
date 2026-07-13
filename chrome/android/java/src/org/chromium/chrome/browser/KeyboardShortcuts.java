@@ -135,8 +135,8 @@ public class KeyboardShortcuts {
         KeyboardShortcutsSemanticMeaning.OPEN_MENU,
         KeyboardShortcutsSemanticMeaning.CUSTOM_EXTENSION_SHORTCUT,
         KeyboardShortcutsSemanticMeaning.TOGGLE_MULTISELECT,
-        KeyboardShortcutsSemanticMeaning.ZOOM_IN_LEGACY,
-        KeyboardShortcutsSemanticMeaning.ZOOM_OUT_LEGACY,
+        // KeyboardShortcutsSemanticMeaning.ZOOM_IN_LEGACY,
+        // KeyboardShortcutsSemanticMeaning.ZOOM_OUT_LEGACY,
         KeyboardShortcutsSemanticMeaning.FOCUS_APP_MENU_BUTTON,
         KeyboardShortcutsSemanticMeaning.MAX_VALUE
     })
@@ -242,8 +242,8 @@ public class KeyboardShortcuts {
         int TOGGLE_MULTISELECT = 62;
 
         // Visual (Legacy) zoom controls.
-        int ZOOM_IN_LEGACY = 63;
-        int ZOOM_OUT_LEGACY = 64;
+        // int ZOOM_IN_LEGACY = 63;
+        // int ZOOM_OUT_LEGACY = 64;
 
         // App menu button keyboard shortcut.
         int FOCUS_APP_MENU_BUTTON = 65;
@@ -701,31 +701,27 @@ public class KeyboardShortcuts {
                 R.string.keyboard_shortcut_webpage_group_header,
                 new KeyCombo[] {
                     new KeyCombo(KeyEvent.KEYCODE_ZOOM_IN, NO_MODIFIER),
-                    new KeyCombo(KeyEvent.KEYCODE_EQUALS, KeyEvent.META_CTRL_ON)
+                    new KeyCombo(KeyEvent.KEYCODE_EQUALS, KeyEvent.META_CTRL_ON),
+                    new KeyCombo(
+                            KeyEvent.KEYCODE_PLUS,
+                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
+                    new KeyCombo(
+                            KeyEvent.KEYCODE_EQUALS,
+                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
+                    new KeyCombo(KeyEvent.KEYCODE_NUMPAD_ADD, KeyEvent.META_CTRL_ON)
                 });
         new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.ZOOM_OUT,
                 new KeyCombo(KeyEvent.KEYCODE_MINUS, KeyEvent.META_CTRL_ON),
                 R.string.keyboard_shortcut_zoom_out,
                 R.string.keyboard_shortcut_webpage_group_header,
-                new KeyCombo[] {new KeyCombo(KeyEvent.KEYCODE_ZOOM_OUT, NO_MODIFIER)});
-        new KeyboardShortcutDefinition(
-                KeyboardShortcutsSemanticMeaning.ZOOM_IN_LEGACY,
-                new KeyCombo(
-                        KeyEvent.KEYCODE_PLUS, (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
-                R.string.keyboard_shortcut_zoom_in,
-                R.string.keyboard_shortcut_webpage_group_header,
                 new KeyCombo[] {
+                    new KeyCombo(KeyEvent.KEYCODE_ZOOM_OUT, NO_MODIFIER),
                     new KeyCombo(
-                            KeyEvent.KEYCODE_EQUALS,
-                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON))
+                            KeyEvent.KEYCODE_MINUS,
+                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
+                    new KeyCombo(KeyEvent.KEYCODE_NUMPAD_SUBTRACT, KeyEvent.META_CTRL_ON)
                 });
-        new KeyboardShortcutDefinition(
-                KeyboardShortcutsSemanticMeaning.ZOOM_OUT_LEGACY,
-                new KeyCombo(
-                        KeyEvent.KEYCODE_MINUS, (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
-                R.string.keyboard_shortcut_zoom_out,
-                R.string.keyboard_shortcut_webpage_group_header);
         new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.ZOOM_RESET,
                 new KeyCombo(KeyEvent.KEYCODE_0, KeyEvent.META_CTRL_ON),
@@ -870,6 +866,14 @@ public class KeyboardShortcuts {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
                     if (menuOrKeyboardActionController.onMenuOrKeyboardAction(
                             R.id.switch_keyboard_focus_row, false)) {
+                        return true;
+                    }
+                }
+                return true;
+            case KeyEvent.KEYCODE_F7:
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    if (menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                            R.id.toggle_caret_browsing, false)) {
                         return true;
                     }
                 }
@@ -1250,12 +1254,6 @@ public class KeyboardShortcuts {
                 case KeyboardShortcutsSemanticMeaning.ZOOM_OUT:
                     ZoomController.zoomOutPage(currentWebContents);
                     return true;
-                case KeyboardShortcutsSemanticMeaning.ZOOM_IN_LEGACY:
-                    ZoomController.zoomInVisual(currentWebContents);
-                    return true;
-                case KeyboardShortcutsSemanticMeaning.ZOOM_OUT_LEGACY:
-                    ZoomController.zoomOutVisual(currentWebContents);
-                    return true;
                 case KeyboardShortcutsSemanticMeaning.ZOOM_RESET:
                     ZoomController.zoomResetPage(currentWebContents, browserContextHandle);
                     return true;
@@ -1281,10 +1279,7 @@ public class KeyboardShortcuts {
                         currentTab.goForward();
                     }
                     return true;
-                case KeyboardShortcutsSemanticMeaning.TOGGLE_CARET_BROWSING:
-                    menuOrKeyboardActionController.onMenuOrKeyboardAction(
-                            R.id.toggle_caret_browsing, false);
-                    return true;
+
                 case KeyboardShortcutsSemanticMeaning.OPEN_HELP:
                     menuOrKeyboardActionController.onMenuOrKeyboardAction(R.id.help_id, false);
                     return true;

@@ -1196,7 +1196,7 @@ Capabilities RasterDecoderImpl::GetCapabilities() {
     caps.context_supports_distance_field_text = true;
     caps.texture_half_float_linear = true;
     caps.use_deferred_graphite_submit =
-        features::kSkiaGraphiteEnableDeferredSubmit.Get();
+        features::SkiaGraphiteEnableDeferredSubmit();
 #if BUILDFLAG(SKIA_USE_DAWN)
     if (shared_context_state_->IsGraphiteDawn()) {
       caps.texture_norm16 =
@@ -1226,9 +1226,7 @@ Capabilities RasterDecoderImpl::GetCapabilities() {
     caps.supports_yuv_readback = true;
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kNvidiaWaylandYuvHardwareConversionWorkaround) &&
-      feature_info()->workarounds().disable_rgb_to_yuv_conversion) {
+  if (feature_info()->workarounds().disable_rgb_to_yuv_conversion) {
     caps.supports_rgb_to_yuv_conversion = false;
   }
 
@@ -2654,6 +2652,19 @@ void RasterDecoderImpl::DoReadbackYUVImagePixelsINTERNAL(
   gl::ScopedProgressReporter report_progress(
       shared_context_state_->progress_reporter());
 
+  // YUV readback requires knowing what SkColorSpace the RGB data should be
+  // converted to AND the SkYUVColorSpace that defines how YUV is derived from
+  // the RGB data. To avoid colorspace conversion, this always uses the
+  // SkColorSpace on `sk_image` (derived from the gfx::ColorSpace of the shared
+  // image). If the source image is multi-planar, try to match its YUV color
+  // space, otherwise default to Rec 709 for multi-planar and Rec 601 for
+  // single-plane formats.
+  SkYUVColorSpace yuv_cs = kRec601_Limited_SkYUVColorSpace;
+  if (source_shared_image->format().is_multi_plane()) {
+    yuv_cs = kRec709_Limited_SkYUVColorSpace;
+    source_shared_image->color_space().ToSkYUVColorSpace(&yuv_cs);
+  }
+
   // While this function indicates it's asynchronous, the DoFinish() call below
   // ensures it completes synchronously.
   YUVReadbackResult yuv_result;
@@ -2661,17 +2672,15 @@ void RasterDecoderImpl::DoReadbackYUVImagePixelsINTERNAL(
     // SkImage/SkSurface asyncRescaleAndReadPixels methods won't be implemented
     // for Graphite. Instead the equivalent methods will be on Graphite Context.
     graphite_shared_context()->asyncRescaleAndReadPixelsYUV420AndSubmit(
-        sk_image.get(), kJPEG_Full_SkYUVColorSpace, SkColorSpace::MakeSRGB(),
-        src_rect, dst_size, SkImage::RescaleGamma::kSrc,
-        SkImage::RescaleMode::kRepeatedLinear,
+        sk_image.get(), yuv_cs, sk_image->refColorSpace(), src_rect, dst_size,
+        SkImage::RescaleGamma::kSrc, SkImage::RescaleMode::kRepeatedLinear,
         base::BindOnce(&OnReadYUVImagePixelsDone), &yuv_result);
   } else {
     CHECK(gr_context());
     sk_image->asyncRescaleAndReadPixelsYUV420(
-        kJPEG_Full_SkYUVColorSpace, SkColorSpace::MakeSRGB(), src_rect,
-        dst_size, SkImage::RescaleGamma::kSrc,
-        SkImage::RescaleMode::kRepeatedLinear, &OnReadYUVImagePixelsDone,
-        &yuv_result);
+        yuv_cs, sk_image->refColorSpace(), src_rect, dst_size,
+        SkImage::RescaleGamma::kSrc, SkImage::RescaleMode::kRepeatedLinear,
+        &OnReadYUVImagePixelsDone, &yuv_result);
     source_scoped_access->ApplyBackendSurfaceEndState();
     if (!end_semaphores.empty()) {
       GrFlushInfo flush_info = {
@@ -3000,8 +3009,8 @@ error::Error RasterDecoderImpl::DoRasterCHROMIUM(GLuint raster_shm_id,
       .is_privileged = is_privileged_,
       .shared_image_provider = paint_op_shared_image_provider_.get()};
 
-  alignas(cc::PaintOpBuffer::kPaintOpAlign) char
-      data[cc::kLargestPaintOpAlignedSize];
+  alignas(cc::PaintOpBuffer::kPaintOpAlign)
+      uint8_t data[cc::kLargestPaintOpAlignedSize];
 
   gl::ScopedProgressReporter report_progress(
       shared_context_state_->progress_reporter());
@@ -3047,8 +3056,8 @@ error::Error RasterDecoderImpl::DoRasterCHROMIUM(GLuint raster_shm_id,
 
   while (!paint_buffer.empty()) {
     size_t skip = 0;
-    cc::PaintOp* deserialized_op = cc::PaintOp::Deserialize(
-        paint_buffer, data, std::size(data), &skip, options);
+    cc::PaintOp* deserialized_op =
+        cc::PaintOp::Deserialize(paint_buffer, data, &skip, options);
     if (!deserialized_op) {
       LOCAL_SET_GL_ERROR(GL_INVALID_OPERATION, "glRasterCHROMIUM",
                          "RasterCHROMIUM: serialization failure");
@@ -3168,23 +3177,25 @@ void RasterDecoderImpl::DoEndRasterCHROMIUM() {
 }
 
 void RasterDecoderImpl::DoFlushTileRasterGraphiteCommandsCHROMIUM() {
-  if (!features::kSkiaGraphiteEnableDeferredSubmit.Get()) {
-    // Skip if we are not using Graphite's deferred submit feature.
+  auto* graphite_context = graphite_shared_context();
+  if (!graphite_context) {
+    return;
+  }
+
+  if (!features::SkiaGraphiteEnableDeferredSubmit()) {
     return;
   }
 
   TRACE_EVENT0("gpu",
                "RasterDecoderImpl::DoFlushTileRasterGraphiteCommandsCHROMIUM");
 
-  if (auto* graphite_context = graphite_shared_context()) {
-    // A SyncToken is not strictly required to order this flush before the
-    // compositor's Context::submit(). If this happens before the compositor's
-    // Context::submit(), it's ideal for maximizing parallelism. Otherwise,
-    // the tile raster commands will naturally be submitted together with the
-    // compositor's commands in the latter's Context::submit(), so GPU
-    // execution order is still guaranteed.
-    graphite_context->submit();
-  }
+  // A SyncToken is not strictly required to order this flush before the
+  // compositor's Context::submit(). If this happens before the compositor's
+  // Context::submit(), it's ideal for maximizing parallelism. Otherwise,
+  // the tile raster commands will naturally be submitted together with the
+  // compositor's commands in the latter's Context::submit(), so GPU
+  // execution order is still guaranteed.
+  graphite_context->submit();
 }
 
 void RasterDecoderImpl::DoCreateTransferCacheEntryINTERNAL(

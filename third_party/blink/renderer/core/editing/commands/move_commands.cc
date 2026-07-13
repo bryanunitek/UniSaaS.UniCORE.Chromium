@@ -68,8 +68,9 @@ unsigned MoveCommands::VerticalScrollDistance(LocalFrame& frame) {
         IsEditable(*focused_element) || frame.IsCaretBrowsingEnabled()))
     return 0;
   const ScrollableArea& scrollable_area = *frame.View()->LayoutViewport();
-  const int height = std::min<int>(layout_box.ClientHeight().ToInt(),
-                                   scrollable_area.VisibleHeight());
+  const int height =
+      std::min<int>(layout_box.PhysicalPaddingBoxRect().Height().ToInt(),
+                    scrollable_area.VisibleHeight());
   return cc::ScrollUtils::CalculatePageStep(height);
 }
 
@@ -82,7 +83,7 @@ bool MoveCommands::ModifySelectionWithPageGranularity(
     UpdateSelectionForCaretBrowsing(frame);
 
   SelectionModifier selection_modifier(
-      frame, frame.Selection().GetSelectionInDOMTree());
+      frame, frame.Selection().GetSelectionInDomTree());
   selection_modifier.SetSelectionIsDirectional(
       frame.Selection().IsDirectional());
   if (!selection_modifier.ModifyWithPageGranularity(alter, vertical_distance,
@@ -132,7 +133,7 @@ void MoveCommands::UpdateFocusForCaretBrowsing(LocalFrame& frame) {
     return;
   }
 
-  SelectionInDOMTree selection = frame.Selection().GetSelectionInDOMTree();
+  SelectionInDomTree selection = frame.Selection().GetSelectionInDomTree();
   if (!selection.IsCaret())
     return;
 
@@ -176,7 +177,7 @@ void MoveCommands::UpdateSelectionForCaretBrowsing(LocalFrame& frame) {
     return;
 
   frame.Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .Collapse(Position::FirstPositionInOrBeforeNode(*activeElement))
           .Build(),
       SetSelectionOptions::Builder()

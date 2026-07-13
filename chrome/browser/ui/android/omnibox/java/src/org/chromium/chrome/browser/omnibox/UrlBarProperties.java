@@ -15,6 +15,7 @@ import org.chromium.chrome.browser.omnibox.UrlBar.UrlBarDelegate;
 import org.chromium.chrome.browser.omnibox.UrlBar.UrlBarTextContextMenuDelegate;
 import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.modelutil.PropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.ReadableObjectPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
@@ -136,8 +137,8 @@ class UrlBarProperties {
             new WritableObjectPropertyKey<>();
 
     /** The callback to be notified on focus changes. */
-    public static final WritableObjectPropertyKey<Callback<Boolean>> FOCUS_CHANGE_CALLBACK =
-            new WritableObjectPropertyKey<>();
+    public static final ReadableObjectPropertyKey<Callback<UrlBarFocusChangeInfo>>
+            FOCUS_CHANGE_CALLBACK = new ReadableObjectPropertyKey<>();
 
     /** Specifies whether suggestions are showing below the URL bar. */
     public static final WritableBooleanPropertyKey HAS_URL_SUGGESTIONS =
@@ -169,6 +170,14 @@ class UrlBarProperties {
     public static final WritableObjectPropertyKey<Runnable> MANAGE_SEARCH_ENGINES_CALLBACK =
             new WritableObjectPropertyKey<>();
 
+    /** Whether the AI Mode pref is currently enabled. */
+    public static final WritableBooleanPropertyKey IS_AI_MODE_PREF_ENABLED =
+            new WritableBooleanPropertyKey();
+
+    /** The callback to run when the "Always Show AI Mode" menu item is toggled. */
+    public static final WritableObjectPropertyKey<Callback<Boolean>> AI_MODE_PREF_TOGGLE_CALLBACK =
+            new WritableObjectPropertyKey<>();
+
     /** The callback to be notified on raw url text changes (rich context). */
     public static final WritableObjectPropertyKey<Callback<UrlBarTextChangeInfo>>
             RICH_TEXT_CHANGE_LISTENER = new WritableObjectPropertyKey<>();
@@ -176,9 +185,6 @@ class UrlBarProperties {
     /** Specifies whether the text should be selected when the URL bar is focused. */
     public static final WritableBooleanPropertyKey SELECT_ALL_ON_FOCUS =
             new WritableBooleanPropertyKey();
-
-    /** Whether the cursor should be shown in the view. */
-    public static final WritableBooleanPropertyKey SHOW_CURSOR = new WritableBooleanPropertyKey();
 
     /** Whether the hint text should be shown in the view. */
     public static final WritableBooleanPropertyKey SHOW_HINT_TEXT =
@@ -227,9 +233,10 @@ class UrlBarProperties {
                 KEY_DOWN_LISTENER,
                 LONG_CLICK_LISTENER,
                 MANAGE_SEARCH_ENGINES_CALLBACK,
+                IS_AI_MODE_PREF_ENABLED,
+                AI_MODE_PREF_TOGGLE_CALLBACK,
                 RICH_TEXT_CHANGE_LISTENER,
                 SELECT_ALL_ON_FOCUS,
-                SHOW_CURSOR,
                 SHOW_HINT_TEXT,
                 TEXT_CHANGE_LISTENER,
                 TEXT_COLOR,

@@ -11,7 +11,6 @@
 
 namespace features {
 
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2FallbackPrefetchSpecRules);
 
 // Controls whether `PrefetchMatchResolver` use timeout for prefetch ahead of
 // prerender. We are going not to use timeout as it makes prerender fail. For
@@ -69,9 +68,15 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2WarmUpCompositorForNonImmediate);
 // prerender when a matching prerender speculation rule is added.
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerenderUntilScriptUpgrade);
 
-// If enabled, prerender activation beacon will be sent when a prerender is
-// activated.
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerenderActivationBeacon);
+// If enabled, allows a prerender to reuse its initiator's process while
+// remaining in a dedicated BrowsingInstance.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2ReuseInitiatorProcess);
+CONTENT_EXPORT extern const base::FeatureParam<std::string>
+    kPrerender2ReuseInitiatorProcessActionType;
+CONTENT_EXPORT extern const base::FeatureParam<std::string>
+    kPrerender2ReuseInitiatorProcessEagerness;
+CONTENT_EXPORT extern const base::FeatureParam<int>
+    kPrerender2ReuseInitiatorProcessMaxReuseCount;
 
 CONTENT_EXPORT bool UsePrefetchPrerenderIntegration();
 }  // namespace features

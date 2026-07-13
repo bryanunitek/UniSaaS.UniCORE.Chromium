@@ -8,10 +8,8 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/autofill/payments/mandatory_reauth_bubble_controller.h"
 #include "chrome/browser/ui/autofill/payments/mandatory_reauth_bubble_controller_impl.h"
-#include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/autofill/payments/mandatory_reauth_confirmation_bubble_view.h"
 #include "chrome/browser/ui/views/autofill/payments/mandatory_reauth_opt_in_bubble_view.h"
 #include "components/strings/grit/components_strings.h"
@@ -49,10 +47,10 @@ views::BubbleDialogDelegate* MandatoryReauthIconView::GetBubble() const {
 
   if (controller->GetMandatoryReauthBubbleType() ==
       MandatoryReauthBubbleType::kConfirmation) {
-    return static_cast<autofill::MandatoryReauthConfirmationBubbleView*>(
+    return static_cast<MandatoryReauthConfirmationBubbleView*>(
         controller->GetBubbleView());
   } else {
-    return static_cast<autofill::MandatoryReauthOptInBubbleView*>(
+    return static_cast<MandatoryReauthOptInBubbleView*>(
         controller->GetBubbleView());
   }
 }

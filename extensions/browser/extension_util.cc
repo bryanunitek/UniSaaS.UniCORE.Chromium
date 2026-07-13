@@ -336,7 +336,7 @@ bool CanWithholdPermissionsFromExtension(const ExtensionId& extension_id,
 }
 
 int GetBrowserContextId(content::BrowserContext* context) {
-  using ContextIdMap = std::map<std::string, int>;
+  using ContextIdMap = std::map<base::UnguessableToken, int>;
 
   static int next_id = 0;
   static base::NoDestructor<ContextIdMap> context_map;
@@ -344,7 +344,7 @@ int GetBrowserContextId(content::BrowserContext* context) {
   // we need to get the original context to make sure we take the right context.
   content::BrowserContext* original_context =
       ExtensionsBrowserClient::Get()->GetOriginalContext(context);
-  const std::string& context_id = original_context->UniqueId();
+  const base::UnguessableToken& context_id = original_context->UniqueToken();
   auto iter = context_map->find(context_id);
   if (iter == context_map->end()) {
     iter = context_map->insert(std::make_pair(context_id, next_id++)).first;
@@ -581,9 +581,7 @@ bool IsExtensionDownload(const download::DownloadItem& download_item) {
     return false;
   }
 
-  if (download_item.GetMimeType() == Extension::kMimeType ||
-      UserScript::IsURLUserScript(download_item.GetURL(),
-                                  download_item.GetMimeType())) {
+  if (download_item.GetMimeType() == Extension::kMimeType) {
     return true;
   }
   return false;

@@ -57,7 +57,6 @@ import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.omnibox.LocationBarMediator.OmniboxUma;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator;
-import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.PopupState;
 import org.chromium.chrome.browser.omnibox.geo.GeolocationHeader;
@@ -319,21 +318,18 @@ public class LocationBarCoordinator
                                         ? mAutocompleteCoordinator.getSuggestionsDropdown()
                                         : null,
                         backPressManager,
-                        exactMatchUrlSupplier);
-        NonNullObservableSupplier<Integer> fuseboxStateSupplier;
-        NonNullObservableSupplier<Integer> fuseboxLayoutModeSupplier;
-        if (OmniboxFeatures.isMultimodalInputEnabled(context)) {
-            fuseboxStateSupplier = mFuseboxCoordinator.getFuseboxStateSupplier();
-            fuseboxStateSupplier.addSyncObserverAndPostIfNonNull(mOnFuseboxStateChange);
-            mFuseboxCoordinator
-                    .getPopupStateSupplier()
-                    .addSyncObserverAndPostIfNonNull(mOnPopupStateChange);
-            fuseboxLayoutModeSupplier = mFuseboxCoordinator.getFuseboxLayoutModeSupplier();
-        } else {
-            fuseboxStateSupplier = ObservableSuppliers.createNonNull(FuseboxState.DISABLED);
-            fuseboxLayoutModeSupplier =
-                    ObservableSuppliers.createNonNull(FuseboxLayoutMode.TOOLBAR);
-        }
+                        exactMatchUrlSupplier,
+                        () -> mAutocompleteCoordinator.loadTypedOmniboxText(false),
+                        () -> setOmniboxEditingText(""),
+                        this::getUrlBarTextWithoutAutocomplete);
+        NonNullObservableSupplier<Integer> fuseboxStateSupplier =
+                mFuseboxCoordinator.getFuseboxStateSupplier();
+        fuseboxStateSupplier.addSyncObserverAndPostIfNonNull(mOnFuseboxStateChange);
+        mFuseboxCoordinator
+                .getPopupStateSupplier()
+                .addSyncObserverAndPostIfNonNull(mOnPopupStateChange);
+        NonNullObservableSupplier<Integer> fuseboxLayoutModeSupplier =
+                mFuseboxCoordinator.getFuseboxLayoutModeSupplier();
 
         if (mLocationBarLayout instanceof LocationBarTablet tabletLayout) {
             mLocationBarHolder = (ViewGroup) tabletLayout.getParent();
@@ -355,7 +351,7 @@ public class LocationBarCoordinator
                         mDeferredIMEWindowInsetApplicationCallback::getCurrentKeyboardHeight,
                         bottomWindowPaddingSupplier,
                         fuseboxStateSupplier,
-                        locationBarDataProvider,
+                        fuseboxLayoutModeSupplier,
                         topInsetProvider);
 
         mPageZoomIndicatorCoordinator =
@@ -438,7 +434,7 @@ public class LocationBarCoordinator
                         omniboxActionDelegate,
                         omniboxSuggestionsDropdownScrollListener,
                         mActivityLifecycleDispatcher,
-                        uiOverrides.isForcedPhoneStyleOmnibox(),
+                        uiOverrides,
                         windowAndroid,
                         mDeferredIMEWindowInsetApplicationCallback,
                         mFuseboxCoordinator);
@@ -550,7 +546,7 @@ public class LocationBarCoordinator
 
     @Override
     public float getUrlBarHeight() {
-        return mUrlBar.getHeight();
+        return mUrlBar.getMeasuredHeight();
     }
 
     /**
@@ -793,6 +789,17 @@ public class LocationBarCoordinator
         mStatusCoordinator.setShowStatusIconForSecureOrigins(showStatusIconForSecureOrigins);
     }
 
+    /**
+     * Sets an icon override resource ID to replace the default status icon. See {@link
+     * StatusCoordinator#setDefaultStatusIconOverrideResId(int)} for more details.
+     *
+     * @param iconOverrideResId The resource ID of the override icon, or {@link Resources#ID_NULL}
+     *     to clear.
+     */
+    public void setDefaultStatusIconOverrideResId(@DrawableRes int iconOverrideResId) {
+        mStatusCoordinator.setDefaultStatusIconOverrideResId(iconOverrideResId);
+    }
+
     @Override
     public void setMiniOriginMode(boolean active) {
         mMiniOriginMode = active;
@@ -925,8 +932,7 @@ public class LocationBarCoordinator
     /** Initiates a pre-fetch of autocomplete suggestions. */
     public void startAutocompletePrefetch() {
         if (!mNativeInitialized) return;
-        mAutocompleteCoordinator.prefetchZeroSuggestResults(
-                mLocationBarMediator.getLocationBarDataProvider().getTab());
+        mLocationBarMediator.hintZeroSuggestRefresh();
     }
 
     /**
@@ -1008,8 +1014,8 @@ public class LocationBarCoordinator
 
     /* package */ void onFuseboxStateChange(@FuseboxState int newState) {
         if (mUrlCoordinator == null || !mUrlCoordinator.hasFocus()) return;
-        View addButton = mLocationBarLayout.findViewById(R.id.location_bar_attachments_add);
-        if (addButton == null) return;
+        View plusButton = mLocationBarLayout.findViewById(R.id.fusebox_plus_button);
+        if (plusButton == null) return;
 
         // The Fade and and ChangeBounds anims below are only intended for animating between compact
         // <--> expanded; they don't look good otherwise.
@@ -1026,7 +1032,7 @@ public class LocationBarCoordinator
                 .setDuration(COMPACT_MODE_ANIMATION_DURATION_MS)
                 .setInterpolator(Interpolators.STANDARD_INTERPOLATOR)
                 .addTarget(mLocationBarLayout)
-                .addTarget(addButton);
+                .addTarget(plusButton);
         Transition transition;
         if (newState == FuseboxState.COMPACT) {
             // Only fade when entering expanded mode.
@@ -1508,11 +1514,7 @@ public class LocationBarCoordinator
 
         var locationBarDataProvider = mLocationBarMediator.getLocationBarDataProvider();
         boolean isNtp = locationBarDataProvider.getNewTabPageDelegate().isCurrentlyVisible();
-        if (!ToolbarVariationUtils.shouldModifyToolbarButtons(
-                        mLocationBarLayout.getContext(), isNtp)
-                || mLocationBarMediator.isUrlBarFocused()
-                || mMiniOriginMode
-                || mOptionalButtonData == null) {
+        if (shouldHideOptionalButton(isNtp)) {
             mOptionalButtonCoordinator.hideButton();
         } else {
             mOptionalButtonCoordinator.setBrandedColorScheme(
@@ -1524,6 +1526,23 @@ public class LocationBarCoordinator
         }
 
         updateUrlBarNextFocusForwardId();
+    }
+
+    private boolean shouldHideOptionalButton(boolean isNtp) {
+        if (!ToolbarVariationUtils.shouldModifyToolbarButtons(
+                mLocationBarLayout.getContext(), isNtp)) {
+            return true;
+        }
+        if (mLocationBarMediator.isUrlBarFocused()
+                || mMiniOriginMode
+                || mOptionalButtonData == null) {
+            return true;
+        }
+        if (ToolbarVariationUtils.isToolbarUiRefactorEnabled(mLocationBarLayout.getContext())
+                && mOptionalButtonData.isIdentityDisc()) {
+            return true;
+        }
+        return false;
     }
 
     private void updateUrlBarNextFocusForwardId() {

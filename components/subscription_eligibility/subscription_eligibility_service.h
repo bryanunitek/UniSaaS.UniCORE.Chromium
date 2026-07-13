@@ -14,6 +14,9 @@ class PrefService;
 
 namespace subscription_eligibility {
 
+// Command-line switch to force the AI subscription tier to a specific value.
+extern const char kForceAiSubscriptionTier[];
+
 class SubscriptionEligibilityService : public KeyedService {
  public:
   class Observer : public base::CheckedObserver {
@@ -31,7 +34,7 @@ class SubscriptionEligibilityService : public KeyedService {
 
   // Returns the AI subscription tier for the user. If a positive tier is
   // returned, it means the account must have Chrome benefits.
-  int32_t GetAiSubscriptionTier();
+  int32_t GetAiSubscriptionTier() const;
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);

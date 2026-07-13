@@ -23,7 +23,9 @@ import {TestMock} from 'chrome://webui-test/test_mock.js';
 import {isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {TestContextualTasksBrowserProxy} from './test_contextual_tasks_browser_proxy.js';
-import {ADD_TAB_CONTEXT_FN, assertStyle, FAKE_TOKEN_STRING, FAKE_TOKEN_STRING_2, fixtureUrl, getSubmitButton, getSubmitContainer, installMock, setupAutocompleteResults, simulateUserInput, uploadFileAndVerify} from './test_utils.js';
+import {ADD_TAB_CONTEXT_FN, setupAutocompleteResults, uploadFileAndVerify} from './test_searchbox_utils.js';
+import {assertStyle, createCtComposeboxApp, FAKE_TOKEN_STRING, FAKE_TOKEN_STRING_2, fixtureUrl, getSubmitButton, getSubmitContainer, installMock, simulateUserInput} from './contextual_tasks_test_utils.js';
+import type {CtComposeboxAppParts} from './contextual_tasks_test_utils.js';
 
 function pressEnter(element: HTMLElement) {
   element.dispatchEvent(new KeyboardEvent('keydown', {
@@ -82,8 +84,10 @@ suite('ContextualTasksComposeboxSubmitTest', () => {
     mockTimer = new MockTimer();
 
     loadTimeData.overrideValues({
+      useContextualTasksComposeboxFork: false,
       contextualMenuUsePecApi: false,
       composeboxSmartTabSharingVisible: false,
+      contextManagementInComposeboxEnabled: false,
       enableComposeboxJumpFix: false,
       composeboxShowTypedSuggest: true,
       composeboxShowZps: true,
@@ -97,6 +101,8 @@ suite('ContextualTasksComposeboxSubmitTest', () => {
     mockComposeboxPageHandler = TestMock.fromClass(ComposeboxPageHandlerRemote);
     mockComposeboxPageHandler.setResultFor(
         'getSmartTabSharingActive', Promise.resolve({active: false}));
+    mockComposeboxPageHandler.setResultFor(
+        'canShowNextboxAnimation', Promise.resolve({canShow: true}));
     mockSearchboxPageHandler = TestMock.fromClass(SearchboxPageHandlerRemote);
     mockSearchboxPageHandler.setResultFor(
         'getInputState', Promise.resolve({state: new MockInputState()}));
@@ -135,127 +141,6 @@ suite('ContextualTasksComposeboxSubmitTest', () => {
 
   teardown(() => {
     mockTimer.uninstall();
-  });
-
-  test('submit enabled when tool is Deep Search', async () => {
-    const submitContainer = getSubmitContainer(composebox);
-    assertFalse(
-        isVisible(submitContainer), 'Submit container should be hidden');
-
-    // Ensure we start in Zero State (disabled).
-    testProxy.callbackRouterRemote.onZeroStateChange(true);
-    await microtasksFinished();
-
-    // Verify submit button is disabled and clicking it does nothing.
-    const submitButton = getSubmitButton(composebox);
-    assertTrue(submitButton!.disabled, 'Submit button should be disabled');
-    submitButton!.click();
-    await microtasksFinished();
-    assertEquals(
-        mockSearchboxPageHandler.getCallCount('submitQuery'), 0,
-        'Submit query should not be called when button is disabled');
-
-    // Change tool to Deep Search
-    const inputState = Object.assign({}, new MockInputState(), {
-      activeTool: ToolMode.kDeepSearch,
-    });
-    searchboxCallbackRouterRemote.onInputStateChanged(inputState);
-    await searchboxCallbackRouterRemote.$.flushForTesting();
-
-    await microtasksFinished();
-
-    // Verify submit button is disabled and clicking it still does nothing.
-    assertTrue(submitButton!.disabled, 'Submit button should be disabled');
-    submitButton!.click();
-    await microtasksFinished();
-    assertEquals(
-        mockSearchboxPageHandler.getCallCount('submitQuery'), 0,
-        'Submit query should not be called when button is disabled');
-
-    // Set isZeroState to false (simulating follow-up) to allow empty query
-    // for Deep Search.
-    testProxy.callbackRouterRemote.onZeroStateChange(false);
-    await microtasksFinished();
-    await composebox.updateComplete;
-
-    // Submit should be enabled now, clicking triggers the action.
-    submitButton!.click();
-    await microtasksFinished();
-    assertEquals(mockSearchboxPageHandler.getCallCount('submitQuery'), 1);
-  });
-
-  test('ComposeboxSubmitSendsQueryAndClearsInput', async () => {
-    mockTimer.install();
-    const TEST_QUERY = 'test query';
-
-    const inputElement = composebox.getInputElement().$.input;
-    assertTrue(
-        isVisible(inputElement), 'Composebox input element should be visible');
-
-    simulateUserInput(inputElement, TEST_QUERY);
-
-    mockTimer.tick(300);
-
-    await mockSearchboxPageHandler.whenCalled('queryAutocomplete');
-
-    await setupAutocompleteResults(
-        searchboxCallbackRouterRemote, TEST_QUERY, mockTimer);
-
-    // Wait for the matches to be populated.
-    while (!composebox.getDropdownElement().result) {
-      mockTimer.tick(10);
-      await Promise.resolve();
-    }
-
-    pressEnter(inputElement);
-
-    const [matchIndex, url] =
-        await mockSearchboxPageHandler.whenCalled('openAutocompleteMatch');
-
-    assertEquals(0, matchIndex);
-    assertEquals(`${fixtureUrl}/search?q=${TEST_QUERY}`, url);
-    mockTimer.tick(0);
-
-    // Cannot use `await microTasksFinished()` here because the transition to
-    // zero state triggers `clearAllInputs()`, which modifies the DOM layout.
-    // This causes `ResizeObserver` events that schedule additional microtasks,
-    // preventing `microTasksFinished()` from settling within the test timeout.
-    await composebox.updateComplete;
-    await contextualTasksApp.updateComplete;
-
-    assertEquals(
-        '', inputElement.value,
-        'Input should be cleared, but input = ' + inputElement.value);
-    assertEquals(
-        null, composebox.getDropdownElement().result,
-        'Matches should be cleared');
-  });
-
-  test('ComposeboxSubmitSendsQueryBeforeAutocomplete', async () => {
-    mockTimer.install();
-    const TEST_QUERY = 'test query';
-
-    const inputElement = composebox.getInputElement().$.input;
-    assertTrue(
-        isVisible(inputElement), 'Composebox input element should be visible');
-
-    // User types text
-    simulateUserInput(inputElement, TEST_QUERY);
-    await composebox.updateComplete;
-
-    // User immediately presses Enter before any autocomplete results arrive
-    pressEnter(inputElement);
-
-    // Verify submitQuery is called with the typed text
-    const [query] = await mockSearchboxPageHandler.whenCalled('submitQuery');
-    assertEquals(TEST_QUERY, query);
-
-    await composebox.updateComplete;
-    await contextualTasksApp.updateComplete;
-
-    assertEquals(
-        '', inputElement.value,
-        'Input should be cleared, but input = ' + inputElement.value);
   });
 
   test('InjectInputSubmitAfterInjectionTrue', async () => {
@@ -1276,5 +1161,255 @@ suite('ContextualTasksComposeboxSubmitTest', () => {
         const submitButton: HTMLButtonElement|null = getSubmitButton(composebox);
         assertTrue(!!submitButton, 'Submit button should exist');
         assertFalse(submitButton?.disabled, 'Button should be enabled');
+      });
+});
+
+// =============================================================================
+// Fork DUAL-PATH SUBMIT SUITE
+// Submit behavior - both submit-before-autocomplete and selected-match submit -
+// is implemented by both the legacy <cr-composebox> and
+// the <contextual-tasks-inner-composebox>, so this suite runs on both paths.
+// Submit tests depending on behavior the fork does not implement yet (files,
+// inject input, voice) stay in the flag-off suites above.
+// =============================================================================
+[true, false].forEach(useFork => {
+  suite(
+      `ContextualTasksComposeboxForkSubmitTest (useContextualTasksComposeboxFork =
+        ${useFork})`,
+      () => {
+        let testProxy: TestContextualTasksBrowserProxy;
+        let mockComposeboxPageHandler: TestMock<ComposeboxPageHandlerRemote>;
+        let mockSearchboxPageHandler: TestMock<SearchboxPageHandlerRemote>;
+        let searchboxCallbackRouterRemote: SearchboxPageRemote;
+        let parts: CtComposeboxAppParts;
+        let mockTimer: MockTimer;
+
+        setup(async () => {
+          const win = window as any;
+
+          if (!win.chrome) {
+            Object.assign(window, {chrome: {}});
+          }
+
+          if (!win.chrome.histograms) {
+            win.chrome.histograms = {
+              recordEnumerationValue: () => {},
+              recordUserAction: () => {},
+              recordBoolean: () => {},
+              };
+          }
+
+          document.body.innerHTML = win.trustedTypes!.emptyHTML;
+
+          mockTimer = new MockTimer();
+
+          loadTimeData.overrideValues({
+            contextualMenuUsePecApi: false,
+            composeboxSmartTabSharingVisible: false,
+            enableComposeboxJumpFix: false,
+            composeboxShowTypedSuggest: true,
+            composeboxShowZps: true,
+            enableBasicModeZOrder: true,
+            composeboxShowContextMenu: true,
+          });
+
+          testProxy = new TestContextualTasksBrowserProxy(fixtureUrl);
+          BrowserProxyImpl.setInstance(testProxy);
+
+          mockComposeboxPageHandler =
+              TestMock.fromClass(ComposeboxPageHandlerRemote);
+          mockComposeboxPageHandler.setResultFor(
+              'getSmartTabSharingActive', Promise.resolve({active: false}));
+          mockComposeboxPageHandler.setResultFor(
+              'canShowNextboxAnimation', Promise.resolve({canShow: true}));
+          mockSearchboxPageHandler =
+              TestMock.fromClass(SearchboxPageHandlerRemote);
+          mockSearchboxPageHandler.setResultFor(
+              'getInputState', Promise.resolve({state: new MockInputState()}));
+          mockSearchboxPageHandler.setResultFor(
+              'getPageClassification',
+              Promise.resolve({metricSource: 'CO_BROWSING_COMPOSEBOX'}));
+          mockSearchboxPageHandler.setResultFor(
+              'getRecentTabs', Promise.resolve({tabs: []}));
+          mockSearchboxPageHandler.setResultFor(
+              'addTabContext',
+              Promise.resolve({high: BigInt(1), low: BigInt(2)}));
+          const searchboxCallbackRouter = new SearchboxPageCallbackRouter();
+          searchboxCallbackRouterRemote =
+              searchboxCallbackRouter.$.bindNewPipeAndPassRemote();
+          ComposeboxProxyImpl.setInstance(new ComposeboxProxyImpl(
+              mockComposeboxPageHandler as any,
+              new ComposeboxPageCallbackRouter(),
+              mockSearchboxPageHandler as any, searchboxCallbackRouter));
+
+          parts = await createCtComposeboxApp(useFork);
+        });
+
+        teardown(() => {
+          mockTimer.uninstall();
+        });
+
+        test('ComposeboxSubmitSendsQueryBeforeAutocomplete', async () => {
+          mockTimer.install();
+          const TEST_QUERY = 'test query';
+          const {app, innerComposebox} = parts;
+
+          const inputElement = innerComposebox.getInputElement().$.input;
+          assertTrue(
+              isVisible(inputElement),
+              'Composebox input element should be visible');
+
+          // User types text
+          simulateUserInput(inputElement, TEST_QUERY);
+          await innerComposebox.updateComplete;
+
+          // User immediately presses Enter before any autocomplete results
+          // arrive
+          pressEnter(inputElement);
+
+          // Verify submitQuery is called with the typed text
+          const [query] =
+              await mockSearchboxPageHandler.whenCalled('submitQuery');
+          assertEquals(TEST_QUERY, query);
+
+          await innerComposebox.updateComplete;
+          await app.updateComplete;
+
+          assertEquals(
+              '', inputElement.value,
+              'Input should be cleared, but input = ' + inputElement.value);
+        });
+
+        test('ComposeboxSubmitSendsQueryAndClearsInput', async () => {
+          mockTimer.install();
+          const TEST_QUERY = 'test query';
+          const {app, innerComposebox} = parts;
+
+          const inputElement = innerComposebox.getInputElement().$.input;
+          assertTrue(
+              isVisible(inputElement),
+              'Composebox input element should be visible');
+
+          simulateUserInput(inputElement, TEST_QUERY);
+          mockTimer.tick(300);
+
+          await mockSearchboxPageHandler.whenCalled(
+              'queryAutocompleteWithSuggestInventory');
+
+          await setupAutocompleteResults(
+              searchboxCallbackRouterRemote, innerComposebox.activeQueryId,
+              TEST_QUERY, mockTimer);
+
+          // Wait for the matches to be populated.
+          while (!innerComposebox.getDropdownElement().result) {
+            mockTimer.tick(10);
+            await Promise.resolve();
+          }
+
+          pressEnter(inputElement);
+
+          const [matchIndex, url] = await mockSearchboxPageHandler.whenCalled(
+              'openAutocompleteMatch');
+          assertEquals(0, matchIndex);
+          assertEquals(`${fixtureUrl}/search?q=${TEST_QUERY}`, url);
+          mockTimer.tick(0);
+
+          await innerComposebox.updateComplete;
+          await app.updateComplete;
+
+          assertEquals(
+              '', inputElement.value,
+              'Input should be cleared, but input = ' + inputElement.value);
+          assertEquals(
+              null, innerComposebox.getDropdownElement().result,
+              'Matches should be cleared');
+        });
+
+        test('empty query submits for Deep Search follow-up', async () => {
+          const {app, innerComposebox} = parts;
+
+          // Zero state with no tool: an empty query is not submittable.
+          testProxy.callbackRouterRemote.onZeroStateChange(true);
+          await microtasksFinished();
+          await app.updateComplete;
+          await innerComposebox.updateComplete;
+          assertFalse(
+              innerComposebox.canSubmitFilesAndInput,
+              'Empty query in zero state is not submittable');
+
+          // Deep Search while still in zero state: still not submittable
+          const deepSearchState = Object.assign({}, new MockInputState(), {
+            activeTool: ToolMode.kDeepSearch,
+          });
+          searchboxCallbackRouterRemote.onInputStateChanged(deepSearchState);
+          await searchboxCallbackRouterRemote.$.flushForTesting();
+          await microtasksFinished();
+          await innerComposebox.updateComplete;
+          assertFalse(
+              innerComposebox.canSubmitFilesAndInput,
+              'Deep Search in zero state does not allow an empty query');
+
+          // The submit button is rendered but disabled, and clicking it does
+          // not send the query.
+          const disabledButton = getSubmitButton(innerComposebox);
+          assertTrue(disabledButton !== null, 'Submit button should exist');
+          assertTrue(
+              disabledButton.disabled, 'Submit button should be disabled');
+          const submitCountWhileDisabled =
+              mockSearchboxPageHandler.getCallCount('submitQuery');
+          disabledButton.click();
+          await microtasksFinished();
+          await innerComposebox.updateComplete;
+          assertEquals(
+              submitCountWhileDisabled,
+              mockSearchboxPageHandler.getCallCount('submitQuery'),
+              'Clicking the disabled submit button should be a no-op');
+
+          // Deep Search follow-up (not zero state): now submittable.
+          testProxy.callbackRouterRemote.onZeroStateChange(false);
+          await microtasksFinished();
+          await app.updateComplete;
+          await innerComposebox.updateComplete;
+          assertTrue(
+              innerComposebox.canSubmitFilesAndInput,
+              'Deep Search follow-up allows an empty query');
+
+          // The submit button is present, enabled, and clicking it actually
+          // sends the (empty) query once.
+          const submitButton = getSubmitButton(innerComposebox);
+          assertTrue(submitButton !== null, 'Submit button should exist');
+          assertFalse(submitButton.disabled, 'Submit button should be enabled');
+          const submitCountBefore =
+              mockSearchboxPageHandler.getCallCount('submitQuery');
+          submitButton.click();
+          await microtasksFinished();
+          await innerComposebox.updateComplete;
+          assertEquals(
+              submitCountBefore + 1,
+              mockSearchboxPageHandler.getCallCount('submitQuery'),
+              'Clicking the submit button should send the empty query once');
+        });
+
+        test('empty query blocked for non-Deep-Search follow-up', async () => {
+          const {app, innerComposebox} = parts;
+
+          // A non-Deep-Search tool during a follow-up must not allow an empty
+          // query.
+          const noToolState = Object.assign({}, new MockInputState(), {
+            activeTool: ToolMode.kUnspecified,
+          });
+          searchboxCallbackRouterRemote.onInputStateChanged(noToolState);
+          await searchboxCallbackRouterRemote.$.flushForTesting();
+          testProxy.callbackRouterRemote.onZeroStateChange(false);
+          await microtasksFinished();
+          await app.updateComplete;
+          await innerComposebox.updateComplete;
+          assertTrue(
+              innerComposebox.isFollowupQuery,
+              'Follow-up state should have propagated');
+          assertFalse(
+              innerComposebox.canSubmitFilesAndInput,
+              'Non-Deep-Search follow-up does not allow an empty query');
+        });
       });
 });

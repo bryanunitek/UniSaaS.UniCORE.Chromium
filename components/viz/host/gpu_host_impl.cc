@@ -40,6 +40,8 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "services/webnn/host/execution_provider_initializer.h"
+#include "services/webnn/public/cpp/context_properties.h"
+#include "services/webnn/public/cpp/ep_device_info.h"
 #include "ui/gfx/win/rendering_window_manager.h"
 #elif BUILDFLAG(IS_MAC)
 #include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
@@ -512,7 +514,9 @@ void GpuHostImpl::InitPersistentCache() {
                 gpu_host->OnPersistentCacheFilesCreated(
                     handle, std::move(*pending_backend));
               },
-              weak_ptr_factory_.GetWeakPtr(), handle));
+              weak_ptr_factory_.GetWeakPtr(), handle),
+          /*extra_opts=*/
+          {.retries = 30, .retry_delay = base::Milliseconds(100)});
     };
 
     if (base::FeatureList::IsEnabled(features::kGpuPersistentCache)) {
@@ -521,7 +525,7 @@ void GpuHostImpl::InitPersistentCache() {
       load_persistent_cache(gpu::kGrShaderGpuDiskCacheHandle, params_.product);
     }
 #if BUILDFLAG(SKIA_USE_DAWN)
-    if (features::kSkiaGraphiteDawnUsePersistentCache.Get()) {
+    if (features::SkiaGraphiteUsesPersistentCache()) {
       load_persistent_cache(gpu::kGraphiteDawnGpuDiskCacheHandle,
                             GraphiteDawnCacheVersion());
     }
@@ -673,7 +677,7 @@ void GpuHostImpl::DidInitialize(
       SetChannelDiskCacheHandle(gpu::kGrShaderCacheClientId,
                                 gpu::kGrShaderGpuDiskCacheHandle);
     }
-    if (!features::kSkiaGraphiteDawnUsePersistentCache.Get()) {
+    if (!features::SkiaGraphiteUsesPersistentCache()) {
       SetChannelDiskCacheHandle(gpu::kGraphiteDawnClientId,
                                 gpu::kGraphiteDawnGpuDiskCacheHandle);
     }
@@ -845,21 +849,25 @@ void GpuHostImpl::EnsureWebNNExecutionProvidersReady(
 void GpuHostImpl::Delegate::RequestWebNNCompilerContext(
     webnn::mojom::CreateContextOptionsPtr context_options,
     const webnn::ContextProperties& context_properties,
-    base::flat_map<std::string, webnn::mojom::EpPackageInfoPtr> ep_package_info,
-    RequestWebNNCompilerContextCallback callback) {
-  std::move(callback).Run(mojo::NullRemote(), mojo::NullReceiver());
+    const webnn::EpDeviceInfo& target_device,
+    mojo::PendingReceiver<webnn::mojom::WebNNCompilerContext>
+        compiler_context_receiver,
+    mojo::PendingRemote<webnn::mojom::WebNNModelLoader> model_loader_remote) {
+  // Default: drop the endpoints (pipe disconnects).
 }
 
 void GpuHostImpl::RequestWebNNCompilerContext(
     webnn::mojom::CreateContextOptionsPtr context_options,
     const webnn::ContextProperties& context_properties,
-    base::flat_map<std::string, webnn::mojom::EpPackageInfoPtr> ep_package_info,
-    RequestWebNNCompilerContextCallback callback) {
+    const webnn::EpDeviceInfo& target_device,
+    mojo::PendingReceiver<webnn::mojom::WebNNCompilerContext>
+        compiler_context_receiver,
+    mojo::PendingRemote<webnn::mojom::WebNNModelLoader> model_loader_remote) {
   delegate_->RequestWebNNCompilerContext(
-      std::move(context_options), context_properties,
-      std::move(ep_package_info), std::move(callback));
+      std::move(context_options), context_properties, target_device,
+      std::move(compiler_context_receiver), std::move(model_loader_remote));
 }
-#endif
+#endif  // BUILDFLAG(IS_WIN)
 
 void GpuHostImpl::CreateWebNNWeightsFile(CreateWebNNWeightsFileCallback cb) {
   webnn::CreateWeightsFile(std::move(cb));

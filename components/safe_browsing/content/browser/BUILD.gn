@@ -166,7 +166,6 @@ source_set("unit_tests") {
     "async_check_tracker_unittest.cc",
     "client_report_util_unittest.cc",
     "client_side_detection_feature_cache_unittest.cc",
-    "client_side_phishing_model_unittest.cc",
     "credit_card_form_event_unittest.cc",
   ]
 
@@ -240,6 +239,7 @@ source_set("client_side_detection_images_cache") {
   ]
 
   deps = [
+    "//components/safe_browsing/core/browser:client_side_detection_service_base",
     "//components/safe_browsing/core/common/fbs:client_model",
     "//components/safe_browsing/core/common/proto:csd_proto",
     "//content/public/browser",
@@ -268,8 +268,6 @@ if (safe_browsing_mode != 0) {
     sources = [
       "client_side_detection_service.cc",
       "client_side_detection_service.h",
-      "client_side_phishing_model.cc",
-      "client_side_phishing_model.h",
     ]
 
     deps = [
@@ -278,6 +276,7 @@ if (safe_browsing_mode != 0) {
       "//components/prefs",
       "//components/safe_browsing/content/browser/web_ui",
       "//components/safe_browsing/content/common:interfaces",
+      "//components/safe_browsing/core/browser:client_side_detection_service_base",
       "//components/safe_browsing/core/common",
       "//components/safe_browsing/core/common:safe_browsing_prefs",
       "//components/safe_browsing/core/common/fbs:client_model",

@@ -59,6 +59,10 @@
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/widget_utils.h"
 
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
+
 #if defined(USE_AURA)
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/drag_drop_client.h"
@@ -72,9 +76,6 @@
 #include "ui/views/controls/menu/menu_pre_target_handler.h"
 #endif
 
-#if BUILDFLAG(IS_OZONE)
-#include "ui/ozone/public/ozone_platform.h"
-#endif
 
 #if BUILDFLAG(SUPPORTS_OZONE_X11)
 #include "ui/events/test/events_test_utils_x11.h"
@@ -1078,12 +1079,13 @@ TEST_F(MenuControllerTest, EventTargeter) {
 }
 #endif  // defined(USE_AURA)
 
+// ui::SetUpTouchDevicesForTest is available only on build that supports X11.
 #if BUILDFLAG(SUPPORTS_OZONE_X11)
 // Tests that touch event ids are released correctly. See crbug.com/439051 for
 // details. When the ids aren't managed correctly, we get stuck down touches.
 TEST_F(MenuControllerTest, TouchIdsReleasedCorrectly) {
   // Run this test only for X11.
-  if (ui::OzonePlatform::GetPlatformNameForTest() != "x11") {
+  if (!ui::OzonePlatform::RunningOnX11ForTest()) {
     GTEST_SKIP();
   }
 
@@ -1785,7 +1787,13 @@ TEST_F(MenuControllerTest, AsynchronousDragCompleteWithoutClose) {
 
   // TODO(crbug.com/375959961): For X11, the menu is closed on drag completion
   // because the native widget's state is not properly updated.
-  EXPECT_EQ(BUILDFLAG(SUPPORTS_OZONE_X11) ? 1 : 0,
+  int expected_closes = 0;
+#if BUILDFLAG(IS_OZONE)
+  if (ui::OzonePlatform::RunningOnX11ForTest()) {
+    expected_closes = 1;
+  }
+#endif
+  EXPECT_EQ(expected_closes,
             menu_controller_delegate()->on_menu_closed_called());
 }
 
@@ -2526,7 +2534,7 @@ TEST_F(MenuControllerTest, WidgetStateChangeCancelsMenu) {
 
 // TODO(pkasting): The test below fails most of the time on Wayland; not clear
 // it's important to support this case.
-#if BUILDFLAG(ENABLE_DESKTOP_AURA) && !BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
+#if BUILDFLAG(ENABLE_DESKTOP_AURA)
 class DesktopMenuControllerTest : public MenuControllerTest {
  public:
   // MenuControllerTest:
@@ -2540,11 +2548,16 @@ class DesktopMenuControllerTest : public MenuControllerTest {
 // MenuPreTargetHandler. Having neither parent nor context pointers when
 // creating a Widget is only valid in desktop Aura.
 TEST_F(DesktopMenuControllerTest, RunWithoutWidgetDoesntCrash) {
+#if BUILDFLAG(IS_OZONE)
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Fails on Wayland";
+  }
+#endif
   ExitMenuRun();
   menu_controller()->Run(nullptr, nullptr, menu_item(), gfx::Rect(),
                          MenuAnchorPosition::kTopLeft);
 }
-#endif  // BUILDFLAG(ENABLE_DESKTOP_AURA) && !BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
+#endif  // BUILDFLAG(ENABLE_DESKTOP_AURA)
 
 // Tests that if a MenuController is destroying during drag/drop, and another
 // MenuController becomes active, that the exiting of drag does not cause a
@@ -2592,7 +2605,13 @@ TEST_F(MenuControllerTest, RestoreCaptureAfterDrag) {
 
   // TODO(crbug.com/375959961): For X11, the menu is closed on drag completion
   // because the native widget's state is not properly updated.
-  EXPECT_NE(base_host->HasCapture(), BUILDFLAG(SUPPORTS_OZONE_X11));
+  bool expected_capture = true;
+#if BUILDFLAG(IS_OZONE)
+  if (ui::OzonePlatform::RunningOnX11ForTest()) {
+    expected_capture = false;
+  }
+#endif
+  EXPECT_EQ(base_host->HasCapture(), expected_capture);
 }
 
 // Tests that capture is not restored to the submenu after a drag and drop where

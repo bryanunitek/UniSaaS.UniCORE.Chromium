@@ -495,6 +495,14 @@ public class OmniboxResourceProvider {
                 : context.getColor(R.color.toolbar_text_box_bg_color);
     }
 
+    /** Returns the background color for the toolbar pill when the omnibox is in standby. */
+    public static @ColorInt int getTabletToolbarTextBoxStandbyBackgroundColor(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        Context wrappedContext =
+                maybeWrapContextForIncognitoColorScheme(context, brandedColorScheme);
+        return SemanticColorUtils.getColorSurface(wrappedContext);
+    }
+
     /**
      * Resolves the attribute based on the current theme.
      *
@@ -693,6 +701,17 @@ public class OmniboxResourceProvider {
     }
 
     /**
+     * A color scheme version of {@link IncognitoColors#getColorSurfaceContainerHighest(Context,
+     * boolean)}. Used for the activation chip.
+     */
+    public static @ColorInt int getColorSurfaceContainerHighest(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        boolean isIncognito =
+                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
+        return IncognitoColors.getColorSurfaceContainerHighest(context, isIncognito);
+    }
+
+    /**
      * Resolves the vivid color used for the border of the tool chip when used as a hint to enter AI
      * Mode, as well as the background of the send button.
      */
@@ -780,7 +799,7 @@ public class OmniboxResourceProvider {
         return IncognitoColors.getTextSmallSecondary(isIncognito);
     }
 
-    /** Returns the drawable that is to go behind the + button in the search box. */
+    /** Returns the drawable that normally goes behind the plus button. */
     public static Drawable getSearchBoxIconBackground(
             Context context, @BrandedColorScheme int brandedColorScheme) {
         Resources res = context.getResources();
@@ -788,6 +807,19 @@ public class OmniboxResourceProvider {
                 convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
         @Px int size = res.getDimensionPixelSize(R.dimen.small_icon_background_size);
         return DrawableUtils.getIconBackground(context, isIncognito, size, size);
+    }
+
+    /** Returns the drawable that goes behind the plus button when in popover mode. */
+    public static Drawable getPopoverPlusButtonBackground(
+            Context context, @BrandedColorScheme int brandedColorScheme) {
+        boolean isIncognito =
+                convertBrandedColorSchemeToIncognitoOrDayNightAdaptive(brandedColorScheme);
+        @DrawableRes
+        int resId =
+                isIncognito
+                        ? R.drawable.fusebox_popover_plus_button_background_incognito
+                        : R.drawable.fusebox_popover_plus_button_background;
+        return getDrawable(context, resId);
     }
 
     /** Returns the drawable for the popup menu that shows menu items for context and tools. */

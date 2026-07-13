@@ -35,13 +35,14 @@
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/css/style_containment_scope.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
-#include "third_party/blink/renderer/core/dom/element_rare_data_vector.h"
+#include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/first_letter_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/interest_button_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/scroll_button_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/scroll_marker_group_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/scroll_marker_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_option_element.h"
@@ -54,6 +55,7 @@
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_quote.h"
 #include "third_party/blink/renderer/core/layout/list/list_marker.h"
+#include "third_party/blink/renderer/core/overscroll/overscroll_area_tracker.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/skeleton/skeleton_pseudo_element.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
@@ -151,8 +153,9 @@ PseudoElement* PseudoElement::Create(Element* parent,
          pseudo_id == kPseudoIdCheckMark || pseudo_id == kPseudoIdPickerIcon ||
          pseudo_id == kPseudoIdExpandIcon ||
          pseudo_id == kPseudoIdInterestButton ||
-         pseudo_id == kPseudoIdBackdrop || pseudo_id == kPseudoIdMarker ||
-         pseudo_id == kPseudoIdColumn ||
+         pseudo_id == kPseudoIdBackdrop ||
+         pseudo_id == kPseudoIdOverscrollBackdrop ||
+         pseudo_id == kPseudoIdMarker || pseudo_id == kPseudoIdColumn ||
          pseudo_id == kPseudoIdOverscrollAreaParent);
   return MakeGarbageCollected<PseudoElement>(parent, pseudo_id,
                                              pseudo_argument);
@@ -191,6 +194,11 @@ const QualifiedName& PseudoElementTagName(PseudoId pseudo_id) {
       DEFINE_STATIC_LOCAL(QualifiedName, backdrop,
                           (AtomicString("::backdrop")));
       return backdrop;
+    }
+    case kPseudoIdOverscrollBackdrop: {
+      DEFINE_STATIC_LOCAL(QualifiedName, overscroll_backdrop,
+                          (AtomicString("::overscroll-backdrop")));
+      return overscroll_backdrop;
     }
     case kPseudoIdColumn: {
       DEFINE_STATIC_LOCAL(QualifiedName, first_letter,
@@ -430,27 +438,6 @@ const ComputedStyle* PseudoElement::AdjustedLayoutStyle(
     return builder.TakeStyle();
   }
 
-  if (IsScrollMarkerPseudoElement()) {
-    ComputedStyleBuilder builder(style);
-    // The layout parent of a scroll marker is the scroll marker group, not
-    // the originating element of the scroll marker.
-    StyleAdjuster::AdjustStyleForDisplay(builder, layout_parent_style, this,
-                                         &GetDocument());
-    if (style.IsCSSInertIsInherited() &&
-        style.IsCSSInert() != layout_parent_style.IsCSSInert()) {
-      // A ::scroll-marker gets its inertness from its ::scroll-marker-group
-      // instead of its originating element unless the inertness is applied
-      // directly to the ::scroll-marker itself.
-      builder.SetIsCSSInert(layout_parent_style.IsCSSInert());
-      builder.SetIsCSSInertIsInherited(false);
-    }
-    if (style.IsHTMLInert() != layout_parent_style.IsHTMLInert()) {
-      builder.SetIsHTMLInert(layout_parent_style.IsHTMLInert());
-      builder.SetIsHTMLInertIsInherited(false);
-    }
-    return builder.TakeStyle();
-  }
-
   return nullptr;
 }
 
@@ -543,9 +530,10 @@ void PseudoElement::AttachLayoutTree(AttachContext& context) {
   //
   // - #container
   //   - ::-internal-overscroll-area-parent
-  //     - ::backdrop
+  //     - ::overscroll-backdrop
   //     - #item
-  if (pseudo_id_ == kPseudoIdBackdrop) {
+  if (pseudo_id_ == kPseudoIdOverscrollBackdrop) {
+    CHECK(RuntimeEnabledFeatures::OverscrollGesturesEnabled());
     Element& originating = UltimateOriginatingElement();
     if (PseudoElement* overscroll_parent =
             originating.GetPseudoElement(kPseudoIdOverscrollAreaParent)) {
@@ -775,6 +763,7 @@ bool PseudoElement::SupportsHitTesting(PseudoId pseudo_id) {
     case kPseudoIdMarker:
       return RuntimeEnabledFeatures::PseudoElementsHitTestableEnabled();
     case kPseudoIdInterestButton:
+    case kPseudoIdOverscrollBackdrop:
     case kPseudoIdScrollMarker:
     case kPseudoIdScrollMarkerGroupBefore:
     case kPseudoIdScrollMarkerGroupAfter:
@@ -845,6 +834,7 @@ bool PseudoElementLayoutObjectIsNeeded(PseudoId pseudo_id,
     case kPseudoIdScrollMarkerGroupBefore:
     case kPseudoIdScrollMarkerGroupAfter:
     case kPseudoIdBackdrop:
+    case kPseudoIdOverscrollBackdrop:
     case kPseudoIdViewTransition:
     case kPseudoIdViewTransitionGroup:
     case kPseudoIdViewTransitionGroupChildren:
@@ -892,6 +882,24 @@ void PseudoElement::RetargetAnimations() {
   originating_element.GetDocument()
       .GetDocumentAnimations()
       .RetargetAnimationsForPseudoElement(this);
+}
+
+void PseudoElement::DefaultEventHandler(Event& event) {
+  if (event.type() == event_type_names::kClick && !event.DefaultHandled() &&
+      RuntimeEnabledFeatures::OverscrollGesturesEnabled()) {
+    if (GetPseudoId() == kPseudoIdOverscrollBackdrop) {
+      if (isConnected()) {
+        if (Element* container =
+                UltimateOriginatingElement().GetOverscrollContainer()) {
+          if (auto* tracker = container->GetOverscrollAreaTracker()) {
+            tracker->CloseAllAreas();
+            event.SetDefaultHandled();
+          }
+        }
+      }
+    }
+  }
+  Element::DefaultEventHandler(event);
 }
 
 }  // namespace blink

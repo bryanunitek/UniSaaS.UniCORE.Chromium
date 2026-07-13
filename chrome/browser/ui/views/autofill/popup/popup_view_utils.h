@@ -9,9 +9,11 @@
 
 #include "base/check.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/browser/ui/popup_open_enums.h"
 #include "components/autofill/core/common/aliases.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_border_arrow_utils.h"
@@ -181,6 +183,11 @@ bool ShouldAutoselectFirstSuggestion(
     AutoselectFirstSuggestion trigger_source_autoselect,
     std::optional<SuggestionType> first_suggestion_type);
 
+// Returns the element identifier associated with the given `feature` if it is
+// an IPH feature target. Returns an invalid element identifier if not.
+ui::ElementIdentifier GetAutofillPopupCellElementIdentifier(
+    const base::Feature* feature);
+
 // Returns bounds of a display that has most intersection with element_bounds.
 // If no display data is available (e.g display::Screen::Get() == nullptr)
 // returns std::nullopt.
@@ -198,8 +205,27 @@ gfx::Rect IntersectWithDisplayBounds(const gfx::Rect& element_bounds);
 // This is typically used to prevent Use-After-Free (UAF) vulnerabilities on
 // Windows when firing platform accessibility events (e.g., focus or selection
 // changes).
+// Note that when `view` is `this`, the return value must be handled and must be
+// propagated:
+//
+// [[nodiscard]] bool PopupBaseView::Foo() {
+//   if (!TrackAndRun(this, callable)) {
+//     return false;
+//   }
+//   DoSomethingElse();
+// }
+//
+// // You may only drop the return value if you can guarantee that nothing
+// // accesses `this` or members of `this` after calling `Bar();`.
+// [[nodiscard]] bool PopupBaseView::Bar() {
+//   if (!Foo()) { return false; }
+//   DoSomethingElse();
+//   return true;
+// }
+//
+// TODO(crbug.com/524084900): Migrate to a more robust pattern.
 template <typename... Callables>
-bool TrackAndRun(views::View* view, Callables&&... callbacks) {
+[[nodiscard]] bool TrackAndRun(views::View* view, Callables&&... callbacks) {
   CHECK(view);
   views::ViewTracker tracker(view);
   bool alive = true;

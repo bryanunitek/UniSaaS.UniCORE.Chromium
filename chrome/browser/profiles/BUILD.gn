@@ -122,6 +122,7 @@ source_set("misc") {
     "//chrome/browser/sessions",
     "//chrome/browser/ssl",
     "//chrome/browser/storage",
+    "//chrome/browser/subscription_eligibility",
     "//chrome/browser/transition_manager",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/startup",
@@ -207,11 +208,16 @@ source_set("misc") {
       "profile_list_desktop.cc",
       "profile_list_desktop.h",
     ]
-    deps += [ "//chrome/browser/metrics/desktop_session_duration" ]
+    deps += [
+      "//chrome/browser/metrics/desktop_session_duration",
+      "//chrome/browser/ui:chrome_pages",
+    ]
   }
 
   if (is_win) {
     sources += [
+      "profile_load_tracker_win.cc",
+      "profile_load_tracker_win.h",
       "profile_shortcut_manager_win.cc",
       "profile_shortcut_manager_win.h",
     ]
@@ -624,6 +630,7 @@ source_set("profiles_extra_parts_impl") {
     "//chrome/browser/bluetooth",
     "//chrome/browser/bookmarks",
     "//chrome/browser/breadcrumbs",
+    "//chrome/browser/browser_actuator",
     "//chrome/browser/browsing_data",
     "//chrome/browser/browsing_topics",
     "//chrome/browser/btm",
@@ -635,10 +642,12 @@ source_set("profiles_extra_parts_impl") {
     "//chrome/browser/consent_auditor",
     "//chrome/browser/content_index",
     "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/context_hub",
     "//chrome/browser/contextual_cueing",
     "//chrome/browser/contextual_search",
     "//chrome/browser/contextual_tasks",
     "//chrome/browser/contextual_tasks:ui",
+    "//chrome/browser/critical_actions",
     "//chrome/browser/custom_handlers",
     "//chrome/browser/data_sharing",
     "//chrome/browser/device_reauth",
@@ -655,6 +664,7 @@ source_set("profiles_extra_parts_impl") {
     "//chrome/browser/glic",
     "//chrome/browser/glic/suggestions",
     "//chrome/browser/heavy_ad_intervention",
+    "//chrome/browser/hid",
     "//chrome/browser/history",
     "//chrome/browser/history_clusters",
     "//chrome/browser/history_embeddings",
@@ -701,6 +711,7 @@ source_set("profiles_extra_parts_impl") {
     "//chrome/browser/privacy_sandbox/notice:factory",
     "//chrome/browser/private_ai",
     "//chrome/browser/private_insights",
+    "//chrome/browser/private_verification_tokens",
     "//chrome/browser/push_messaging",
     "//chrome/browser/reading_list",
     "//chrome/browser/reduce_accept_language",
@@ -728,11 +739,13 @@ source_set("profiles_extra_parts_impl") {
     "//chrome/browser/supervised_user",
     "//chrome/browser/sync",
     "//chrome/browser/tab_group_sync:factories",
+    "//chrome/browser/tips",
     "//chrome/browser/ui",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/autofill",
     "//chrome/browser/ui/find_bar",
     "//chrome/browser/ui/hats",
+    "//chrome/browser/ui/omnibox",
     "//chrome/browser/ui/prefs",
     "//chrome/browser/ui/safety_hub",
     "//chrome/browser/ui/startup",
@@ -784,6 +797,8 @@ source_set("profiles_extra_parts_impl") {
       "//chrome/browser/auxiliary_search",
       "//chrome/browser/commerce/merchant_viewer:merchant_viewer_data_manager",
       "//chrome/browser/feed",
+      "//chrome/browser/ntp_customization",
+      "//chrome/browser/readaloud",
       "//chrome/browser/tab",
       "//chrome/browser/ui/android",
       "//components/commerce/core:merchant_signal_db_proto",
@@ -803,7 +818,6 @@ source_set("profiles_extra_parts_impl") {
       "//chrome/browser/devtools",
       "//chrome/browser/dictation",
       "//chrome/browser/feedback",
-      "//chrome/browser/hid",
       "//chrome/browser/indigo",
       "//chrome/browser/media/router/discovery/access_code:access_code_sink_service",
       "//chrome/browser/metrics/critical_user_journeys",
@@ -821,15 +835,16 @@ source_set("profiles_extra_parts_impl") {
       "//chrome/browser/ui/global_media_controls",
       "//chrome/browser/ui/lens",
       "//chrome/browser/ui/media_router",
-      "//chrome/browser/ui/omnibox",
       "//chrome/browser/ui/performance_controls",
       "//chrome/browser/ui/read_anything",
       "//chrome/browser/ui/tabs/saved_tab_groups",
       "//chrome/browser/ui/views/side_panel",
       "//chrome/browser/ui/waap",
+      "//chrome/browser/ui/webui/ntp:ntp_resource_cache",
       "//chrome/browser/ui/webui/signin",
       "//chrome/browser/ui/webui/signin:login_ui_service",
       "//chrome/browser/user_education",
+      "//chrome/browser/web_applications/isolated_web_apps",
       "//chrome/browser/web_applications/isolated_web_apps/window_management",
     ]
   }
@@ -852,7 +867,6 @@ source_set("profiles_extra_parts_impl") {
       "//chrome/browser/ash/policy/dlp",
       "//chrome/browser/ash/policy/skyvault",
       "//chrome/browser/ash/scanner",
-      "//chrome/browser/chromeos/cros_apps",
       "//chrome/browser/chromeos/enterprise/cloud_storage",
       "//chrome/browser/chromeos/extensions/telemetry/api:keyed_service_factory",
       "//chrome/browser/chromeos/policy/dlp",
@@ -875,6 +889,7 @@ source_set("profiles_extra_parts_impl") {
     deps += [
       "//chrome/browser/enterprise/network_header_injection",
       "//chrome/browser/multistep_filter",
+      "//components/enterprise/network_header_injection/core",
     ]
   }
 
@@ -979,37 +994,189 @@ source_set("profile_downloader") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "chrome_incognito_mode_policy_handler_unittest.cc",
+    "profile_attributes_storage_unittest.cc",
     "profile_downloader_unittest.cc",
+    "profile_keyed_service_factory_unittest.cc",
+    "profile_manager_unittest.cc",
     "profile_metrics_unittest.cc",
+    "profile_selections_unittest.cc",
+    "profiles_state_unittest.cc",
   ]
   deps = [
+    ":misc",
     ":profile_downloader",
     ":profile_manager",
     ":profile_util",
+    ":test_support",
     "//base",
     "//base/test:test_support",
     "//chrome/browser/browsing_topics",
+    "//chrome/browser/prefs",
     "//chrome/browser/signin",
+    "//chrome/browser/ui:ui_features",
+    "//chrome/browser/ui/profiles",
     "//chrome/test:test_support",
+    "//components/policy/core/browser",
+    "//components/policy/core/browser:incognito_mode_policy_test_support",
+    "//components/policy/core/browser:test_support",
     "//components/prefs:test_support",
     "//components/signin/public/base:test_support",
     "//components/signin/public/identity_manager:test_support",
+    "//components/user_manager",
     "//content/test:test_support",
     "//services/network:test_support",
+    "//testing/gmock",
     "//testing/gtest",
+    "//ui/native_theme:test_support",
   ]
 
   if (is_chromeos) {
     sources += [ "profile_os_sync_unittest.cc" ]
     deps += [
       "//ash/constants",
+      "//chrome/browser/ash/login/users",
+      "//chrome/browser/ash/login/users/avatar",
+      "//chrome/browser/ash/wallpaper_handlers:test_support",
+      "//chrome/browser/ui/ash/wallpaper",
+      "//chrome/browser/ui/ash/wallpaper:test_support",
+      "//chromeos/ash/components/system",
       "//components/live_caption:constants",
+    ]
+  }
+
+  if (is_win) {
+    sources += [
+      "profile_load_tracker_win_unittest.cc",
+      "profile_shortcut_manager_unittest_win.cc",
+    ]
+  }
+
+  if (is_android) {
+    sources += [ "android/profile_resolver_unittest.cc" ]
+    deps += [ "//chrome/browser/android:profile_token" ]
+  }
+
+  if (!is_chromeos) {
+    sources += [ "gaia_info_update_service_unittest.cc" ]
+    deps += [ "//chrome/browser:global_features" ]
+    if (!is_android) {
+      deps += [ "//chrome/browser/glic/test_support" ]
+    }
+  }
+
+  if (!is_android && !is_chromeos) {
+    sources += [
+      "profile_activity_metrics_recorder_unittest.cc",
+      "profile_list_desktop_unittest.cc",
+      "profile_statistics_aggregator_unittest.cc",
+    ]
+    deps += [
+      "//chrome/browser/glic/test_support",
+      "//chrome/browser/ui/browser_window/test:test_support",
+      "//chrome/browser/ui/tabs:test_support",
+    ]
+  }
+
+  if (is_linux || is_mac || is_win) {
+    sources += [ "guest_mode_policy_handler_unittest.cc" ]
+  }
+
+  if (!is_android) {
+    sources += [
+      "profile_avatar_icon_util_unittest.cc",
+      "profile_destroyer_unittest.cc",
+    ]
+    deps += [
+      "//chrome/app/theme:theme_resources",
+      "//ui/gfx:test_support",
     ]
   }
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
   # enable the diagnostic by removing this line.
   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+}
+
+if (!is_android) {
+  source_set("browser_tests") {
+    testonly = true
+
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+    sources = [
+      "host_zoom_map_browsertest.cc",
+      "incognito_profile_containment_browsertest.cc",
+      "profile_activity_metrics_recorder_browsertest.cc",
+      "profile_browsertest.cc",
+      "profile_keyed_service_browsertest.cc",
+      "profile_manager_browsertest.cc",
+    ]
+
+    deps = [
+      ":misc",
+      ":profile_manager",
+      ":profile_util",
+      "//base",
+      "//chrome/browser/devtools",
+      "//chrome/browser/devtools:test_support",
+      "//chrome/browser/policy:test_support",
+      "//chrome/browser/profiles:profile",
+      "//chrome/browser/search_engines",
+      "//chrome/browser/ui",
+      "//chrome/browser/ui:chrome_pages",
+      "//chrome/browser/ui:ui_features",
+      "//chrome/browser/ui/find_bar",
+      "//chrome/browser/ui/startup",
+      "//chrome/test:test_support",
+      "//chrome/test:test_support_ui",
+      "//components/commerce/core:feature_list",
+      "//components/user_manager",
+      "//content/test:test_support",
+      "//testing/gmock",
+      "//testing/gtest",
+    ]
+
+    if (!is_chromeos) {
+      sources += [
+        "avatar_menu_browsertest.cc",
+        "delete_profile_helper_browsertest.cc",
+        "profile_list_desktop_browsertest.cc",
+        "profile_window_browsertest.cc",
+      ]
+      deps += [ "//chrome/browser/profiles/keep_alive:test_support" ]
+    }
+
+    if (is_mac || is_win || is_linux) {
+      sources += [ "profile_statistics_browsertest.cc" ]
+    }
+
+    if (is_win) {
+      sources += [ "profile_shortcut_manager_browsertest_win.cc" ]
+    }
+
+    # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+    # enable the diagnostic by removing this line.
+    configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+  }
+}
+
+if (is_android) {
+  source_set("android_browsertests") {
+    testonly = true
+
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+    sources = [ "profile_browsertest_android.cc" ]
+
+    deps = [
+      ":profile_manager",
+      "//base",
+      "//chrome/test:test_support",
+      "//content/test:test_support",
+      "//testing/gtest",
+    ]
+  }
 }
 
 source_set("test_support") {

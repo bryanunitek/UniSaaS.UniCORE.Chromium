@@ -201,10 +201,8 @@ class NavigationURLLoaderImplTest : public testing::Test {
             base::UnguessableToken::Create() /* devtools_frame_token */,
             nullptr /* client_security_state */,
             std::nullopt /* devtools_accepted_stream_types */,
-            false /* is_pdf */,
-            ChildProcessHost::kInvalidUniqueID /* initiator_process_id */,
+            false /* is_pdf */, ChildProcessId() /* initiator_process_id */,
             std::nullopt /* initiator_document_token */,
-            nullptr /* serving_page_metrics_container */,
             false /* allow_cookies_from_browser */, 0 /* navigation_id */,
             false /* shared_storage_writable */,
             is_ad_tagged /* is_ad_tagged */,
@@ -750,13 +748,7 @@ TEST_F(NavigationURLLoaderImplTest, TimeoutDuringURLLoader) {
 
 // Timeout + MaybeCreateLoaderForResponse() + redirect case (failure) while
 // waiting for the response from URLLoader.
-// TODO(crbug.com/502512105): Re-enable this test.
-#if BUILDFLAG(IS_ANDROID)
-#define MAYBE_RedirectDuringURLLoader DISABLED_RedirectDuringURLLoader
-#else
-#define MAYBE_RedirectDuringURLLoader RedirectDuringURLLoader
-#endif
-TEST_F(NavigationURLLoaderImplTest, MAYBE_RedirectDuringURLLoader) {
+TEST_F(NavigationURLLoaderImplTest, RedirectDuringURLLoader) {
   ASSERT_TRUE(http_test_server_.Start());
   const GURL final_url = http_test_server_.GetURL("/echo");
   const GURL interceptor_url = http_test_server_.GetURL("/foo");

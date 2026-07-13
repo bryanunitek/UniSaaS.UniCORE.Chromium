@@ -61,10 +61,19 @@ message GlicExperimentalTriggering {
       optional string triggering_source = 1;
     }
 
+    message GetScreenshotRequest {
+      // Ephemeral public key.
+      optional bytes public_key = 1;
+
+      // Ephemeral auth secret.
+      optional bytes auth_secret = 2;
+    }
+
     oneof payload {
       TriggerActuationRequest trigger_actuation_request = 1;
       StopActuationRequest stop_actuation_request = 2;
       DeviceOptInRequest device_opt_in_request = 3;
+      GetScreenshotRequest get_screenshot_request = 4;
     }
   }
 
@@ -113,9 +122,30 @@ message GlicExperimentalTriggering {
       FAILED = 3;
     }
 
+    message ScreenshotResult {
+      enum Status {
+        // Default value.
+        UNSPECIFIED = 0;
+        // Capture successful.
+        SUCCESS = 1;
+        // Capture failure.
+        ERROR_CAPTURE = 2;
+        // Transient failure.
+        ERROR_SERVER = 3;
+      }
+
+      // The status of the screenshot capture operation.
+      optional Status status = 1;
+      // A screenshot file identifier.
+      optional string file_token = 2;
+      // Detailed error message.
+      optional string error_message = 3;
+    }
+
     oneof payload {
       TaskUpdate task_update = 3;
       DeviceOptInResult device_opt_in_result = 4;
+      ScreenshotResult screenshot_result = 5;
     }
   }
 

@@ -11,6 +11,7 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/not_fatal_until.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
@@ -181,22 +182,17 @@ void OpenXrRenderLoop::GetFrameData(
   webxr_has_pose_ = true;
   pending_frame_->sent_frame_data_time_ = base::TimeTicks::Now();
 
-  // TODO(crbug.com/40771470): The lack of frame_data_ here indicates
-  // that we probably should have deferred this call, but it matches the
-  // behavior from before the stage parameters were updated in this function and
-  // avoids a crash. Likely the deferral above should check if we're awaiting
-  // either the webxr or overlay submit.
-  if (pending_frame_->frame_data_) {
-    // If the stage parameters have been updated since the last frame that was
-    // sent, send the updated values.
-    pending_frame_->frame_data_->stage_parameters_id = stage_parameters_id_;
-    if (options->stage_parameters_id != stage_parameters_id_) {
-      pending_frame_->frame_data_->stage_parameters =
-          current_stage_parameters_.Clone();
-    }
-  } else {
-    TRACE_EVENT_INSTANT("xr",
-                        "OpenXrRenderLoop::GetFrameData Missing FrameData");
+  // frame_data_ is expected to be valid here. If it were null (indicating we
+  // already sent the pose to WebXR and are waiting for the overlay),
+  // ShouldDelayGetFrameData() would have deferred this call.
+  CHECK(pending_frame_->frame_data_, base::NotFatalUntil::M158);
+
+  // If the stage parameters have been updated since the last frame that was
+  // sent, send the updated values.
+  pending_frame_->frame_data_->stage_parameters_id = stage_parameters_id_;
+  if (options->stage_parameters_id != stage_parameters_id_) {
+    pending_frame_->frame_data_->stage_parameters =
+        current_stage_parameters_.Clone();
   }
 
   // Yield here to let the event queue process pending mojo messages,
@@ -449,7 +445,7 @@ void OpenXrRenderLoop::MaybeCompositeAndSubmit(
   }
 
   // Dropping the "Maybe", because now we've passed that point.
-  TRACE_EVENT_BEGIN0("xr", "CompositeAndSubmit");
+  TRACE_EVENT_BEGIN("xr", "CompositeAndSubmit");
   bool copy_successful = false;
   bool has_webxr_content = pending_frame_->webxr_submitted_ && webxr_visible_;
   bool has_overlay_content =
@@ -473,8 +469,7 @@ void OpenXrRenderLoop::MaybeCompositeAndSubmit(
     submit_successful = SubmitCompositedFrame();
   }
 
-  TRACE_EVENT_END1("xr", "CompositeAndSubmit", "success",
-                   copy_successful && submit_successful);
+  TRACE_EVENT_END("xr", "success", copy_successful && submit_successful);
 
   if (copy_successful && !submit_successful) {
     ExitPresent(ExitXrPresentReason::kSubmitFrameFailed);
@@ -542,8 +537,9 @@ bool OpenXrRenderLoop::MarkFrameSubmitted(int16_t frame_index) {
   return true;
 }
 
-void OpenXrRenderLoop::SubmitFrameMissing(int16_t frame_index,
-                                          const gpu::SyncToken& sync_token) {
+void OpenXrRenderLoop::SubmitFrameMissing(
+    int16_t frame_index,
+    gpu::SharedImageExportResult camera_export_multi_result) {
   DVLOG(3) << __func__ << " frame_index=" << frame_index;
   TRACE_EVENT_INSTANT("xr", "OpenXrRenderLoop::SubmitFrameMissing");
   if (pending_frame_) {
@@ -904,20 +900,23 @@ void OpenXrRenderLoop::SubmitFrame(int16_t frame_index,
   DCHECK(BUILDFLAG(IS_ANDROID));
   // The sync token passed here is unused by OpenXR backend's implementation of
   // SubmitFrameMissing.
-  // TODO(crbug.com/40917172): Support non-shared buffer mode.
-  SubmitFrameMissing(frame_index, gpu::SyncToken());
+  // TODO(crbug.com/476100354): Android OpenXR only supports Shared Buffer
+  // mode in production. This non-shared buffer path is only used in tests
+  // (SUBMIT_AS_TEST) and should be removed when that path is cleaned up.
+  SubmitFrameMissing(frame_index,
+                     gpu::SharedImageExportResult::CreateEmptyResult());
 }
 
 void OpenXrRenderLoop::SubmitFrameDrawnIntoTexture(
     int16_t frame_index,
     std::vector<device::mojom::XRLayerUpdatePtr> layer_updates,
-    const std::vector<gpu::SyncToken>& camera_sync_tokens,
+    gpu::SharedImageExportResult camera_export_multi_result,
     base::TimeDelta time_waited) {
   TRACE_EVENT_BEGIN("xr", "OpenXrRenderLoop::WaitSyncToken",
                     perfetto::Track(frame_index));
   DVLOG(3) << __func__ << " frame_index=" << frame_index;
 
-  if (!camera_sync_tokens.empty()) {
+  if (camera_export_multi_result.HasData()) {
     presentation_receiver_.ReportBadMessage(
         "Received unexpected camera sync tokens.");
     return;
@@ -929,18 +928,10 @@ void OpenXrRenderLoop::SubmitFrameDrawnIntoTexture(
     layer_ids.push_back(layer->layer_id);
   }
 
-  std::vector<scoped_refptr<gpu::ClientSharedImage>> shared_images =
-      graphics_binding_->GetSharedImages(layer_ids);
-
   std::vector<gpu::SyncToken> combined_sync_tokens;
-  combined_sync_tokens.reserve(layer_updates.size() +
-                               camera_sync_tokens.size());
-  for (auto& layer : layer_updates) {
-    combined_sync_tokens.push_back(layer->sync_token);
-  }
-  for (auto& camera_sync_token : camera_sync_tokens) {
-    combined_sync_tokens.push_back(camera_sync_token);
-  }
+  std::vector<scoped_refptr<gpu::ClientSharedImage>> shared_images =
+      graphics_binding_->EndSharedImagesExport(std::move(layer_updates),
+                                               combined_sync_tokens);
 
   gpu::ClientSharedImage::CreateGpuFenceForSyncTokens(
       std::move(shared_images), std::move(combined_sync_tokens),

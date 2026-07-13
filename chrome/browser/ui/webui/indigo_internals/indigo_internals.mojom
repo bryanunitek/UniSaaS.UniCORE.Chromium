@@ -12,6 +12,9 @@ enum LocalEligibility {
   kMissingCapabilities,
   kDisabledByPolicy,
   kMissingScript,
+  kManagedDomain,
+  kGlicDisabledForProfile,
+  kEnterpriseDisallowed,
 };
 
 // Whether Optimization Guide can make queries to determine whether to offer
@@ -48,6 +51,8 @@ struct GlicPromptInfo {
   bool integration_enabled;
   string current_key;
   string override_prompt;
+  string skill_id;
+  string skill_name;
   array<IndigoPrompt> loaded_prompts;
 };
 

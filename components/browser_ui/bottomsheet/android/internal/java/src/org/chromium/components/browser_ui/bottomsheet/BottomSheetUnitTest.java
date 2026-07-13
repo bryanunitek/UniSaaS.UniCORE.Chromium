@@ -5,6 +5,8 @@
 package org.chromium.components.browser_ui.bottomsheet;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -21,6 +23,7 @@ import android.view.ViewGroup.MarginLayoutParams;
 import android.widget.FrameLayout;
 
 import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import org.junit.After;
@@ -41,6 +44,7 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheet.ShadowLayerView;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent.HeightMode;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.KeyboardVisibilityDelegate.KeyboardVisibilityListener;
@@ -70,7 +74,6 @@ public class BottomSheetUnitTest {
             mInsetsAnimationListenerCaptor;
 
     @Captor private ArgumentCaptor<KeyboardVisibilityListener> mKeyboardListenerCaptor;
-    @Captor private ArgumentCaptor<InsetObserver.WindowInsetObserver> mInsetObserverCaptor;
 
     private SettableNonNullObservableSupplier<Integer> mKeyboardInsetSupplier;
     private BottomSheet mBottomSheet;
@@ -123,6 +126,17 @@ public class BottomSheetUnitTest {
     @After
     public void tearDown() {
         mActivity.finish();
+    }
+
+    private void setupBottomSheetStrings(int openStringId, int closeStringId) {
+        if (openStringId != 0) {
+            doReturn(openStringId).when(mSheetContent).getSheetFullHeightAccessibilityStringId();
+            doReturn(openStringId).when(mSheetContent).getSheetHalfHeightAccessibilityStringId();
+        }
+        if (closeStringId != 0) {
+            doReturn(closeStringId).when(mSheetContent).getSheetHiddenAccessibilityStringId();
+            doReturn(closeStringId).when(mSheetContent).getSheetClosedAccessibilityStringId();
+        }
     }
 
     @Test
@@ -315,9 +329,9 @@ public class BottomSheetUnitTest {
         // Return 0.5 for half height to make the min height 100 (container height is 200)
         doReturn(0.5f).when(mSheetContent).getHalfHeightRatio();
         doReturn(HeightMode.DEFAULT).when(mSheetContent).getPeekHeight();
-        doReturn(R.string.bottom_sheet_accessibility_description)
-                .when(mSheetContent)
-                .getSheetClosedAccessibilityStringId();
+        setupBottomSheetStrings(
+                R.string.bottom_sheet_accessibility_description,
+                R.string.bottom_sheet_accessibility_description);
         doReturn(new View(mActivity)).when(mSheetContent).getContentView();
         mBottomSheet.showContent(mSheetContent);
 
@@ -341,9 +355,9 @@ public class BottomSheetUnitTest {
         doReturn((float) HeightMode.RESIZE_CONTENT).when(mSheetContent).getFullHeightRatio();
         doReturn(0.5f).when(mSheetContent).getHalfHeightRatio();
         doReturn(HeightMode.DEFAULT).when(mSheetContent).getPeekHeight();
-        doReturn(R.string.bottom_sheet_accessibility_description)
-                .when(mSheetContent)
-                .getSheetClosedAccessibilityStringId();
+        setupBottomSheetStrings(
+                R.string.bottom_sheet_accessibility_description,
+                R.string.bottom_sheet_accessibility_description);
         doReturn(new View(mActivity)).when(mSheetContent).getContentView();
         mBottomSheet.showContent(mSheetContent);
 
@@ -470,25 +484,26 @@ public class BottomSheetUnitTest {
         doReturn((float) HeightMode.RESIZE_CONTENT).when(mSheetContent).getFullHeightRatio();
         doReturn(0.5f).when(mSheetContent).getHalfHeightRatio();
         doReturn(HeightMode.DEFAULT).when(mSheetContent).getPeekHeight();
-        doReturn(android.R.string.ok).when(mSheetContent).getSheetHalfHeightAccessibilityStringId();
-        doReturn(android.R.string.ok).when(mSheetContent).getSheetFullHeightAccessibilityStringId();
+        setupBottomSheetStrings(android.R.string.ok, android.R.string.ok);
 
         mBottomSheet.showContent(mSheetContent);
         mBottomSheet.setSheetState(SheetState.HALF, false);
 
         // Simulate keyboard showing
-        verify(mInsetObserver).addObserver(mInsetObserverCaptor.capture());
-        InsetObserver.WindowInsetObserver observer = mInsetObserverCaptor.getValue();
+        verify(mInsetObserver)
+                .addWindowInsetsAnimationListener(mInsetsAnimationListenerCaptor.capture());
+        InsetObserver.WindowInsetsAnimationListener listener =
+                mInsetsAnimationListenerCaptor.getValue();
 
         mKeyboardInsetSupplier.set(100);
-        observer.onInsetChanged();
+        listener.onStart(null, null);
 
         // Simulate layout change while keyboard is showing (Pass 1)
         mSheetContainer.layout(0, 0, SHEET_CONTAINER_WIDTH, SHEET_CONTAINER_HEIGHT - 10);
 
         // Simulate keyboard hiding.
         mKeyboardInsetSupplier.set(0);
-        observer.onInsetChanged();
+        listener.onEnd(null);
         mSheetContainer.layout(0, 0, SHEET_CONTAINER_WIDTH, SHEET_CONTAINER_HEIGHT);
 
         // Verify that state is restored to HALF.
@@ -501,8 +516,7 @@ public class BottomSheetUnitTest {
         doReturn((float) HeightMode.RESIZE_CONTENT).when(mSheetContent).getFullHeightRatio();
         doReturn(0.5f).when(mSheetContent).getHalfHeightRatio();
         doReturn(HeightMode.DEFAULT).when(mSheetContent).getPeekHeight();
-        doReturn(android.R.string.ok).when(mSheetContent).getSheetHalfHeightAccessibilityStringId();
-        doReturn(android.R.string.ok).when(mSheetContent).getSheetFullHeightAccessibilityStringId();
+        setupBottomSheetStrings(android.R.string.ok, android.R.string.ok);
 
         mBottomSheet.showContent(mSheetContent);
         mBottomSheet.setSheetState(SheetState.HALF, false);
@@ -513,11 +527,13 @@ public class BottomSheetUnitTest {
         mSheetContainer.layout(0, 0, SHEET_CONTAINER_WIDTH, SHEET_CONTAINER_HEIGHT);
 
         // Simulate keyboard showing
-        verify(mInsetObserver).addObserver(mInsetObserverCaptor.capture());
-        InsetObserver.WindowInsetObserver observer = mInsetObserverCaptor.getValue();
+        verify(mInsetObserver)
+                .addWindowInsetsAnimationListener(mInsetsAnimationListenerCaptor.capture());
+        InsetObserver.WindowInsetsAnimationListener listener =
+                mInsetsAnimationListenerCaptor.getValue();
 
         mKeyboardInsetSupplier.set(100);
-        observer.onInsetChanged();
+        listener.onStart(null, null);
 
         // Simulate layout change while keyboard is showing
         mSheetContainer.layout(0, 0, SHEET_CONTAINER_WIDTH, SHEET_CONTAINER_HEIGHT - 10);
@@ -530,7 +546,7 @@ public class BottomSheetUnitTest {
 
         // Simulate keyboard hiding.
         mKeyboardInsetSupplier.set(0);
-        observer.onInsetChanged();
+        listener.onEnd(null);
 
         // Trigger layout change on container
         mSheetContainer.layout(0, 0, SHEET_CONTAINER_WIDTH, SHEET_CONTAINER_HEIGHT);
@@ -545,8 +561,7 @@ public class BottomSheetUnitTest {
         doReturn((float) HeightMode.RESIZE_CONTENT).when(mSheetContent).getFullHeightRatio();
         doReturn(0.5f).when(mSheetContent).getHalfHeightRatio();
         doReturn(HeightMode.DEFAULT).when(mSheetContent).getPeekHeight();
-        doReturn(android.R.string.ok).when(mSheetContent).getSheetHalfHeightAccessibilityStringId();
-        doReturn(android.R.string.ok).when(mSheetContent).getSheetFullHeightAccessibilityStringId();
+        setupBottomSheetStrings(android.R.string.ok, android.R.string.ok);
 
         mBottomSheet.showContent(mSheetContent);
         mBottomSheet.setSheetState(SheetState.HALF, false);
@@ -555,10 +570,12 @@ public class BottomSheetUnitTest {
         decorView.layout(0, 0, 1080, 1920);
         mSheetContainer.layout(0, 0, SHEET_CONTAINER_WIDTH, SHEET_CONTAINER_HEIGHT);
 
-        verify(mInsetObserver).addObserver(mInsetObserverCaptor.capture());
-        InsetObserver.WindowInsetObserver observer = mInsetObserverCaptor.getValue();
+        verify(mInsetObserver)
+                .addWindowInsetsAnimationListener(mInsetsAnimationListenerCaptor.capture());
+        InsetObserver.WindowInsetsAnimationListener listener =
+                mInsetsAnimationListenerCaptor.getValue();
         mKeyboardInsetSupplier.set(100);
-        observer.onInsetChanged();
+        listener.onStart(null, null);
 
         // Simulate layout change while keyboard is showing.
         mSheetContainer.layout(0, 0, SHEET_CONTAINER_WIDTH, SHEET_CONTAINER_HEIGHT - 10);
@@ -568,7 +585,7 @@ public class BottomSheetUnitTest {
         mSheetContainer.layout(0, 0, SHEET_CONTAINER_WIDTH, SHEET_CONTAINER_HEIGHT);
 
         mKeyboardInsetSupplier.set(150);
-        observer.onInsetChanged();
+        listener.onStart(null, null);
     }
 
     @Test
@@ -588,16 +605,109 @@ public class BottomSheetUnitTest {
 
     @Test
     public void testUpdateA11yPaneTitle() {
-        int stringId = android.R.string.ok;
-        doReturn(stringId).when(mSheetContent).getSheetFullHeightAccessibilityStringId();
+        int openStringId = android.R.string.ok;
+        int closedStringId = android.R.string.cancel;
+        setupBottomSheetStrings(openStringId, closedStringId);
 
         mBottomSheet.showContent(mSheetContent);
-        mBottomSheet.setSheetState(SheetState.FULL, false);
 
-        CharSequence expectedTitle = mActivity.getResources().getString(stringId);
+        // Verify title when opened (Full Height)
+        mBottomSheet.setSheetState(SheetState.FULL, false);
+        CharSequence expectedOpenTitle = mActivity.getResources().getString(openStringId);
         assertEquals(
-                "Accessibility pane title should be set on the BottomSheet itself",
-                expectedTitle,
-                androidx.core.view.ViewCompat.getAccessibilityPaneTitle(mBottomSheet));
+                "Accessibility pane title should be set on the bottom sheet when opened",
+                expectedOpenTitle,
+                ViewCompat.getAccessibilityPaneTitle(mBottomSheet));
+
+        // Verify title when closed
+        mBottomSheet.setSheetState(SheetState.HIDDEN, false);
+        CharSequence expectedClosedTitle = mActivity.getResources().getString(closedStringId);
+        assertEquals(
+                "Accessibility pane title should be set to closed on the bottom sheet when"
+                        + " closed",
+                expectedClosedTitle,
+                ViewCompat.getAccessibilityPaneTitle(mBottomSheet));
+    }
+
+    @Test
+    public void testKeyboardStateResetOnContentChange() {
+        BottomSheet.setSmallScreenForTesting(false);
+        doReturn(new View(mActivity)).when(mSheetContent).getContentView();
+
+        // Configure content to be resizable.
+        doReturn(0.5f).when(mSheetContent).getHalfHeightRatio();
+        doReturn((float) HeightMode.RESIZE_CONTENT).when(mSheetContent).getFullHeightRatio();
+        setupBottomSheetStrings(android.R.string.ok, android.R.string.ok);
+
+        mBottomSheet.showContent(mSheetContent);
+        mBottomSheet.setSheetState(SheetState.HALF, false);
+
+        verify(mInsetObserver)
+                .addWindowInsetsAnimationListener(mInsetsAnimationListenerCaptor.capture());
+        InsetObserver.WindowInsetsAnimationListener listener =
+                mInsetsAnimationListenerCaptor.getValue();
+
+        // Simulate keyboard showing -> token acquired.
+        mKeyboardInsetSupplier.set(100);
+        listener.onStart(null, null);
+
+        assertTrue("Keyboard token should be acquired.", mBottomSheet.hasKeyboardTokenForTesting());
+        assertEquals(
+                "State before keyboard shown should be cached.",
+                SheetState.HALF,
+                mBottomSheet.getStateBeforeKeyboardShownForTesting());
+
+        // Show different content (mock another content).
+        BottomSheetContent newContent = mock();
+        doReturn(new View(mActivity)).when(newContent).getContentView();
+        doReturn(0.5f).when(newContent).getHalfHeightRatio();
+        doReturn((float) HeightMode.DEFAULT).when(newContent).getFullHeightRatio();
+        setupBottomSheetStrings(android.R.string.ok, android.R.string.ok);
+
+        mBottomSheet.showContent(newContent);
+
+        // Verify token was erased and state reset.
+        assertFalse(
+                "Keyboard token should be released on content change.",
+                mBottomSheet.hasKeyboardTokenForTesting());
+        assertEquals(
+                "State before keyboard shown should be reset to NONE.",
+                SheetState.NONE,
+                mBottomSheet.getStateBeforeKeyboardShownForTesting());
+    }
+
+    @Test
+    public void testContentContainerHeightUpdated_ConstantTranslationY() {
+        BottomSheet.setSmallScreenForTesting(false);
+        doReturn(new View(mActivity)).when(mSheetContent).getContentView();
+        doReturn((float) HeightMode.RESIZE_CONTENT).when(mSheetContent).getFullHeightRatio();
+        doReturn(0.5f).when(mSheetContent).getHalfHeightRatio();
+        doReturn(HeightMode.DISABLED).when(mSheetContent).getPeekHeight();
+        doReturn(android.R.string.ok).when(mSheetContent).getSheetHalfHeightAccessibilityStringId();
+        doReturn(android.R.string.ok).when(mSheetContent).getSheetFullHeightAccessibilityStringId();
+
+        mBottomSheet.showContent(mSheetContent);
+
+        // Lay out decor view to have a large viewport.
+        View decorView = mActivity.getWindow().getDecorView();
+        decorView.layout(0, 0, 1080, 1000);
+
+        // Set state to HALF. Offset should be HALF height (0.5 * 200 = 100).
+        mBottomSheet.setSheetState(SheetState.HALF, false);
+
+        View contentContainer = mBottomSheet.findViewById(R.id.bottom_sheet_content);
+
+        // Now set offset to 200 (full height). translationY should be 0.
+        mBottomSheet.setSheetOffsetFromBottom(200, StateChangeReason.NONE);
+        assertEquals(200, contentContainer.getLayoutParams().height);
+        assertEquals(0f, mBottomSheet.getTranslationY(), 0.0f);
+
+        // Now set offset to 250. translationY should still be 0 (capped).
+        // Without the fix, this would early return and NOT update the height.
+        mBottomSheet.setSheetOffsetFromBottom(250, StateChangeReason.NONE);
+
+        // Height should be updated to 250 (since viewport is 1000).
+        assertEquals(250, contentContainer.getLayoutParams().height);
+        assertEquals(0f, mBottomSheet.getTranslationY(), 0.0f);
     }
 }

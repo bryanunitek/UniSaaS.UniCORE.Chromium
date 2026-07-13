@@ -212,9 +212,7 @@ bool ShouldTransliterateMainTextToKatakana(
     const FormFieldData& trigger_field,
     const FieldType& trigger_field_type) {
   return IsAlternativeNameType(trigger_field_type) &&
-         data_util::HasKatakanaCharacter(trigger_field.label()) &&
-         base::FeatureList::IsEnabled(
-             features::kAutofillSupportPhoneticNameForJP);
+         data_util::HasKatakanaCharacter(trigger_field.label());
 }
 
 // In addition to just getting the values out of the profile, this function
@@ -496,8 +494,7 @@ std::vector<AutofillProfile> GetProfilesToSuggest(
   // Similarly, prefix matching is disabled for <select> fields. Select fields
   // are only used as trigger fields during actor flows, in which the initial
   // value is likely irrelevant.
-  // TODO(crbug.com/393114125): Change to use `AutofillField::field_modifiers_`
-  // after launching `kAutofillFixIsAutofilled`.
+  // TODO(crbug.com/393114125): Change to use `AutofillField::field_modifiers_`.
   if (!trigger_field.is_autofilled_according_to_renderer() &&
       trigger_field.form_control_type() != FormControlType::kSelectOne) {
     profiles_to_suggest = GetPrefixMatchedProfiles(
@@ -530,12 +527,9 @@ std::vector<AutofillProfile> GetProfilesToSuggest(
   // filtering logic after it, this case is fine since for field-by-field
   // filling suggestions, deduplication is rather trivial and the problem
   // explained above wouldn't apply.
-  // TODO(crbug.com/393114125): Change to use `AutofillField::field_modifiers_`
-  // after launching `kAutofillFixIsAutofilled`.
+  // TODO(crbug.com/393114125): Change to use `AutofillField::field_modifiers_`.
   if (trigger_field.is_autofilled_according_to_renderer() &&
-      profiles_to_suggest.size() > 1 &&
-      base::FeatureList::IsEnabled(
-          features::kAutofillImproveAddressFieldSwapping)) {
+      profiles_to_suggest.size() > 1) {
     std::erase_if(profiles_to_suggest, [&](const ProfileWithText& profile) {
       return trigger_field.value() == profile.text;
     });
@@ -645,9 +639,7 @@ std::vector<Suggestion> CreateSuggestionsFromProfiles(
     }
 
     if (profile.record_type() ==
-            AutofillProfile::RecordType::kAccountNameEmail &&
-        base::FeatureList::IsEnabled(
-            features::kAutofillEnableSupportForNameAndEmail)) {
+        AutofillProfile::RecordType::kAccountNameEmail) {
       suggestion.iph_metadata = Suggestion::IPHMetadata(
           &feature_engagement::kIPHAutofillAccountNameEmailSuggestionFeature);
     }
@@ -659,8 +651,7 @@ SuggestionType GetSuggestionType(FormFieldData trigger_field) {
   // If the user triggers suggestions on an autofilled field, field-by-field
   // filling suggestions should be shown so that the user could easily correct
   // values to something present in different stored addresses.
-  // TODO(crbug.com/393114125): Change to use `AutofillField::field_modifiers_`
-  // after launching `kAutofillFixIsAutofilled`.
+  // TODO(crbug.com/393114125): Change to use `AutofillField::field_modifiers_`.
   return trigger_field.is_autofilled_according_to_renderer()
              ? SuggestionType::kAddressFieldByFieldFilling
              : SuggestionType::kAddressEntry;
@@ -842,8 +833,7 @@ std::vector<Suggestion> GenerateAddressSuggestions(
   }
   base::Extend(suggestions,
                // TODO(crbug.com/393114125): Change to use
-               // `AutofillField::field_modifiers_` after launching
-               // `kAutofillFixIsAutofilled`.
+               // `AutofillField::field_modifiers_`.
                GetAddressFooterSuggestions(
                    trigger_field.is_autofilled_according_to_renderer()));
   return suggestions;
@@ -1003,6 +993,13 @@ void AddressSuggestionGenerator::GenerateSuggestions(
     const AutofillField* trigger_autofill_field,
     AutofillClient& client,
     base::FunctionRef<void(ReturnedSuggestions)> callback) {
+  if (client.IsAutofillTypeBlockedByPolicy(
+          client.GetLastCommittedPrimaryMainFrameURL(),
+          AutofillClient::AutofillPolicyDataCategory::kContactInfo)) {
+    callback({SuggestionDataSource::kAddress, {}});
+    return;
+  }
+
   FieldTypeSet field_types = [&]() -> FieldTypeSet {
     if (!form_structure || !trigger_autofill_field) {
       return {};
@@ -1017,7 +1014,7 @@ void AddressSuggestionGenerator::GenerateSuggestions(
         skip_reasons;
     if (form.fields().size() == form_structure->field_count()) {
       skip_reasons = FormFiller::GetFieldFillingSkipReasons(
-          form.fields(), *form_structure, *trigger_autofill_field,
+          *form_structure, *trigger_autofill_field,
           FormFiller::RefillOptions::NotRefill(), FillingProduct::kAddress,
           TriggerSourceFromSuggestionTriggerSource(trigger_source_), client,
           /*blocked_fields=*/{});
@@ -1027,10 +1024,16 @@ void AddressSuggestionGenerator::GenerateSuggestions(
       if (const DenseSet<FieldFillingSkipReason>* field_skip_reasons =
               base::FindOrNull(skip_reasons,
                                form_structure->field(i)->global_id());
-          !field_skip_reasons || field_skip_reasons->empty()) {
-        field_types.insert(form_structure->field(i)->Type().GetAddressType());
+          field_skip_reasons && !field_skip_reasons->empty()) {
+        continue;
+      }
+      if (FieldType address_type =
+              form_structure->field(i)->Type().GetAddressType();
+          address_type != UNKNOWN_TYPE) {
+        field_types.insert(address_type);
       }
     }
+
     return field_types;
   }();
 

@@ -194,6 +194,7 @@
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
+#include "third_party/blink/renderer/core/layout/layout_video.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/lcp_critical_path_predictor/lcp_critical_path_predictor.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
@@ -2393,25 +2394,7 @@ LocalFrame::LazyLoadImageSetting LocalFrame::GetLazyLoadImageSetting() const {
     return LocalFrame::LazyLoadImageSetting::kDisabled;
   }
 
-  if (GetDocument()->IsPageVisible()) {
-    return LocalFrame::LazyLoadImageSetting::kEnabledExplicit;
-  }
-
-  if (base::FeatureList::IsEnabled(
-          features::kEnableLazyLoadImageForInvisiblePage)) {
-    switch (features::kEnableLazyLoadImageForInvisiblePageTypeParam.Get()) {
-      case features::EnableLazyLoadImageForInvisiblePageType::kAllInvisiblePage:
-        return LocalFrame::LazyLoadImageSetting::kEnabledExplicit;
-      case features::EnableLazyLoadImageForInvisiblePageType::kPrerenderPage:
-        if (GetDocument()->IsPrerendering()) {
-          return LocalFrame::LazyLoadImageSetting::kEnabledExplicit;
-        }
-        return LocalFrame::LazyLoadImageSetting::kDisabled;
-    }
-  }
-  // Disable lazyload for backgrounded pages including NoStatePrefetch and
-  // Prerender.
-  return LocalFrame::LazyLoadImageSetting::kDisabled;
+  return LocalFrame::LazyLoadImageSetting::kEnabledExplicit;
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
@@ -2894,7 +2877,7 @@ void LocalFrame::NotifyUserActivation(
 }
 
 // static
-bool LocalFrame::HasTransientUserActivation(LocalFrame* frame) {
+bool LocalFrame::HasTransientUserActivation(const LocalFrame* frame) {
   return frame && frame->Frame::HasTransientUserActivation();
 }
 
@@ -2945,7 +2928,9 @@ void LocalFrame::SetHadUserInteraction(bool had_user_interaction) {
   DomWindow()->closewatcher_stack()->SetHadUserInteraction(
       had_user_interaction);
 
-  GetFrameScheduler()->SetHadUserActivation(had_user_interaction);
+  if (auto* scheduler = GetFrameScheduler()) {
+    scheduler->SetHadUserActivation(had_user_interaction);
+  }
 }
 
 namespace {
@@ -3035,19 +3020,18 @@ void LocalFrame::ForciblyPurgeV8Memory() {
 }
 
 void LocalFrame::OnPageLifecycleStateUpdated() {
-  if (frozen_ != GetPage()->Frozen()) {
-    frozen_ = GetPage()->Frozen();
-    if (frozen_) {
-      DidFreeze();
-    } else {
-      DidResume();
-    }
-    // The event handlers might have detached the frame.
+  bool should_freeze = (frozen_ != GetPage()->Frozen()) && GetPage()->Frozen();
+  bool should_resume = (frozen_ != GetPage()->Frozen()) && !GetPage()->Frozen();
+  // Freeze handlers should run before the execution context is frozen.
+  if (should_freeze) {
+    frozen_ = true;
+    DidFreeze();
+    // Event handlers might have detached the frame.
     if (!IsAttached())
       return;
   }
-  SetContextPaused(GetPage()->Paused());
 
+  SetContextPaused(GetPage()->Paused());
   mojom::blink::FrameLifecycleState frame_lifecycle_state =
       mojom::blink::FrameLifecycleState::kRunning;
   if (GetPage()->Paused()) {
@@ -3057,6 +3041,16 @@ void LocalFrame::OnPageLifecycleStateUpdated() {
   }
 
   DomWindow()->SetLifecycleState(frame_lifecycle_state);
+
+  // Resume handlers should run after the execution context resumes.
+  if (should_resume) {
+    frozen_ = false;
+    DidResume();
+    // Event handlers might have detached the frame.
+    if (!IsAttached()) {
+      return;
+    }
+  }
 }
 
 void LocalFrame::SetContextPaused(bool is_paused) {
@@ -3283,7 +3277,13 @@ LoaderFreezeMode LocalFrame::GetLoaderFreezeMode() {
 void LocalFrame::DidFreeze() {
   TRACE_EVENT0("blink", "LocalFrame::DidFreeze");
   DCHECK(IsAttached());
+
+  // Ensure that the document is not in the frozen state when running the freeze
+  // event.
+  DCHECK_NE(DomWindow()->ContextPauseState(),
+            mojom::blink::FrameLifecycleState::kFrozen);
   GetDocument()->DispatchFreezeEvent();
+
   if (evict_cached_session_storage_on_freeze_or_unload_) {
     // Evicts the cached data of Session Storage to avoid reusing old data in
     // the cache after the session storage has been modified by another renderer
@@ -3323,6 +3323,10 @@ void LocalFrame::DidResume() {
   GetDocument()->Fetcher()->SetDefersLoading(LoaderFreezeMode::kNone);
   Loader().SetDefersLoading(LoaderFreezeMode::kNone);
 
+  // Ensure that the document is not in the frozen state when running the resume
+  // event.
+  DCHECK_NE(DomWindow()->ContextPauseState(),
+            mojom::blink::FrameLifecycleState::kFrozen);
   GetDocument()->DispatchEvent(*Event::Create(event_type_names::kResume));
   // TODO(fmeawad): Move the following logic to the page once we have a
   // PageResourceCoordinator in Blink
@@ -3372,7 +3376,7 @@ void LocalFrame::FinishedLoading(FrameLoader::NavigationFinishState state) {
   DomWindow()->FinishedLoading(state);
 }
 
-void LocalFrame::UpdateFaviconURL() {
+void LocalFrame::UpdateFaviconURL(mojom::blink::FaviconUpdateReason reason) {
   if (!IsMainFrame())
     return;
 
@@ -3399,7 +3403,7 @@ void LocalFrame::UpdateFaviconURL() {
   }
   DCHECK_EQ(icon_urls.size(), urls.size());
 
-  GetLocalFrameHostRemote().UpdateFaviconURL(std::move(urls));
+  GetLocalFrameHostRemote().UpdateFaviconURL(std::move(urls), reason);
 
   if (GetPage())
     GetPage()->GetPageScheduler()->OnTitleOrFaviconUpdated();
@@ -3688,7 +3692,19 @@ void LocalFrame::MediaPlayerActionAtViewportPoint(
       break;
     case mojom::blink::MediaPlayerActionType::kCopyVideoFrame:
       if (auto* video = DynamicTo<HTMLVideoElement>(media_element); video) {
-        auto image = video->CreateStaticBitmapImage();
+        std::optional<gfx::Size> size;
+        // A site could theoretically apply the CSS `content: url(...)` property
+        // to a <video> element. In this edge case,
+        // HTMLVideoElement::CreateLayoutObject instantiates a LayoutImage
+        // instead of a LayoutVideo, which is safely caught by the DynamicTo
+        // here.
+        if (auto* layout_video =
+                DynamicTo<LayoutVideo>(video->GetLayoutObject())) {
+          size = layout_video->ReplacedContentRect().PixelSnappedSize();
+        }
+        auto image = video->CreateStaticBitmapImage(
+            size, /*reinterpret_as_srgb=*/false,
+            /*respect_orientation=*/kDoNotRespectImageOrientation);
         if (image) {
           GetEditor().CopyImage(result, image);
         }
@@ -3970,7 +3986,7 @@ String CreateMarkupInRect(LocalFrame* frame,
   const CreateMarkupOptions create_markup_options =
       CreateMarkupOptions::Builder()
           .SetShouldAnnotateForInterchange(true)
-          .SetShouldResolveURLs(kResolveNonLocalURLs)
+          .SetShouldResolveUrls(ResolveUrls::kNonLocal)
           .Build();
   if (start_position.CompareTo(end_position) <= 0) {
     return CreateMarkup(start_position, end_position, create_markup_options);
@@ -4236,16 +4252,12 @@ void LocalFrame::OnStorageAccessCallback(
   std::move(callback).Run(is_allowed);
 }
 
-void LocalFrame::NotifyFrameVisibilityChanged(
-    mojom::blink::FrameVisibility visibility) {
-  // Iterate on a copy of the vector to avoid invalidating the iterator if
-  // `FrameVisibilityChanged` happens to remove the observer from
-  // `frame_visibility_observers_`.
-  HeapVector<Member<FrameVisibilityObserver>>
-      frame_visibility_observers_as_vector(frame_visibility_observers_);
-  for (auto observer : frame_visibility_observers_as_vector) {
-    observer->FrameVisibilityChanged(visibility);
-  }
+void LocalFrame::AddVisibilityObserver(FrameVisibilityObserver* observer) {
+  frame_visibility_observers_.insert(observer);
+}
+
+void LocalFrame::RemoveVisibilityObserver(FrameVisibilityObserver* observer) {
+  frame_visibility_observers_.erase(observer);
 }
 
 void LocalFrame::OnFrameVisibilityChangedForMediaPlayback(bool is_hidden) {
@@ -4257,7 +4269,7 @@ void LocalFrame::OnFrameVisibilityChangedForMediaPlayback(bool is_hidden) {
   is_hidden_for_media_playback_ = is_hidden;
 
   // Iterate on a copy of the vector to avoid invalidating the iterator if
-  // `FrameVisibilityChanged` happens to remove the observer from
+  // `OnFrameHidden` or `OnFrameShown` happens to remove the observer from
   // `frame_visibility_observers_`.
   HeapVector<Member<FrameVisibilityObserver>>
       frame_visibility_observers_as_vector(frame_visibility_observers_);

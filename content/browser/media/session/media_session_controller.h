@@ -11,15 +11,16 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "content/browser/media/media_devices_util.h"
-#include "content/browser/media/session/media_session_player_observer.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/media_player_id.h"
+#include "content/public/browser/media_session_player_observer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "media/audio/audio_device_description.h"
 #include "media/base/media_content_type.h"
 #include "media/base/picture_in_picture_events_info.h"
 #include "services/media_session/public/cpp/media_position.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace content {
 
@@ -64,7 +65,9 @@ class CONTENT_EXPORT MediaSessionController
   void OnSeekBackward(int player_id, base::TimeDelta seek_time) override;
   void OnSeekTo(int player_id, base::TimeDelta seek_time) override;
   void OnSetVolumeMultiplier(int player_id, double volume_multiplier) override;
-  void OnEnterPictureInPicture(int player_id) override;
+  void OnEnterPictureInPicture(
+      int player_id,
+      const std::optional<gfx::Size>& min_size) override;
   void OnSetAudioSinkId(int player_id,
                         const std::string& raw_device_id) override;
   void OnSetMute(int player_id, bool mute) override;

@@ -4,16 +4,29 @@
 
 #import "ios/chrome/browser/level_up/model/level_up_service.h"
 
-#import "base/functional/bind.h"
+#import <algorithm>
+#import <numeric>
+
 #import "base/logging.h"
-#import "base/strings/sys_string_conversions.h"
 #import "base/values.h"
 #import "components/prefs/pref_service.h"
 #import "components/prefs/scoped_user_pref_update.h"
+#import "ios/chrome/browser/level_up/model/tasks/task_factories.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
-#import "ios/chrome/browser/shared/ui/buildflags.h"
-#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+
+namespace {
+
+// The number of tasks required to move from level `index - 1` to level
+// `index`. Indices 0 and 1 are 0 because all users start at level 1.
+// The last level requires all remaining tasks to be completed, and so does not
+// appear here.
+constexpr std::array tasks_per_level = {0, 0, 3, 5};
+
+// The maximum level, dynamically derived from tasks_per_level.
+constexpr int kMaxLevel = tasks_per_level.size();
+
+}  // namespace
 
 LevelUpService::LevelUpService(PrefService* pref_service)
     : pref_service_(pref_service) {
@@ -42,6 +55,16 @@ int LevelUpService::GetCurrentLevel() const {
   return current_level_;
 }
 
+int LevelUpService::GetTasksRemainingForNextLevel() const {
+  if (current_level_ >= kMaxLevel) {
+    return 0;
+  }
+  int next_level = current_level_ + 1;
+  int required = GetTotalTasksRequiredForLevel(next_level);
+  int completed = completed_tasks_.size();
+  return std::max(0, required - completed);
+}
+
 void LevelUpService::MarkTaskCompleted(TaskType task_type) {
   std::string storage_id = TaskTypeToString(task_type);
   if (storage_id == TaskTypeToString(TaskType::kUnknown)) {
@@ -53,23 +76,9 @@ void LevelUpService::MarkTaskCompleted(TaskType task_type) {
     ScopedListPrefUpdate update(pref_service_, prefs::kLevelUpCompletedTasks);
     update->Append(storage_id);
 
-    // Recalculate level.
-    int new_level = 0;
-    bool all_tasks_completed = true;
-    for (const auto& [type, info] : tasks_) {
-      if (!completed_tasks_.contains(TaskTypeToString(type))) {
-        all_tasks_completed = false;
-        break;
-      }
-    }
-    if (all_tasks_completed) {
-      new_level = 1;
-    }
-
-    if (new_level > current_level_) {
-      current_level_ = new_level;
-      pref_service_->SetInteger(prefs::kLevelUpHighestLevel, current_level_);
-    }
+    UpdateLevelAndPref();
+    pref_service_->SetInteger(
+        prefs::kIosMagicStackSegmentationLevelUpImpressionsSinceFreshness, 0);
   }
 }
 
@@ -81,125 +90,33 @@ bool LevelUpService::IsTaskCompleted(TaskType task_type) const {
 const TaskInfo* LevelUpService::GetTaskInfo(TaskType task_type) const {
   auto it = tasks_.find(task_type);
   if (it != tasks_.end()) {
-    return &it->second;
+    return it->second.get();
   }
   return nullptr;
 }
 
-const std::map<TaskType, TaskInfo>& LevelUpService::GetTasks() const {
+const std::map<TaskType, std::unique_ptr<TaskInfo>>& LevelUpService::GetTasks()
+    const {
   return tasks_;
 }
 
 void LevelUpService::PopulateTasks() {
-  auto no_op_nav = base::BindRepeating([]() {
-    // TODO(crbug.com/513245990): Implement navigation in a separate CL.
-  });
-
-#if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  NSString* geminiIcon = kGeminiBrandedLogoSymbol;
-  bool geminiIsCustom = true;
-#else
-  NSString* geminiIcon = kGeminiNonBrandedLogoSymbol;
-  bool geminiIsCustom = false;
-#endif
-
-  tasks_.insert(std::make_pair(
-      TaskType::kTabGroups,
-      TaskInfo(TaskType::kTabGroups, /*title_id=*/0, /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kTabsSymbol),
-               /*is_custom_symbol=*/false, LevelUpTaskCategory::kProductivity,
-               /*trigger_action=*/"MobileTabGroupUserCreatedNewGroup",
-               no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kAutofill,
-      TaskInfo(TaskType::kAutofill, /*title_id=*/0,
-               /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kPasswordManagerSymbol),
-               /*is_custom_symbol=*/true, LevelUpTaskCategory::kProductivity,
-               /*trigger_action=*/"", no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kPinTabs,
-      TaskInfo(TaskType::kPinTabs, /*title_id=*/0, /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kPinSymbol),
-               /*is_custom_symbol=*/false, LevelUpTaskCategory::kProductivity,
-               /*trigger_action=*/"MobileTabPinned", no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kGemini,
-      TaskInfo(TaskType::kGemini, /*title_id=*/0, /*task_description_id=*/0,
-               base::SysNSStringToUTF8(geminiIcon),
-               /*is_custom_symbol=*/geminiIsCustom,
-               LevelUpTaskCategory::kProductivity,
-               /*trigger_action=*/"", no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kPaymentMethods,
-      TaskInfo(TaskType::kPaymentMethods, /*title_id=*/0,
-               /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kCreditCardSymbol),
-               /*is_custom_symbol=*/false, LevelUpTaskCategory::kProductivity,
-               /*trigger_action=*/"AutofillCreditCardsViewed", no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kQuickDelete,
-      TaskInfo(TaskType::kQuickDelete, /*title_id=*/0,
-               /*task_description_id=*/0, base::SysNSStringToUTF8(kTrashSymbol),
-               /*is_custom_symbol=*/false, LevelUpTaskCategory::kSafety,
-               /*trigger_action=*/"", no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kSafeBrowsing,
-      TaskInfo(TaskType::kSafeBrowsing, /*title_id=*/0,
-               /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kShieldSymbol),
-               /*is_custom_symbol=*/false, LevelUpTaskCategory::kSafety,
-               /*trigger_action=*/"MobilePrivacySafeBrowsingSettingsClose",
-               no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kIncognito,
-      TaskInfo(TaskType::kIncognito, /*title_id=*/0, /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kIncognitoSymbol),
-               /*is_custom_symbol=*/true, LevelUpTaskCategory::kSafety,
-               /*trigger_action=*/"", no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kPasswordCheckup,
-      TaskInfo(TaskType::kPasswordCheckup, /*title_id=*/0,
-               /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kPasswordManagerSymbol),
-               /*is_custom_symbol=*/true, LevelUpTaskCategory::kSafety,
-               /*trigger_action=*/"MobilePasswordCheckupSettingsClose",
-               no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kLensSearch,
-      TaskInfo(TaskType::kLensSearch, /*title_id=*/0, /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kCameraLensSymbol),
-               /*is_custom_symbol=*/true, LevelUpTaskCategory::kSearch,
-               /*trigger_action=*/"", no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kAISearch,
-      TaskInfo(TaskType::kAISearch, /*title_id=*/0, /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kMagnifyingglassSparkSymbol),
-               /*is_custom_symbol=*/true, LevelUpTaskCategory::kSearch,
-               /*trigger_action=*/"MobileNTPMIAEntryPointTapped", no_op_nav)));
-
-  tasks_.insert(std::make_pair(
-      TaskType::kCameraSearch,
-      TaskInfo(TaskType::kCameraSearch, /*title_id=*/0,
-               /*task_description_id=*/0,
-               base::SysNSStringToUTF8(kCameraSymbol),
-               /*is_custom_symbol=*/true, LevelUpTaskCategory::kSearch,
-               /*trigger_action=*/"", no_op_nav)));
+  tasks_[TaskType::kTabGroups] = CreateTabGroupsTaskInfo();
+  tasks_[TaskType::kAutofill] = CreateAutofillTaskInfo();
+  tasks_[TaskType::kPinTabs] = CreatePinTabsTaskInfo();
+  tasks_[TaskType::kGemini] = CreateGeminiTaskInfo();
+  tasks_[TaskType::kPaymentMethods] = CreatePaymentMethodsTaskInfo();
+  tasks_[TaskType::kQuickDelete] = CreateQuickDeleteTaskInfo();
+  tasks_[TaskType::kSafeBrowsing] = CreateSafeBrowsingTaskInfo();
+  tasks_[TaskType::kIncognito] = CreateIncognitoTaskInfo();
+  tasks_[TaskType::kPasswordCheckup] = CreatePasswordCheckupTaskInfo();
+  tasks_[TaskType::kLensSearch] = CreateLensSearchTaskInfo();
+  tasks_[TaskType::kAISearch] = CreateAISearchTaskInfo();
+  tasks_[TaskType::kCameraSearch] = CreateCameraSearchTaskInfo();
 }
 
 void LevelUpService::LoadPrefs() {
   is_ui_enabled_ = pref_service_->GetBoolean(prefs::kLevelUpUIEnabled);
-  current_level_ = pref_service_->GetInteger(prefs::kLevelUpHighestLevel);
 
   const base::ListValue& list =
       pref_service_->GetList(prefs::kLevelUpCompletedTasks);
@@ -208,6 +125,55 @@ void LevelUpService::LoadPrefs() {
       completed_tasks_.insert(value.GetString());
     }
   }
+
+  UpdateLevelAndPref();
+}
+
+void LevelUpService::UpdateLevelAndPref() {
+  int highest_level_pref =
+      pref_service_->GetInteger(prefs::kLevelUpHighestLevel);
+  int calculated_level = CalculateLevel(completed_tasks_.size());
+  current_level_ =
+      std::max({current_level_, highest_level_pref, calculated_level});
+
+  if (current_level_ > highest_level_pref) {
+    pref_service_->SetInteger(prefs::kLevelUpHighestLevel, current_level_);
+  }
+}
+
+int LevelUpService::GetTasksIncrementForLevel(int level) const {
+  if (level < 1 || level > kMaxLevel) {
+    return 0;
+  }
+
+  if (level == kMaxLevel) {
+    int tasks_left = tasks_.size() - std::accumulate(tasks_per_level.begin(),
+                                                     tasks_per_level.end(), 0);
+    return std::max(0, tasks_left);
+  }
+  return tasks_per_level[level];
+}
+
+int LevelUpService::GetTotalTasksRequiredForLevel(int level) const {
+  level = std::clamp(level, 1, kMaxLevel);
+  if (level == kMaxLevel) {
+    return tasks_.size();
+  }
+  return std::accumulate(tasks_per_level.begin(),
+                         tasks_per_level.begin() + level + 1, 0);
+}
+
+int LevelUpService::CalculateLevel(size_t completed_count) const {
+  int running_task_sum = 0;
+  for (int level = 2; level <= kMaxLevel; ++level) {
+    running_task_sum += GetTasksIncrementForLevel(level);
+    // If the completed count is less than the running sum to reach a level,
+    // the user's active level is the previous level.
+    if (completed_count < static_cast<size_t>(running_task_sum)) {
+      return level - 1;
+    }
+  }
+  return kMaxLevel;
 }
 
 void LevelUpService::Shutdown() {
@@ -220,7 +186,7 @@ void LevelUpService::RegisterProfilePrefs(
   registry->RegisterListPref(prefs::kLevelUpCompletedTasks,
                              user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterIntegerPref(
-      prefs::kLevelUpHighestLevel, 0,
+      prefs::kLevelUpHighestLevel, 1,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterBooleanPref(
       prefs::kLevelUpUIEnabled, false,

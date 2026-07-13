@@ -75,12 +75,26 @@ setupComposeboxTest<T extends ComposeboxUnionElement = ComposeboxElement>():
   const testProxy = {} as ComposeboxTestElement<T>;
 
   setup(() => {
+    class MockSpeechRecognition {
+      onend: (() => void)|null = null;
+      start() {}
+      stop() {}
+      abort() {
+        if (this.onend) {
+          this.onend();
+        }
+      }
+    }
+    Object.assign(window, {webkitSpeechRecognition: MockSpeechRecognition});
+
     loadTimeData.overrideValues({
+      'useNtpComposeboxFork': false,
       'composeboxImageFileTypes':
           'image/avif,image/bmp,image/jpeg,image/png,image/webp,image/heif,image/heic',
       'composeboxAttachmentFileTypes': '.pdf,application/pdf',
       'contextualMenuUsePecApi': false,
       'composeboxSmartTabSharingVisible': false,
+      'contextManagementInComposeboxEnabled': false,
       'searchboxComposePlaceholder': 'Placeholder',
       'lensSendRawFileMediaTypesEnabled': false,
     });
@@ -129,6 +143,8 @@ createComposeboxElement<T extends ComposeboxUnionElement = ComposeboxElement>(
     usePecApi: loadTimeData.getBoolean('contextualMenuUsePecApi'),
     smartTabSharingVisible:
         loadTimeData.getBoolean('composeboxSmartTabSharingVisible'),
+    contextManagementInComposeboxEnabled:
+        loadTimeData.getBoolean('contextManagementInComposeboxEnabled'),
     ...properties,
   });
   document.body.appendChild(testProxy.element);

@@ -37,6 +37,10 @@ namespace browser_sync {
 class ChromeSyncClient;
 }
 
+namespace subscription_eligibility {
+class SubscriptionEligibilityMetricsProvider;
+}  // namespace subscription_eligibility
+
 namespace supervised_user {
 class MetricsServiceAccessorDelegateImpl;
 }
@@ -57,13 +61,14 @@ class FirstRunMasterPrefsVariationsSeedTest;
 }
 
 namespace glic {
+class GlicMetricsProvider;
 class GlicSyntheticTrialManager;
 }  // namespace glic
 
 namespace metrics {
 class ChromeOSPerUserMetricsBrowserTestBase;
 class UkmConsentParamBrowserTest;
-class CrOSPreConsentMetricsManagerTest;
+class CrOSPreChoiceMetricsManagerTest;
 }  // namespace metrics
 
 namespace optimization_guide {
@@ -152,11 +157,10 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class extensions::ChromeGuestViewManagerDelegate;
   friend class extensions::ChromeMetricsPrivateDelegate;
   friend class extensions::GlicPrivateInvokeFunction;
-  friend void metrics::ChangeMetricsReportingStateWithReplyImpl(
+  friend void metrics::ChangeMetricsReportingStateWithReply(
       bool,
       metrics::OnMetricsReportingCallbackType,
-      metrics::ChangeMetricsReportingStateCalledFrom,
-      std::optional<metrics::MetricsReportingLevel>);
+      metrics::ChangeMetricsReportingStateCalledFrom);
   friend void metrics::ApplyMetricsReportingPolicy();
   friend class ash::settings::PerSessionSettingsUserActionTracker;
   friend class settings::MetricsReportingHandler;
@@ -175,7 +179,9 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class Browser;
   friend class BrowserProcessImpl;
   friend class GlobalFeatures;
+  friend class subscription_eligibility::SubscriptionEligibilityMetricsProvider;
   friend class supervised_user::MetricsServiceAccessorDelegateImpl;
+  friend class glic::GlicMetricsProvider;
   friend class glic::GlicSyntheticTrialManager;
   friend class OptimizationGuideKeyedService;
   friend class optimization_guide::ChromeOnDeviceModelServiceController;
@@ -207,7 +213,7 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class metrics::ChromeOSPerUserMetricsBrowserTestBase;
   friend class SampledOutClientIdSavedBrowserTest;
   friend class MetricsInternalsUIBrowserTestWithLog;
-  friend class metrics::CrOSPreConsentMetricsManagerTest;
+  friend class metrics::CrOSPreChoiceMetricsManagerTest;
   FRIEND_TEST_ALL_PREFIXES(ChromeMetricsServiceAccessorTest,
                            MetricsReportingEnabled);
   FRIEND_TEST_ALL_PREFIXES(

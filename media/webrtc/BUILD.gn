@@ -6,6 +6,9 @@ import("//media/media_options.gni")
 import("//third_party/webrtc/webrtc.gni")
 
 component("webrtc") {
+  _configs = configs
+  configs = []
+  configs = [ "//third_party/tflite:tflite_shim_config" ] + _configs
   output_name = "media_webrtc"
 
   sources = [
@@ -20,6 +23,13 @@ component("webrtc") {
     "webrtc_features.cc",
     "webrtc_features.h",
   ]
+
+  if (chrome_wide_echo_cancellation_supported) {
+    sources += [
+      "voice_isolation/voice_isolation.cc",
+      "voice_isolation/voice_isolation.h",
+    ]
+  }
 
   defines = [ "IS_MEDIA_WEBRTC_IMPL" ]
 

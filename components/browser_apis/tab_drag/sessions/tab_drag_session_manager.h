@@ -13,11 +13,15 @@
 #include "components/browser_apis/tab_strip/types/node_id.h"
 #include "mojo/public/mojom/base/error.mojom-forward.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace tabs_api {
 
-class TabDragPlatformProvider;
+class TabDragSessionInjector;
 class TabDragSession;
+class DropTargetRegistry;
+class TabDragWindowAdapter;
+class TabDragWindowRegistry;
 
 // Browser-process-wide manager that owns and coordinates the active
 // TabDragSession. This ensures the session outlives individual window
@@ -25,28 +29,29 @@ class TabDragSession;
 class TabDragSessionManager {
  public:
   explicit TabDragSessionManager(
-      std::unique_ptr<TabDragPlatformProvider> platform_provider);
+      std::unique_ptr<TabDragSessionInjector> injector);
   TabDragSessionManager(const TabDragSessionManager&) = delete;
   TabDragSessionManager& operator=(const TabDragSessionManager&) = delete;
   ~TabDragSessionManager();
 
   // Starts a global drag session. Returns monostate if successful, or an error.
   base::expected<std::monostate, mojo_base::mojom::ErrorPtr> StartDrag(
+      TabDragWindowAdapter* source_window,
       const std::vector<tabs_api::NodeId>& source_tab_ids,
       const gfx::Point& start_point);
-
-  // Cancels the active session if one exists.
-  void CancelDrag();
 
   TabDragSession* active_session() { return active_session_.get(); }
 
   // Callback notified by the active session when it naturally terminates.
   void OnSessionEnded();
 
+  DropTargetRegistry& GetDropTargetRegistry();
+  TabDragWindowRegistry* GetWindowRegistry();
+
  private:
   void DestroyActiveSession();
 
-  std::unique_ptr<TabDragPlatformProvider> platform_provider_;
+  std::unique_ptr<TabDragSessionInjector> injector_;
   std::unique_ptr<TabDragSession> active_session_;
 
   base::WeakPtrFactory<TabDragSessionManager> weak_factory_{this};

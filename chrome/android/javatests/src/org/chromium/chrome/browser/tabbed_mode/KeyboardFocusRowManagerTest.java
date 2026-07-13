@@ -58,6 +58,9 @@ import java.util.concurrent.TimeoutException;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@EnableFeatures(
+        ChromeFeatureList.HOME_BUTTON_REMOVAL
+                + ":set_default_to_false_on_homepage_on_desktop/false")
 public class KeyboardFocusRowManagerTest {
 
     @Rule
@@ -406,6 +409,7 @@ public class KeyboardFocusRowManagerTest {
     private void switchRow() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mActivity.onMenuOrKeyboardAction(R.id.switch_keyboard_focus_row, false));
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
     private void assertOnToolbar() {

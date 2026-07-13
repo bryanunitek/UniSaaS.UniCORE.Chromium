@@ -227,9 +227,9 @@ void SelectionOverlayController::BindCaptureRegionObserver(
 // static
 void SelectionOverlayController::CaptureRegion(
     tabs::TabInterface* tab,
-    GlicSharingManager& sharing_manager,
+    GlicSharingManagerInternal& sharing_manager,
     mojo::PendingRemote<mojom::CaptureRegionObserver> observer,
-    mojom::GetTabContextOptionsPtr options) {
+    mojom::TabContextOptionsPtr options) {
   content::WebContents* web_contents = tab ? tab->GetContents() : nullptr;
   if (!web_contents) {
     mojo::Remote<mojom::CaptureRegionObserver> remote(std::move(observer));
@@ -285,7 +285,7 @@ void SelectionOverlayController::CaptureRegion(
   selection_overlay_controller->Show(std::move(options));
 }
 
-void SelectionOverlayController::Show(mojom::GetTabContextOptionsPtr options) {
+void SelectionOverlayController::Show(mojom::TabContextOptionsPtr options) {
   options_ = std::move(options);
   ShowModalUI();
 }
@@ -366,9 +366,9 @@ bool SelectionOverlayController::HandleKeyboardEvent(
 }
 
 void SelectionOverlayController::StartScreenshotFlow() {
-  auto fallback_options = mojom::GetTabContextOptions::New();
-  fallback_options->include_viewport_screenshot = true;
-  fallback_options->include_annotated_page_content = true;
+  auto fallback_options = mojom::TabContextOptions::New();
+  fallback_options->viewport_screenshot = true;
+  fallback_options->annotated_page_content = true;
 
   const auto& options = options_ ? *options_ : *fallback_options;
 
@@ -628,7 +628,11 @@ void SelectionOverlayController::RenderRegions(bool should_focus_panel) {
     instance->SendAdditionalContext(std::move(additional_context));
     // If the event that triggered this was initiated via keyboard, do not
     // focus the panel to avoid stealing focus away from the selection pane.
-    if (should_focus_panel) {
+    // Also, if line selection is enabled, keep focus
+    // on the selection pane to allow subsequent keyboard interactions.
+    bool line_selection_enabled =
+        base::FeatureList::IsEnabled(features::kGlicRegionSelectionLine);
+    if (should_focus_panel && !line_selection_enabled) {
       instance->FocusIfActive();
     }
   }
@@ -640,7 +644,7 @@ SelectionOverlayController::CreateAdditionalContext(
                           glic::mojom::CapturedRegionPtr>> regions) {
   auto context = glic::mojom::AdditionalContext::New();
   std::vector<glic::mojom::AdditionalContextPartPtr> parts;
-  mojom::TabContextPtr tab_context = tab_context_.Clone();
+  mojom::TabContextResultPtr tab_context = tab_context_.Clone();
   parts.push_back(glic::mojom::AdditionalContextPart::NewTabContext(
       std::move(tab_context)));
   for (auto& region : regions) {

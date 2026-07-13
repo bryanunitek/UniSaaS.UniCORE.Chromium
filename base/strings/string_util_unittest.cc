@@ -18,6 +18,7 @@
 
 #include "base/bits.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -906,6 +907,48 @@ TEST(StringUtilTest, JoinStringInitializerList16) {
   const std::u16string_view kPieceA = kA;
   const std::u16string_view kPieceB = kB;
   EXPECT_EQ(u"a, b", JoinString({kPieceA, kPieceB}, separator));
+}
+
+TEST(StringUtilTest, JoinStringConstexpr) {
+  static_assert([] {
+    const std::string_view parts[] = {"apple", "banana", "cherry"};
+    return JoinString(parts, ", ") == "apple, banana, cherry";
+  }());
+
+  static_assert([] {
+    const std::string_view parts[] = {"apple", "banana", "", "cherry"};
+    return JoinString(parts, ", ") == "apple, banana, , cherry";
+  }());
+  static_assert([] { return JoinString({}, ", ") == ""; }());
+
+  static_assert([] {
+    const std::u16string_view parts[] = {u"apple", u"banana", u"cherry"};
+    return JoinString(parts, u", ") == u"apple, banana, cherry";
+  }());
+
+  static_assert([] { return JoinString({"a", "b", "c"}, "|") == "a|b|c"; }());
+
+  static_assert(
+      [] { return JoinString({u"a", u"b", u"c"}, u"|") == u"a|b|c"; }());
+
+  static_assert([] {
+    const std::string_view parts[] = {"apple"};
+    return JoinString(parts, ", ") == "apple";
+  }());
+
+  static_assert([] {
+    const std::string parts[] = {"apple", "banana"};
+    return JoinString(parts, ", ") == "apple, banana";
+  }());
+
+  static_assert([] {
+    const std::u16string parts[] = {u"apple", u"banana"};
+    return JoinString(parts, u", ") == u"apple, banana";
+  }());
+
+  static_assert([] {
+    return JoinString(base::span<const std::string_view>(), ", ") == "";
+  }());
 }
 
 TEST(StringUtilTest, StartsWith) {

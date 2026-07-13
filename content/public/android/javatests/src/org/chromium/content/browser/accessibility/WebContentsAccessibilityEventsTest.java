@@ -55,7 +55,10 @@ public class WebContentsAccessibilityEventsTest {
      *
      */
     private void performTest(String inputFile, String expectationFile) {
-        performTest(inputFile, expectationFile, true);
+        performTest(
+                inputFile,
+                expectationFile,
+                /* shouldFilterTrivialEvents= */ true);
     }
 
     /**
@@ -71,7 +74,21 @@ public class WebContentsAccessibilityEventsTest {
     private void performTest(
             String inputFile, String expectationFile, boolean shouldFilterTrivialEvents) {
         performTestWithJavascriptMethod(
-                inputFile, expectationFile, "go()", shouldFilterTrivialEvents);
+                inputFile,
+                expectationFile,
+                "go()",
+                shouldFilterTrivialEvents,
+                /* testServer= */ false);
+    }
+
+    private void performTestWithServer(
+            String inputFile, String expectationFile, boolean shouldFilterTrivialEvents) {
+        performTestWithJavascriptMethod(
+                inputFile,
+                expectationFile,
+                "go()",
+                shouldFilterTrivialEvents,
+                /* testServer= */ true);
     }
 
     /**
@@ -84,14 +101,20 @@ public class WebContentsAccessibilityEventsTest {
      * @param expectationFile TXT expectations file
      * @param javascriptMethod javascript method (e.g. "expand()" or "go()")
      * @param shouldFilterTrivialEvents Flag to filter out TYPE_WINDOW_CONTENT_CHANGED event
+     * @param testServer Flag to indicate that the test server should be used
      */
     private void performTestWithJavascriptMethod(
             String inputFile,
             String expectationFile,
             String javascriptMethod,
-            boolean shouldFilterTrivialEvents) {
+            boolean shouldFilterTrivialEvents,
+            boolean testServer) {
         // Build page from given file and enable testing framework, set a tracker.
-        mActivityTestRule.setupTestFromFile(BASE_FILE_PATH + inputFile, shouldFilterTrivialEvents);
+        mActivityTestRule.setupTestFromFile(
+                BASE_FILE_PATH + inputFile, shouldFilterTrivialEvents, testServer);
+
+        // Inject a separator comment to separate initial page-load events from JS events
+        mActivityTestRule.addCommentToTracker("=== END INITIAL PAGE LOAD ===");
 
         // Execute go() method until it's returning false.
         boolean runGoAgain;
@@ -119,7 +142,7 @@ public class WebContentsAccessibilityEventsTest {
      * Helper method to compare test outputs with expected results. Reads content of expectations
      * file, asserts non-null, then compares with results.
      *
-     * @param expectationFile           Filename of the expectations for the given test.
+     * @param expectationFile Filename of the expectations for the given test.
      */
     private void assertResults(String expectationFile) {
         String expectedResults;
@@ -181,7 +204,6 @@ public class WebContentsAccessibilityEventsTest {
         ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
         ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_addAlertContent() {
         performTest("add-alert-content.html", "add-alert-content-expected-android.txt");
     }
@@ -193,7 +215,6 @@ public class WebContentsAccessibilityEventsTest {
         ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
         ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_addAlertContent_exp() {
         performTest("add-alert-content.html", "add-alert-content-expected-android-exp.txt");
     }
@@ -667,7 +688,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_ariaTreeItemFocus() {
         performTest("aria-treeitem-focus.html", "aria-treeitem-focus-expected-android.txt");
     }
@@ -838,7 +858,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_dialogPaneNameChanged() {
         performTest("dialog-pane-name-change.html", "dialog-pane-name-change-expected-android.txt");
     }
@@ -1155,7 +1174,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_menuBarShowHideMenus() {
         performTest("menubar-show-hide-menus.html", "menubar-show-hide-menus-expected-android.txt");
     }
@@ -1192,7 +1210,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_menuOpenedClosed() {
         performTest("menu-opened-closed.html", "menu-opened-closed-expected-android.txt");
     }
@@ -1231,9 +1248,11 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "crbug.com/382549182")
     public void test_navigationApi() {
-        performTest("navigation-api.html", "navigation-api-expected-android.txt");
+        performTestWithServer(
+                "navigation-api.html",
+                "navigation-api-expected-android.txt",
+                /* shouldFilterTrivialEvents= */ true);
     }
 
     @Test
@@ -1349,7 +1368,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1186376")
     public void test_scrollHorizontalScrollPercentChanged() {
         performTest(
                 "scroll-horizontal-scroll-percent-change.html",
@@ -1358,7 +1376,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1186376")
     public void test_scrollVerticalScrollPercentChanged() {
         performTest(
                 "scroll-vertical-scroll-percent-change.html",
@@ -1536,6 +1553,7 @@ public class WebContentsAccessibilityEventsTest {
     // on the node info, which requires tiramisu or higher.
     @MinAndroidSdkLevel(Build.VERSION_CODES.TIRAMISU)
     @EnableFeatures(ContentFeatures.ACCESSIBILITY_REQUEST_SCOPED_CONTENT_CHANGED_EVENTS)
+    @DisabledTest(message = "https://crbug.com/529790434")
     public void test_scopedContentChanged_enabled() {
         performTest(
                 "scoped-content-changed.html",
@@ -1546,6 +1564,7 @@ public class WebContentsAccessibilityEventsTest {
     @Test
     @SmallTest
     @DisableFeatures(ContentFeatures.ACCESSIBILITY_REQUEST_SCOPED_CONTENT_CHANGED_EVENTS)
+    @DisabledTest(message = "https://crbug.com/532605121")
     public void test_scopedContentChanged_disabled() {
         performTest(
                 "scoped-content-changed.html",

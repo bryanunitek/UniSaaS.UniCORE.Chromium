@@ -20,6 +20,8 @@
 #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "components/send_tab_to_self/features.h"
+#include "components/send_tab_to_self/metrics_util.h"
 #include "components/send_tab_to_self/target_device_info.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "content/public/test/browser_test.h"
@@ -115,11 +117,24 @@ class SendTabToSelfBubbleTest : public DialogBrowserTest {
       controller_->SetEntryPointDisplayReason(
           send_tab_to_self::EntryPointDisplayReason::kInformNoTargetDevice);
     }
-    controller_->ShowBubble();
+    controller_->ShowBubble(ShareEntryPoint::kToolbarIcon);
   }
 
  protected:
   raw_ptr<StubSendTabToSelfBubbleController> controller_ = nullptr;
+};
+
+// Test suite for pixel/dialog tests that assert the old bubble UI.
+// These tests must run with SendTabToSelfEnhancedDesktopUI disabled to match
+// the existing pixel baselines.
+class SendTabToSelfBubbleOldUITest : public SendTabToSelfBubbleTest {
+ public:
+  SendTabToSelfBubbleOldUITest() {
+    feature_list_.InitAndDisableFeature(kSendTabToSelfEnhancedDesktopUI);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 };
 
 // TODO(crbug.com/40927205): Flakily fails on some Windows builders.
@@ -128,17 +143,18 @@ class SendTabToSelfBubbleTest : public DialogBrowserTest {
 #else
 #define MAYBE_InvokeUi_ShowDeviceList InvokeUi_ShowDeviceList
 #endif
-IN_PROC_BROWSER_TEST_F(SendTabToSelfBubbleTest, MAYBE_InvokeUi_ShowDeviceList) {
+IN_PROC_BROWSER_TEST_F(SendTabToSelfBubbleOldUITest,
+                       MAYBE_InvokeUi_ShowDeviceList) {
   ShowAndVerifyUi();
 }
 
-IN_PROC_BROWSER_TEST_F(SendTabToSelfBubbleTest, InvokeUi_ShowSigninPromo) {
+IN_PROC_BROWSER_TEST_F(SendTabToSelfBubbleOldUITest, InvokeUi_ShowSigninPromo) {
   // Last updated in crrev.com/c/3776623.
   set_baseline("3776623");
   ShowAndVerifyUi();
 }
 
-IN_PROC_BROWSER_TEST_F(SendTabToSelfBubbleTest,
+IN_PROC_BROWSER_TEST_F(SendTabToSelfBubbleOldUITest,
                        InvokeUi_ShowNoTargetDevicePromo) {
   // Last updated in crrev.com/c/3832669.
   set_baseline("3832669");
@@ -201,7 +217,7 @@ IN_PROC_BROWSER_TEST_P(SendTabToSelfBubbleParameterizedTest,
   ui::MouseEvent release_event(ui::EventType::kMouseReleased, gfx::Point(),
                                gfx::Point(), ui::EventTimeForNow(),
                                ui::EF_LEFT_MOUSE_BUTTON, 0);
-  controller_->ShowBubble();
+  controller_->ShowBubble(ShareEntryPoint::kToolbarIcon);
   EXPECT_TRUE(controller_->IsBubbleShown());
 
   // Confirm execution is skipped for the next mouse release.
@@ -222,7 +238,7 @@ IN_PROC_BROWSER_TEST_P(SendTabToSelfBubbleParameterizedTest,
   ASSERT_FALSE(container->IsActionPinnedOrPoppedOut(kActionSendTabToSelf));
 
   // Trigger the bubble.
-  controller_->ShowBubble();
+  controller_->ShowBubble(ShareEntryPoint::kToolbarIcon);
   EXPECT_TRUE(controller_->IsBubbleShown());
 
   // Confirm it is now popped out.
@@ -251,12 +267,12 @@ IN_PROC_BROWSER_TEST_P(SendTabToSelfBubbleParameterizedTest,
 IN_PROC_BROWSER_TEST_P(SendTabToSelfBubbleParameterizedTest,
                        ShowBubbleMultipleTimes) {
   // Call ShowBubble multiple times. The early return prevents re-creation.
-  controller_->ShowBubble();
+  controller_->ShowBubble(ShareEntryPoint::kToolbarIcon);
   SendTabToSelfBubbleView* first_view =
       controller_->send_tab_to_self_bubble_view();
   EXPECT_TRUE(first_view);
 
-  controller_->ShowBubble();
+  controller_->ShowBubble(ShareEntryPoint::kToolbarIcon);
   EXPECT_EQ(first_view, controller_->send_tab_to_self_bubble_view());
 }
 

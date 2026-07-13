@@ -15,7 +15,6 @@
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/download/android/download_controller.h"
 #include "chrome/browser/download/android/download_dialog_utils.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/url_formatter/elide_url.h"
 #include "ui/android/window_android.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -78,7 +77,7 @@ void DangerousDownloadDialogBridge::Show(download::DownloadItem* download_item,
       download_item->GetTotalBytes(),
       base::android::ConvertUTF16ToJavaString(env,
                                               GetDownloadDomain(download_item)),
-      ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_INFOBAR_WARNING),
+      ResourceMapper::MapToJavaDrawableId(IDR_ANDROID_PERMISSION_WARNING),
       download_item->IsDangerous());
 }
 

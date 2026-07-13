@@ -2,18 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {TextBoxState, TextTypeface} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
+import {TextBoxState, TextTypeface, UserAction} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
 import type {TextAnnotation} from 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_viewer_wrapper.js';
 import {isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {dragHandle, getTestAnnotation, initializeBox, setupTextBoxTest, verifyFinishTextAnnotationMessage} from './ink2_text_box_test_utils.js';
-import {assertDeepEquals} from './test_util.js';
+import {dragHandle, getTestAnnotation, initializeBox, reactivateBox, setupTextBoxTest, verifyFinishTextAnnotationMessage} from './ink2_text_box_test_utils.js';
+import {assertDeepEquals, setupMockMetricsPrivate} from './test_util.js';
 
 chrome.test.runTests([
   async function testCommit() {
+    const mockMetricsPrivate = setupMockMetricsPrivate();
     const {manager, mockPlugin, textbox, viewport} = await setupTextBoxTest();
     // Initialize a new 100x100 box at 50, 60 (Box A).
-    initializeBox(manager, 100, 100, 50, 60);
+    initializeBox(100, 100, 50, 60);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
     // Set viewport to non-1.0 zoom to validate coordinate conversion.
@@ -24,7 +25,7 @@ chrome.test.runTests([
     // plugin won't get a message.
     mockPlugin.clearMessages();
     // Initialize another new box.
-    initializeBox(manager, 100, 100, 50, 60);
+    initializeBox(100, 100, 50, 60);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
     chrome.test.assertEq(
@@ -40,8 +41,10 @@ chrome.test.runTests([
       // user clicks elsewhere to create a new box.
       chrome.test.assertEq(
           undefined, mockPlugin.findMessage('finishTextAnnotation'));
+      // Manually commit the active annotation.
+      await textbox.commitTextAnnotation();
       // Create a new box at 0, 0.
-      initializeBox(manager, 100, 100, 0, 0);
+      initializeBox(100, 100, 0, 0);
       await microtasksFinished();
       verifyFinishTextAnnotationMessage(
           mockPlugin, expectedAnnotation, expectedIsEdited);
@@ -58,11 +61,10 @@ chrome.test.runTests([
     textbox.$.textbox.dispatchEvent(new CustomEvent('input'));
     await microtasksFinished();
     await startNewAnnotationAndVerifyMessage(expectedAnnotation, true);
+    mockMetricsPrivate.assertCount(UserAction.ADD_INK2_TEXT_ANNOTATION, 1);
 
     // --- (1) Re-activate and edit the text of the existing annotation ---
-    // Click center of Box B: [100, 110] screen to re-activate it.
-    let clicked = await manager.initializeTextAnnotation({x: 100, y: 110});
-    chrome.test.assertTrue(clicked, 'Failed to click existing annotation');
+    reactivateBox(textbox, viewport, expectedAnnotation);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
     chrome.test.assertEq('Hello World', textbox.$.textbox.value);
@@ -77,11 +79,10 @@ chrome.test.runTests([
     // Commit it by starting a new annotation and verify.
     await startNewAnnotationAndVerifyMessage(
         expectedAnnotationEditedText, true);
+    mockMetricsPrivate.assertCount(UserAction.ADD_INK2_TEXT_ANNOTATION, 1);
 
     // --- (2) Re-activate and apply Move/Resize Edit ---
-    // Re-activate by clicking on it again (at [100, 110] screen).
-    clicked = await manager.initializeTextAnnotation({x: 100, y: 110});
-    chrome.test.assertTrue(clicked, 'Failed to click existing annotation');
+    reactivateBox(textbox, viewport, expectedAnnotationEditedText);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
     chrome.test.assertEq('Hello World Edited', textbox.$.textbox.value);
@@ -101,9 +102,7 @@ chrome.test.runTests([
     await startNewAnnotationAndVerifyMessage(expectedAnnotationAfterMove, true);
 
     // --- (3) Re-activate and apply Font Change Edit ---
-    // Re-activate the moved annotation (new center is at [200, 210] screen).
-    clicked = await manager.initializeTextAnnotation({x: 200, y: 210});
-    chrome.test.assertTrue(clicked, 'Failed to click moved annotation');
+    reactivateBox(textbox, viewport, expectedAnnotationAfterMove);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
 
@@ -116,10 +115,7 @@ chrome.test.runTests([
     await startNewAnnotationAndVerifyMessage(expectedAnnotationWithFont, true);
 
     // --- (4) Re-activate and apply Text Cleared Edit ---
-    // Re-activate the font-changed annotation (same coordinates [200, 210]
-    // screen).
-    clicked = await manager.initializeTextAnnotation({x: 200, y: 210});
-    chrome.test.assertTrue(clicked, 'Failed to click font-changed annotation');
+    reactivateBox(textbox, viewport, expectedAnnotationWithFont);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
 
@@ -137,7 +133,8 @@ chrome.test.runTests([
   },
 
   async function testCloseAndEvents() {
-    const {manager, mockPlugin, textbox, viewport} = await setupTextBoxTest();
+    const mockMetricsPrivate = setupMockMetricsPrivate();
+    const {mockPlugin, textbox, viewport} = await setupTextBoxTest();
     viewport.setZoom(2.0);
     await microtasksFinished();
     // Add state-changed listener.
@@ -147,7 +144,7 @@ chrome.test.runTests([
     });
 
     // Initialize to a 100x100 box at 400, 300.
-    initializeBox(manager, 100, 100, 400, 300);
+    initializeBox(100, 100, 400, 300);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
     assertDeepEquals([TextBoxState.NEW], textBoxStates);
@@ -161,11 +158,13 @@ chrome.test.runTests([
     chrome.test.assertEq(
         undefined, mockPlugin.findMessage('finishTextAnnotation'));
     assertDeepEquals([TextBoxState.NEW, TextBoxState.INACTIVE], textBoxStates);
+    // No edits also does not count as an add event in the metrics.
+    mockMetricsPrivate.assertCount(UserAction.ADD_INK2_TEXT_ANNOTATION, 0);
 
     // When text is edited, commitTextAnnotation() will trigger a plugin
     // message.
     textBoxStates = [];
-    initializeBox(manager, 100, 100, 400, 300);
+    initializeBox(100, 100, 400, 300);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
     assertDeepEquals([TextBoxState.NEW], textBoxStates);
@@ -187,14 +186,14 @@ chrome.test.runTests([
         [TextBoxState.NEW, TextBoxState.EDITED, TextBoxState.INACTIVE],
         textBoxStates);
     verifyFinishTextAnnotationMessage(mockPlugin, expectedAnnotation, true);
+    mockMetricsPrivate.assertCount(UserAction.ADD_INK2_TEXT_ANNOTATION, 1);
     mockPlugin.clearMessages();
 
     // When existing text is not edited, commitTextAnnotation() will trigger a
     // plugin message.
     textBoxStates = [];
     // Re-initialize the annotation.
-    const clicked = await manager.initializeTextAnnotation({x: 450, y: 350});
-    chrome.test.assertTrue(clicked, 'Failed to click existing annotation');
+    reactivateBox(textbox, viewport, expectedAnnotation);
     await microtasksFinished();
     chrome.test.assertTrue(isVisible(textbox));
     assertDeepEquals([TextBoxState.NEW], textBoxStates);
@@ -205,6 +204,9 @@ chrome.test.runTests([
     // The annotation has not changed.
     assertDeepEquals([TextBoxState.NEW, TextBoxState.INACTIVE], textBoxStates);
     verifyFinishTextAnnotationMessage(mockPlugin, expectedAnnotation, false);
+    // No edits also does not count as an add event in the metrics. So the count
+    // stays at 1 here.
+    mockMetricsPrivate.assertCount(UserAction.ADD_INK2_TEXT_ANNOTATION, 1);
     mockPlugin.clearMessages();
 
     chrome.test.succeed();
@@ -215,7 +217,7 @@ chrome.test.runTests([
     privateProxy.reset();
     assertDeepEquals([], manager.getKnownFontIds());
 
-    initializeBox(manager, 100, 100, 400, 300);
+    initializeBox(100, 100, 400, 300);
     await microtasksFinished();
     textbox.$.textbox.value = 'Hello';
     textbox.$.textbox.dispatchEvent(new CustomEvent('input'));
@@ -233,7 +235,7 @@ chrome.test.runTests([
       mojoTextInfo: new ArrayBuffer(5),
     });
 
-    initializeBox(manager, 100, 100, 50, 50);
+    initializeBox(100, 100, 50, 50);
     await microtasksFinished();
     textbox.$.textbox.value = 'World';
     textbox.$.textbox.dispatchEvent(new CustomEvent('input'));
@@ -251,7 +253,7 @@ chrome.test.runTests([
       typefaces: [],
       mojoTextInfo: new ArrayBuffer(5),
     });
-    initializeBox(manager, 100, 100, 200, 150);
+    initializeBox(100, 100, 200, 150);
     await microtasksFinished();
     textbox.$.textbox.value = 'Again';
     textbox.$.textbox.dispatchEvent(new CustomEvent('input'));
@@ -260,6 +262,53 @@ chrome.test.runTests([
     getTextInfoArgs = await privateProxy.whenCalled('getTextInfo');
     // The text box is responsible for telling the proxy 123 is a known id.
     assertDeepEquals([123], getTextInfoArgs.knownFontIds);
+
+    chrome.test.succeed();
+  },
+
+  async function testCommitNoEditsDoesNotFetchFont() {
+    const {manager, privateProxy, textbox, viewport} = await setupTextBoxTest();
+    assertDeepEquals([], manager.getKnownFontIds());
+
+    // Set up test font information.
+    privateProxy.reset();
+    privateProxy.setGetTextInfoResult({
+      typefaces: [{uniqueId: 123, serializedTypeface: new ArrayBuffer(10)}],
+      mojoTextInfo: new ArrayBuffer(5),
+    });
+
+    // Simulate opening a loaded text annotation by reactivating the annotation.
+    const loadedAnnotation = getTestAnnotation(
+        {locationX: 20, locationY: 27, height: 50, width: 50}, 1.0);
+    reactivateBox(textbox, viewport, loadedAnnotation);
+    await microtasksFinished();
+    chrome.test.assertTrue(isVisible(textbox));
+
+    // Commit without making any edits.
+    await textbox.commitTextAnnotation();
+    await microtasksFinished();
+
+    chrome.test.assertEq(0, privateProxy.getCallCount('getTextInfo'));
+    assertDeepEquals([], manager.getKnownFontIds());
+
+    // Initialize a new box.
+    initializeBox(100, 100, 50, 50);
+    await microtasksFinished();
+
+    // Type some text to make it edited.
+    textbox.$.textbox.value = 'New Annotation';
+    textbox.$.textbox.dispatchEvent(new CustomEvent('input'));
+    await microtasksFinished();
+
+    // Commit the new annotation.
+    await textbox.commitTextAnnotation();
+    await microtasksFinished();
+
+    // Verify that getTextInfo() was called and a new font was collected.
+    chrome.test.assertEq(1, privateProxy.getCallCount('getTextInfo'));
+    const getTextInfoArgs = await privateProxy.whenCalled('getTextInfo');
+    assertDeepEquals([], getTextInfoArgs.knownFontIds);
+    assertDeepEquals([123], manager.getKnownFontIds());
 
     chrome.test.succeed();
   },

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/permissions/embedded_permission_prompt_system_settings_view.h"
 
+#include "base/barrier_callback.h"
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
@@ -14,6 +15,7 @@
 #include "components/permissions/features.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/views/widget/widget.h"
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
     EmbeddedPermissionPromptSystemSettingsView,
@@ -21,12 +23,13 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
 
 EmbeddedPermissionPromptSystemSettingsView::
     EmbeddedPermissionPromptSystemSettingsView(
-        Browser* browser,
+        content::WebContents* web_contents,
         base::WeakPtr<EmbeddedPermissionPromptViewDelegate> delegate)
-    : EmbeddedPermissionPromptBaseView(browser, delegate) {
-  browser_subscription_ = browser->RegisterDidBecomeActive(base::BindRepeating(
-      &EmbeddedPermissionPromptSystemSettingsView::DidBecomeActive,
-      base::Unretained(this)));
+    : EmbeddedPermissionPromptBaseView(web_contents, delegate) {
+  if (auto* widget =
+          views::Widget::GetWidgetForNativeWindow(GetNativeWindow())) {
+    host_widget_observation_.Observe(widget);
+  }
 }
 
 EmbeddedPermissionPromptSystemSettingsView::
@@ -67,11 +70,31 @@ void EmbeddedPermissionPromptSystemSettingsView::RunButtonCallback(
   delegate()->ShowSystemSettings();
 }
 
-void EmbeddedPermissionPromptSystemSettingsView::PrepareToClose() {
-  EmbeddedPermissionPromptBaseView::PrepareToClose();
+void EmbeddedPermissionPromptSystemSettingsView::OnWidgetTreeActivated(
+    views::Widget* root_widget,
+    views::Widget* active_widget) {
+  if (!host_widget_observation_.IsObserving() ||
+      !host_widget_observation_.IsObservingSource(root_widget)) {
+    return;
+  }
 
-  // Without resetting the browser subscription here, some tests crash.
-  browser_subscription_ = base::CallbackListSubscription();
+  // Ignore host widget activation changes that occur after the permission
+  // prompt has been closed.
+  if (GetWidget() && GetWidget()->IsClosed()) {
+    return;
+  }
+
+  const auto& requests = delegate()->Requests();
+  auto barrier = base::BarrierCallback<bool>(
+      requests.size(),
+      base::BindOnce(
+          &EmbeddedPermissionPromptSystemSettingsView::OnPermissionChecksDone,
+          weak_factory_.GetWeakPtr()));
+
+  for (const auto& request : requests) {
+    system_permission_settings::IsDeniedFresh(request->GetContentSettingsType(),
+                                              barrier);
+  }
 }
 
 std::vector<
@@ -104,21 +127,33 @@ EmbeddedPermissionPromptSystemSettingsView::GetButtonsConfiguration() const {
            kOpenSettingsId}};
 }
 
-void EmbeddedPermissionPromptSystemSettingsView::DidBecomeActive(
-    BrowserWindowInterface* browser_window_interface) {
-  for (const auto& request : delegate()->Requests()) {
-    if (system_permission_settings::IsDenied(
-            request->GetContentSettingsType())) {
+void EmbeddedPermissionPromptSystemSettingsView::OnPermissionChecksDone(
+    const std::vector<bool>& results) {
+  if (!delegate() || prompt_resolved_) {
+    return;
+  }
+
+  for (bool is_denied : results) {
+    if (is_denied) {
       return;
     }
   }
+
+  prompt_resolved_ = true;
 
   // Asynchronously notify the delegate that the current prompt can be resolved.
   // This is done asyncronouly to avoid checks in the focus logic which prevent
   // a new widget from activating the current window again at this exact moment
   // in time.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&EmbeddedPermissionPromptViewDelegate::
-                                    SystemPermissionsNoLongerDenied,
-                                delegate()));
+      FROM_HERE, base::BindOnce(&EmbeddedPermissionPromptSystemSettingsView::
+                                    NotifyDelegatePermissionNoLongerDenied,
+                                weak_factory_.GetWeakPtr()));
+}
+
+void EmbeddedPermissionPromptSystemSettingsView::
+    NotifyDelegatePermissionNoLongerDenied() {
+  if (delegate()) {
+    delegate()->SystemPermissionsNoLongerDenied();
+  }
 }

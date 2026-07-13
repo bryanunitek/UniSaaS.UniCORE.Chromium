@@ -595,7 +595,6 @@ std::vector<std::pair<base::test::FeatureRef, bool>> GetWipFeatures(
   std::vector<std::pair<base::test::FeatureRef, bool>> features = {
       // Support for new field types.
       {features::kAutofillUseINAddressModel, true},
-      {features::kAutofillSupportPhoneticNameForJP, true},
       {features::kAutofillEnableExpirationDateImprovements, true},
       {features::kAutofillSupportCombinedZipAndCityFR, true},
       {features::kAutofillSupportSplitZipCode, true},
@@ -604,11 +603,6 @@ std::vector<std::pair<base::test::FeatureRef, bool>> GetWipFeatures(
       {features::kAutofillDisallowMoreHyphenLikeLabels, true},
       {features::kAutofillFixStateCountryMisclassification, true},
       {features::kAutofillFixCivilStateMisclassificationForESPT, true},
-      {features::kAutofillNewRegexForPhoneCountryCode, true},
-      {features::kAutofillImprovePhoneFieldParser, true},
-      {features::kAutofillNewAugmentedPhoneCountryCodeRegex, true},
-      {features::kAutofillPreferPhoneCountryCodeTypeOverCountryHtmlType, true},
-      {features::kAutofillImprovePhoneNumberRationalization, true},
       // TODO(crbug.com/320965828): Understand the changes to the expectations
       // caused by this feature.
       {features::kAutofillBetterLocalHeuristicPlaceholderSupport, false},

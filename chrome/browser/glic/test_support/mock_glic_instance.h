@@ -24,6 +24,7 @@ class MockGlicInstance : public GlicInstance {
   ~MockGlicInstance() override;
 
   MOCK_METHOD(bool, IsActive, (), (override));
+  MOCK_METHOD(bool, IsHibernated, (), (const, override));
   MOCK_METHOD(void,
               AddStateObserver,
               (PanelStateObserver * observer),
@@ -39,7 +40,7 @@ class MockGlicInstance : public GlicInstance {
               (override));
   MOCK_METHOD(bool, IsShowing, (), (const, override));
   MOCK_METHOD(gfx::Size, GetPanelSize, (), (override));
-  MOCK_METHOD(std::optional<Target>, GetInvokeTarget, (), (override));
+  MOCK_METHOD(Target, GetInvokeTarget, (Target::Surface), (override));
   MOCK_METHOD(const InstanceId&, id, (), (const, override));
   MOCK_METHOD(std::optional<std::string>,
               conversation_id,
@@ -53,15 +54,19 @@ class MockGlicInstance : public GlicInstance {
               (),
               (const, override));
   MOCK_METHOD(GlicActorTaskManager*, GetActorTaskManager, (), (override));
+  MOCK_METHOD(GlicExperimentalTriggeringManager*,
+              GetExperimentalTriggeringManager,
+              (),
+              (override));
   MOCK_METHOD(bool, IsActuating, (), (const, override));
   MOCK_METHOD(void, CancelTask, (), (override));
 
+  MOCK_METHOD(GlicSharingManager*, GetSharingManager, (), (override));
   MOCK_METHOD(void,
-              GetExperimentalTriggeringUpdates,
-              (mojo::PendingRemote<mojom::ExperimentalTriggeringUpdatesHandler>,
-               base::OnceCallback<void(bool)>),
+              UpdateSkillPreviews,
+              (std::optional<tabs::TabInterface*>),
               (override));
-  MOCK_METHOD(Host&, host, (), (override));
+
   MOCK_METHOD(void,
               SendAdditionalContext,
               (mojom::AdditionalContextPtr),

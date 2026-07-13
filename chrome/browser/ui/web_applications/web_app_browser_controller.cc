@@ -469,8 +469,8 @@ void WebAppBrowserController::OnRelationshipCheckComplete(
       break;
   }
   is_verified_ = should_show_cct;
-  browser()->window()->UpdateCustomTabBarVisibility(should_show_cct,
-                                                    false /* animate */);
+  BrowserWindow::FromBrowser(browser())->UpdateCustomTabBarVisibility(
+      should_show_cct, false /* animate */);
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -491,7 +491,7 @@ void WebAppBrowserController::OnWebAppManifestUpdated(
   if (updated_app_id == app_id()) {
     UpdateThemePack();
     app_icon_.reset();
-    browser()->window()->UpdateTitleBar();
+    BrowserWindow::FromBrowser(browser())->UpdateTitleBar();
 
     if (ManifestUpdateAppliedCallbackForTesting()) {
       std::move(ManifestUpdateAppliedCallbackForTesting()).Run();
@@ -527,7 +527,7 @@ ui::ImageModel WebAppBrowserController::GetWindowAppIcon() const {
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(
-          browser()->profile())) {
+          browser()->GetProfile())) {
     LoadAppIcon(true /* allow_placeholder_icon */);
     return *app_icon_;
   }
@@ -764,7 +764,7 @@ bool WebAppBrowserController::IsPreinstalledOnly() const {
 void WebAppBrowserController::Uninstall(
     webapps::WebappUninstallSource webapp_uninstall_source) {
   provider_->ui_manager().PresentUserUninstallDialog(
-      app_id(), webapp_uninstall_source, browser()->window(),
+      app_id(), webapp_uninstall_source, BrowserWindow::FromBrowser(browser()),
       base::DoNothing());
 }
 
@@ -818,7 +818,7 @@ const WebAppInstallManager& WebAppBrowserController::install_manager() const {
 
 void WebAppBrowserController::LoadAppIcon(bool allow_placeholder_icon) const {
   apps::AppServiceProxy* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(browser()->profile());
+      apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
   proxy->LoadIcon(app_id(), apps::IconType::kStandard, kWebAppIconSmall,
                   allow_placeholder_icon,
                   base::BindOnce(&WebAppBrowserController::OnLoadIcon,
@@ -919,16 +919,17 @@ void WebAppBrowserController::OnMetadataObtainedTriggerMigrationDialog(
 
 void WebAppBrowserController::OnUpdateDialogResult(
     WebAppIdentityUpdateResult result) const {
-  CHECK(!browser()->profile()->IsOffTheRecord());
+  CHECK(!browser()->GetProfile()->IsOffTheRecord());
   base::UmaHistogramEnumeration("WebApp.PredictableUpdateDialog.Result",
                                 result);
-  auto* web_app_provider = WebAppProvider::GetForWebApps(browser()->profile());
+  auto* web_app_provider =
+      WebAppProvider::GetForWebApps(browser()->GetProfile());
   CHECK(web_app_provider);
 
   switch (result) {
     case WebAppIdentityUpdateResult::kAccept: {
       auto profile_keep_alive = ScopedProfileKeepAlive::TryAcquire(
-          browser()->profile(), ProfileKeepAliveOrigin::kWebAppUpdate);
+          browser()->GetProfile(), ProfileKeepAliveOrigin::kWebAppUpdate);
       if (!profile_keep_alive) {
         // Profile is scheduled for destruction, abort.
         return;
@@ -948,7 +949,7 @@ void WebAppBrowserController::OnUpdateDialogResult(
     case WebAppIdentityUpdateResult::kUninstallApp:
       web_app_provider->ui_manager().PresentUserUninstallDialog(
           app_id(), webapps::WebappUninstallSource::kAppMenu,
-          browser()->window(), base::DoNothing());
+          BrowserWindow::FromBrowser(browser()), base::DoNothing());
       return;
     case WebAppIdentityUpdateResult::kCloseApp:
       // kCloseApp is only used for migration dialogs.
@@ -964,7 +965,7 @@ void WebAppBrowserController::OnMigrationDialogResult(
     base::TimeTicks start_time,
     const WebAppIdentityUpdate& identity_update,
     WebAppIdentityUpdateResult result) const {
-  CHECK(!browser()->profile()->IsOffTheRecord());
+  CHECK(!browser()->GetProfile()->IsOffTheRecord());
 
   if (identity_update.is_forced_migration) {
     base::UmaHistogramEnumeration(
@@ -974,13 +975,14 @@ void WebAppBrowserController::OnMigrationDialogResult(
         "WebApp.UpdateDialog.MigrateSuggested.UserAction", result);
   }
 
-  auto* web_app_provider = WebAppProvider::GetForWebApps(browser()->profile());
+  auto* web_app_provider =
+      WebAppProvider::GetForWebApps(browser()->GetProfile());
   CHECK(web_app_provider);
 
   switch (result) {
     case WebAppIdentityUpdateResult::kAccept: {
       auto profile_keep_alive = ScopedProfileKeepAlive::TryAcquire(
-          browser()->profile(), ProfileKeepAliveOrigin::kWebAppUpdate);
+          browser()->GetProfile(), ProfileKeepAliveOrigin::kWebAppUpdate);
       if (!profile_keep_alive) {
         // Profile is scheduled for destruction, abort.
         return;
@@ -1025,7 +1027,7 @@ void WebAppBrowserController::OnMigrationDialogResult(
               : base::DoNothing();
       web_app_provider->ui_manager().PresentUserUninstallDialog(
           app_id(), webapps::WebappUninstallSource::kAppMenu,
-          browser()->window(), std::move(complete_callback));
+          BrowserWindow::FromBrowser(browser()), std::move(complete_callback));
       return;
     }
     case WebAppIdentityUpdateResult::kCloseApp:

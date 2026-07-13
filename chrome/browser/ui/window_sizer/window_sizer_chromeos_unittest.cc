@@ -38,8 +38,8 @@ class WindowSizerChromeOSTest : public ChromeAshTestBase {
   // The window sizing code only works when the window hasn't yet been created.
   std::unique_ptr<Browser> CreateWindowlessBrowser(
       Browser::CreateParams params) {
-    params.skip_window_init_for_testing = true;
-    return Browser::DeprecatedCreateOwnedForTesting(params);
+    return chrome::CreateBrowserWithAuraTestWindowForParams(
+        std::unique_ptr<aura::Window>(), &params);
   }
 
   // Similar to WindowSizerTestUtil::GetWindowBounds() but takes an existing
@@ -47,7 +47,7 @@ class WindowSizerChromeOSTest : public ChromeAshTestBase {
   // TODO(mek): Refactor this to use a builder pattern similar to what
   // WindowSizerTestUtil does.
   enum Source { DEFAULT, LAST_ACTIVE, PERSISTED, BOTH };
-  void GetWindowBounds(const Browser* browser,
+  void GetWindowBounds(Browser* browser,
                        const gfx::Rect& passed_in,
                        int64_t display_id,
                        const gfx::Rect& bounds,
@@ -67,7 +67,7 @@ class WindowSizerChromeOSTest : public ChromeAshTestBase {
     WindowSizer::GetBrowserWindowBoundsAndShowState(
         std::move(state_provider), passed_in, browser, out_bounds, &ignored);
   }
-  void GetWindowBounds(const Browser* browser,
+  void GetWindowBounds(Browser* browser,
                        const gfx::Rect& passed_in,
                        int64_t display_id,
                        gfx::Rect* out_bounds = nullptr) {
@@ -83,7 +83,7 @@ class WindowSizerChromeOSTest : public ChromeAshTestBase {
       ui::mojom::WindowShowState show_state_persisted,
       ui::mojom::WindowShowState show_state_last,
       Source source,
-      const Browser* browser,
+      Browser* browser,
       const gfx::Rect& passed_in,
       gfx::Rect* out_bounds,
       ui::mojom::WindowShowState* out_show_state) {
@@ -106,7 +106,7 @@ class WindowSizerChromeOSTest : public ChromeAshTestBase {
       ui::mojom::WindowShowState show_state_persisted,
       ui::mojom::WindowShowState show_state_last,
       Source source,
-      const Browser* browser,
+      Browser* browser,
       const gfx::Rect& bounds,
       const gfx::Rect& work_area) {
     ui::mojom::WindowShowState out_show_state =
@@ -400,7 +400,7 @@ TEST_F(WindowSizerChromeOSTest, DISABLED_PlaceNewWindows) {
   std::unique_ptr<Browser> browser2 = (CreateTestBrowser(
       CreateTestWindowInShell({.bounds = {16, 32, 640, 320}, .window_id = 0}),
       &params2));
-  BrowserWindow* browser_window = browser2->window();
+  ui::BaseWindow* browser_window = browser2->GetWindow();
 
   // Creating a popup to make sure it does not interfere with the positioning.
   Browser::CreateParams params_popup(Browser::TYPE_POPUP, &profile_, true);
@@ -534,7 +534,7 @@ TEST_F(WindowSizerChromeOSTest, DISABLED_PlaceNewWindowsOnMultipleDisplays) {
   std::unique_ptr<Browser> browser(CreateTestBrowser(
       CreateTestWindowInShell({.bounds = {10, 10, 200, 200}, .window_id = 0}),
       &params));
-  BrowserWindow* browser_window = browser->window();
+  ui::BaseWindow* browser_window = browser->GetWindow();
   gfx::NativeWindow native_window = browser_window->GetNativeWindow();
   browser_window->Show();
   EXPECT_EQ(native_window->GetRootWindow(),
@@ -544,7 +544,7 @@ TEST_F(WindowSizerChromeOSTest, DISABLED_PlaceNewWindowsOnMultipleDisplays) {
   std::unique_ptr<Browser> another_browser(CreateTestBrowser(
       CreateTestWindowInShell({.bounds = {400, 10, 300, 300}, .window_id = 1}),
       &another_params));
-  BrowserWindow* another_browser_window = another_browser->window();
+  ui::BaseWindow* another_browser_window = another_browser->GetWindow();
   gfx::NativeWindow another_native_window =
       another_browser_window->GetNativeWindow();
   another_browser_window->Show();

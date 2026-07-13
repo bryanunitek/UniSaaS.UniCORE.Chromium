@@ -8,7 +8,10 @@
 #include <optional>
 #include <string_view>
 
+#include "base/containers/span.h"
+#include "base/strings/string_util.h"
 #include "base/strings/string_util_impl_helpers.h"
+#include "base/strings/trim_string_internal.h"
 
 namespace base {
 
@@ -52,7 +55,8 @@ bool TrimString(std::wstring_view input,
 std::wstring_view TrimString(std::wstring_view input,
                              std::wstring_view trim_chars,
                              TrimPositions positions) {
-  return internal::TrimStringPieceT(input, trim_chars, positions);
+  return internal::TrimStringPieceT(input, trim_chars, positions & TRIM_LEADING,
+                                    positions & TRIM_TRAILING);
 }
 
 TrimPositions TrimWhitespace(std::wstring_view input,
@@ -65,7 +69,8 @@ TrimPositions TrimWhitespace(std::wstring_view input,
 std::wstring_view TrimWhitespace(std::wstring_view input,
                                  TrimPositions positions) {
   return internal::TrimStringPieceT(input, std::wstring_view(kWhitespaceWide),
-                                    positions);
+                                    positions & TRIM_LEADING,
+                                    positions & TRIM_TRAILING);
 }
 
 std::wstring CollapseWhitespace(std::wstring_view text,
@@ -123,21 +128,6 @@ void ReplaceSubstringsAfterOffset(std::wstring* str,
 
 wchar_t* WriteInto(std::wstring* str, size_t length_with_null) {
   return internal::WriteIntoT(str, length_with_null);
-}
-
-std::wstring JoinString(span<const std::wstring> parts,
-                        std::wstring_view separator) {
-  return internal::JoinStringT(parts, separator);
-}
-
-std::wstring JoinString(span<const std::wstring_view> parts,
-                        std::wstring_view separator) {
-  return internal::JoinStringT(parts, separator);
-}
-
-std::wstring JoinString(std::initializer_list<std::wstring_view> parts,
-                        std::wstring_view separator) {
-  return internal::JoinStringT(parts, separator);
 }
 
 std::wstring ReplaceStringPlaceholders(std::wstring_view format_string,

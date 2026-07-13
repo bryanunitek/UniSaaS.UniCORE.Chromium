@@ -398,6 +398,12 @@ GURL BinaryUploadRequest::GetUrlWithParams() const {
     case enterprise_connectors::FILE_TRANSFER:
       connector = "OnFileTransfer";
       break;
+    case enterprise_connectors::DATA_COPIED:
+      connector = "OnTextCopied";
+      break;
+    case enterprise_connectors::NETWORK_REQUEST:
+      connector = "OnNetworkRequest";
+      break;
     case enterprise_connectors::ANALYSIS_CONNECTOR_UNSPECIFIED:
       break;
   }

@@ -233,7 +233,6 @@ export class ActionChipsElement extends CrLitElement {
 
   private onActionChipClick_(chip: ActionChip) {
     recordClick(chip.suggestTemplateInfo.typeIcon);
-    this.handler.notifyActionChipClicked();
     const contextFiles: TabUpload[] = [];
     const tab = chip.tab;
     if (tab) {
@@ -250,6 +249,7 @@ export class ActionChipsElement extends CrLitElement {
       text: chip.suggestion,
       files: contextFiles,
       mode: chip.suggestTemplateInfo.preselectedTool,
+      suggestInventory: chip.suggestTemplateInfo.preferredInventory,
     });
   }
 

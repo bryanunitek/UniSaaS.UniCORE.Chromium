@@ -11,7 +11,6 @@
 #include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/webui/theme_colors_source_manager.h"
 #include "chrome/browser/ui/webui/theme_colors_source_manager_factory.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
@@ -105,6 +104,9 @@ class BrowserControlsDelegate
   ~BrowserControlsDelegate() override = default;
 
   void PermitLaunchUrl() override {}
+  base::TimeTicks GetNavigationStartTicks() const override {
+    return base::TimeTicks::Now();
+  }
 };
 
 class MockToolbarUIDelegate
@@ -124,6 +126,20 @@ class MockToolbarUIDelegate
               (::toolbar_ui_api::mojom::ContentSettingImageType type,
                ::toolbar_ui_api::mojom::ToolbarUIService::
                    ShowContentSettingsBubbleCallback callback),
+              (override));
+  MOCK_METHOD(
+      void,
+      OnPageActionClick,
+      (::toolbar_ui_api::mojom::PageActionId action_id,
+       ::toolbar_ui_api::mojom::PageActionTrigger trigger,
+       ::toolbar_ui_api::mojom::ToolbarUIService::OnPageActionClickCallback
+           callback),
+      (override));
+  MOCK_METHOD(void,
+              OnPageActionChipShowingChanged,
+              (::toolbar_ui_api::mojom::PageActionId action_id,
+               ::toolbar_ui_api::mojom::ToolbarUIService::
+                   OnPageActionChipShowingChangedCallback callback),
               (override));
   MOCK_METHOD(void, OnPageInitialized, (), (override));
   MOCK_METHOD(void,
@@ -167,6 +183,19 @@ class MockToolbarUIDelegate
               (toolbar_ui_api::mojom::OmniboxActionPtr action_ptr),
               (override));
   MOCK_METHOD(void, ShowAvatarMenu, ());
+  MOCK_METHOD(void, SetAvatarButtonHovered, (bool));
+  MOCK_METHOD(void, SetAvatarButtonFocused, (bool));
+  MOCK_METHOD(void, SetAvatarButtonIPHPromoShowing, (bool));
+  MOCK_METHOD(void, OnAppMenuFocusChanged, (bool), (override));
+  MOCK_METHOD(void,
+              ExecuteExtensionAction,
+              (const std::string& extension_id),
+              (override));
+  MOCK_METHOD(void,
+              ShowExtensionContextMenu,
+              (const std::string& extension_id,
+               ui::mojom::MenuSourceType source),
+              (override));
 };
 
 // Test fixture for WebUIToolbarUI. These tests test the connectivity between
@@ -181,10 +210,7 @@ class WebUIToolbarUIBrowserTest : public InProcessBrowserTest,
     feature_list_.InitWithFeatures(
         {features::kInitialWebUI, features::kWebUIReloadButton,
          features::kWebUIInProcessResourceLoadingV2,
-         features::kWebUIPinnedToolbarActions,
-         // WebUIPinnedToolbarActions does not support toolbar tab search
-         // button. Requires tab strip tab search button.
-         tabs::kHorizontalTabStripComboButton},
+         features::kWebUIPinnedToolbarActions},
         {});
   }
   ~WebUIToolbarUIBrowserTest() override = default;

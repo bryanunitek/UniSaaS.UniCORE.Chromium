@@ -9,6 +9,7 @@
 #include "base/values.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/glic/host/glic_features.mojom.h"
+#include "chrome/browser/glic/host/glic_skills_manager.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -147,8 +148,11 @@ SkillsInteractiveUiTestBase::UpdateContextualSkillPreviews(
     std::vector<glic::mojom::SkillPreviewPtr> contextual_skill_previews) {
   return Steps(Do([this, contextual_skill_previews =
                              std::move(contextual_skill_previews)]() mutable {
-    GetGlicInstanceImpl()->host().NotifyContextualSkillsChanged(
-        std::move(contextual_skill_previews));
+    GetGlicInstanceImpl()
+        ->host()
+        .instance_delegate()
+        .skills_manager()
+        .NotifyContextualSkillsChanged(std::move(contextual_skill_previews));
   }));
 }
 
@@ -205,10 +209,10 @@ SkillsInteractiveUiTestBase::VerifyInvocationInWebUI(
     const std::string& expected_prompt) {
   return Steps(
       Log("Verifying Glic Panel Opened via Toast Interaction"),
-      WaitForShow(glic::test::kGlicHostElementId),
+      WaitForShow(glic::kGlicHostElementId),
 
       WaitForJsResult(
-          glic::test::kGlicContentsElementId,
+          glic::kGlicContentsElementId,
           base::StringPrintf(
               "() => {"
               "  const input = document.getElementById('skillPromptInput');"
@@ -277,7 +281,7 @@ SkillsInteractiveUiTestBase::WaitForSkillPreviewShown(
                         std::string(skill_name) + "\"]"};
   state_change.test_function = "el => el.checkVisibility()";
   state_change.event = kSkillPreviewShown;
-  return WaitForStateChange(glic::test::kGlicContentsElementId, state_change);
+  return WaitForStateChange(glic::kGlicContentsElementId, state_change);
 }
 
 ui::test::InteractiveTestApi::MultiStep
@@ -304,12 +308,12 @@ SkillsInteractiveUiTestBase::WaitForSkillPreviewOrder(
       "}",
       expected_json.c_str());
   state_change.event = kSkillPreviewOrderMatched;
-  return WaitForStateChange(glic::test::kGlicContentsElementId, state_change);
+  return WaitForStateChange(glic::kGlicContentsElementId, state_change);
 }
 
 ui::test::InteractiveTestApi::StepBuilder
 SkillsInteractiveUiTestBase::ClickOnGlicClientElement(DeepQuery where) {
-  return ExecuteJsAt(glic::test::kGlicContentsElementId, where, kClickFn);
+  return ExecuteJsAt(glic::kGlicContentsElementId, where, kClickFn);
 }
 
 ui::test::InteractiveTestApi::MultiStep

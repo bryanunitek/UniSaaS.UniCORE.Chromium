@@ -7,7 +7,6 @@
 #include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/profiles/profile.h"
@@ -68,7 +67,7 @@ void IntentChipButton::Update() {
       AnimateCollapse(kAnimationDuration);
     }
   }
-  if (browser_->window() && was_visible && !is_visible) {
+  if (browser_->GetWindow() && was_visible && !is_visible) {
     IntentPickerBubbleView::CloseCurrentBubble();
   }
 }

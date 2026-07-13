@@ -89,8 +89,16 @@ std::string Base64UrlEncode(std::string_view input) {
   return output;
 }
 
-bool ValidateFeatureUsage(const PasskeyRequestParams& request_params) {
+// Validates whether the given passkey request is permitted to proceed.
+bool ValidateFeatureUsage(const PasskeyRequestParams& request_params,
+                          bool has_user_interaction) {
   if (request_params.Type() == PasskeyRequestParams::RequestType::kModal) {
+    // Modal passkey registration or assertion is only allowed if it originates
+    // from a user gesture.
+    if (!has_user_interaction) {
+      return false;
+    }
+
     return base::FeatureList::IsEnabled(kIOSPasskeyModalLoginWithShim);
   } else {
     return base::FeatureList::IsEnabled(kIOSPasskeyConditionalLoginWithShim);
@@ -254,7 +262,7 @@ void PasskeyJavaScriptFeature::ScriptMessageReceived(
   // event: (string) Describes a type of event.
   //
   // For some events there are more expected arguments described below.
-  base::Value* body = message.body();
+  base::Value* body = message.legacy_body();
   if (!body || !body->is_dict()) {
     return;
   }
@@ -317,15 +325,8 @@ void PasskeyJavaScriptFeature::ScriptMessageReceived(
       return;
     }
 
-    if (!ValidateFeatureUsage(*registration_request_params)) {
-      // TODO(crbug.com/460485333): Log the error.
-      passkey_tab_helper->DeferToRenderer(std::move(*request_info),
-                                          registration_request_params->Type());
-      return;
-    }
-
-    // Passkey creation is only allowed if it originates from a user gesture.
-    if (!message.is_user_interacting()) {
+    if (!ValidateFeatureUsage(*registration_request_params,
+                              message.is_user_interacting())) {
       // TODO(crbug.com/460485333): Log the error.
       passkey_tab_helper->DeferToRenderer(std::move(*request_info),
                                           registration_request_params->Type());
@@ -349,7 +350,8 @@ void PasskeyJavaScriptFeature::ScriptMessageReceived(
       return;
     }
 
-    if (!ValidateFeatureUsage(*assertion_request_params)) {
+    if (!ValidateFeatureUsage(*assertion_request_params,
+                              message.is_user_interacting())) {
       // TODO(crbug.com/460485333): Log the error.
       passkey_tab_helper->DeferToRenderer(std::move(*request_info),
                                           assertion_request_params->Type());

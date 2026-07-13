@@ -28,7 +28,7 @@ import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AutocompleteResult, FileAttachment, PageCallbackRouter as SearchboxPageCallbackRouter, PageHandlerRemote as SearchboxPageHandlerRemote, SearchContext, TabAttachment, TabInfo} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 import type {UnguessableToken} from '//resources/mojo/mojo/public/mojom/base/unguessable_token.mojom-webui.js';
 
-import {ComposeboxFile, GlifAnimationState, mapUploadErrorToProcessFilesError, ProcessFilesError, recordBoolean, recordContextAdditionMethod, recordUserAction, TabUploadOrigin} from './common.js';
+import {ComposeboxFile, getLoadTimeBoolean, GlifAnimationState, mapUploadErrorToProcessFilesError, ProcessFilesError, recordBoolean, recordContextAdditionMethod, recordUserAction, TabUploadOrigin} from './common.js';
 import type {TabUpload} from './common.js';
 import {getCss} from './composebox.css.js';
 import {getHtml} from './composebox.html.js';
@@ -87,7 +87,6 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
   static override get properties() {
     return {
       showLensButton: {type: Boolean},
-      suggestionActivityEnabled: {type: Boolean},
       lensButtonTriggersOverlay: {type: Boolean},
       isCollapsible: {
         reflect: true,
@@ -124,14 +123,6 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
         reflect: true,
       },
       isFollowupQuery: {type: Boolean},
-      energyEffectEnabled: {
-        type: Boolean,
-        reflect: true,
-      },
-      energyEffectAnimationEnabled: {
-        type: Boolean,
-        reflect: true,
-      },
       isZeroState: {
         type: Boolean,
         reflect: true,
@@ -142,7 +133,6 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
       glifAnimationState: {type: String, reflect: true},
       isSidePanel: {type: Boolean},
       inputPlaceholderOverride: {type: String},
-      contextManagementInComposeboxEnabled_: {type: Boolean},
       // Must be property so can pass it down to children.
       searchboxCallbackRouter_: {type: Object},
       applyContextButtonBackground: {
@@ -152,9 +142,7 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
     };
   }
 
-  accessor energyEffectEnabled: boolean = false;
   accessor isSidePanel: boolean = false;
-  accessor energyEffectAnimationEnabled: boolean = false;
   accessor isZeroState: boolean = false;
   accessor glifAnimationState: GlifAnimationState =
       GlifAnimationState.INELIGIBLE;
@@ -162,7 +150,6 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
   accessor isFollowupQuery: boolean = false;
   accessor enableFileHint: boolean = false;
   accessor inputPlaceholderOverride: string = '';
-  accessor suggestionActivityEnabled: boolean = true;
   accessor disableComposeboxAnimation: boolean = false;
   accessor observeResize: boolean = true;
   accessor enableCarouselScrolling: boolean = false;
@@ -189,12 +176,14 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
   // autochips being added, not fully processed chips.
   protected pendingAutomaticActiveTabUrl_: string = '';
 
-  protected accessor contextManagementInComposeboxEnabled_: boolean =
-      loadTimeData.getBoolean('contextManagementInComposeboxEnabled');
-
   // Retains the latest version of the pending automatic active tab's title.
   protected pendingAutomaticActiveTabTitle_: string = '';
   protected dragAndDropHandler_: DragAndDropHandler;
+
+  private get webUIOmniboxAskGAboutThisPageEnabled_(): boolean {
+    return loadTimeData.valueExists('webUIOmniboxAskGAboutThisPageEnabled') &&
+        loadTimeData.getBoolean('webUIOmniboxAskGAboutThisPageEnabled');
+  }
   private automaticActiveTab_: ComposeboxFile|null = null;
   private pageHandler_: PageHandlerRemote;
   private searchboxHandler_: SearchboxPageHandlerRemote;
@@ -247,6 +236,18 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
         null;
   }
 
+  // TODO(crbug.com/497887993): Temporary override to maintain NTP compatibility
+  // when `useNtpComposeboxFork` is disabled. Remove once `ComposeboxElement`
+  // is deleted.
+  override get keepMenuOpenOnTabSelect(): boolean {
+    return this.composeboxSource === 'NewTabPage' &&
+        getLoadTimeBoolean('keepMenuOpenOnTabSelectForRealbox', false);
+  }
+
+  override getLensButtonElement(): HTMLElement|null {
+    return this.shadowRoot?.querySelector('#lensIcon') || null;
+  }
+
   constructor() {
     super();
     this.pageHandler_ = ComposeboxProxyImpl.getInstance().handler;
@@ -261,7 +262,7 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
     return this.$.composeboxInput;
   }
 
-  override async connectedCallback() {
+  override connectedCallback() {
     super.connectedCallback();
 
     // Set the initial expanded state based on the inputted property.
@@ -276,15 +277,6 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
 
     this.focusInput();
 
-    // TODO(crbug.com/497887993): Move to contextual tasks composebox when the
-    // lens composebox is removed.
-    if (this.smartTabSharingVisible) {
-      const {active} = await this.pageHandler_.getSmartTabSharingActive();
-      this.smartTabSharingActive = active;
-      if (active) {
-        this.clearContextForSmartTabSharingActive_();
-      }
-    }
     this.syncResizeObservers_();
   }
 
@@ -328,6 +320,10 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
 
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
+    if (changedProperties.has('smartTabSharingActive') &&
+        this.smartTabSharingActive) {
+      this.clearContextForSmartTabSharingActive_();
+    }
     if (changedProperties.has('entrypointName') ||
         changedProperties.has('searchboxLayoutMode')) {
       this.isOmniboxInCompactMode_ = this.entrypointName === 'Omnibox' &&
@@ -532,7 +528,7 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
   }
 
   // TODO(crbug.com/486707842): Move this to contextual tasks composebox.
-  private updateAutoSuggestedTabContext_(tab: TabInfo|null) {
+  private async updateAutoSuggestedTabContext_(tab: TabInfo|null) {
     if (this.smartTabSharingActive) {
       if (this.automaticActiveTab_) {
         this.deleteFile(this.automaticActiveTab_.uuid);
@@ -540,9 +536,18 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
       }
       return;
     }
+    // We should delete the automatic active tab if it is different from the
+    // current tab when webUIOmniboxAskGAboutThisPageEnabled_ is true. Make sure
+    // to keep the existing tab if we are returning from another tab.
+    const hasTabMismatch = !!this.automaticActiveTab_ && !!tab &&
+        this.automaticActiveTab_.url !== tab.url;
+    // TODO(crbug.com/486707842): Move `this.isSidePanel` check to the
+    // Contextual Tasks embedder.
+    const shouldDeleteAutomaticActiveTab =
+        (this.webUIOmniboxAskGAboutThisPageEnabled_ || this.isSidePanel) ?
+        hasTabMismatch :
+        this.automaticActiveTab_ && (!tab || hasTabMismatch);
 
-    const shouldDeleteAutomaticActiveTab = this.automaticActiveTab_ &&
-        (!tab || this.automaticActiveTab_.url !== tab.url);
     if (shouldDeleteAutomaticActiveTab) {
       this.deleteFile(this.automaticActiveTab_!.uuid);
       this.automaticActiveTab_ = null;
@@ -550,7 +555,7 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
       // TODO(crbug.com/482150500): Correctly query for url based suggestions
       // when delayed tab is present. Right now, while url-based suggestions are
       // not set-up, clear the autocomplete matches.
-      if (!tab) {
+      if (!this.webUIOmniboxAskGAboutThisPageEnabled_ && !tab) {
         this.queryAutocomplete(/* clearMatches= */ true);
       }
       return;
@@ -593,19 +598,24 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
       // Do not reset above pending states in this async callback since
       // later requests make any older async callback updates irrelevant.
       // Add the `TabInfo` as `ComposeboxFile` in carousel.
-      this.addTabContextHandleCallback(
+      const attachment = await this.addTabContextHandleCallback(
           {
             tabId: tab.tabId,
             title: tab.title,
             url: tab.url,
-            delayUpload: /*delay_upload=*/ true,
+            // Immediate upload on load is desired for side panel under the
+            // feature flag. This is so the list of suggestions in zero state
+            // can be guaranteed instead of relying on url only.
+            delayUpload: /*delay_upload=*/
+                !this.webUIOmniboxAskGAboutThisPageEnabled_ &&
+                !this.isSidePanel,
             origin: TabUploadOrigin.AUTO_ACTIVE,
           } as TabUpload,
           /*replaceAutoActiveTabToken=*/ true);
 
-      // Only query autocomplete if we're replacing the current chip or if we're
-      // adding a new chip.
-      this.clearAutocompleteMatches();
+      if (!this.webUIOmniboxAskGAboutThisPageEnabled_ || !attachment) {
+        this.clearAutocompleteMatches();
+      }
     }
   }
 
@@ -765,6 +775,8 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
   }
 
   override submitCleanup() {
+    // TODO: crbug.com/486707842 - Move to the Contextual Tasks embedder
+    this.cacheSubmittedTabs();
     if (this.isCollapsible) {
       this.clearAllInputs(/* querySubmitted= */ true,
                           /* shouldBlockAutoSuggestedTabs= */ false);
@@ -776,8 +788,10 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
   // TODO(crbug.com/486706573): Refactor this function and move the common logic
   // to the mixin class. Move embedder specific logic to the embedder class.
   override onAutocompleteResultChanged(result: AutocompleteResult) {
-    if (this.lastQueriedInput === null ||
-        this.lastQueriedInput.trimStart() !== result.input) {
+    if (this.submitting) {
+      return;
+    }
+    if (result.queryId !== this.activeQueryId) {
       return;
     }
 
@@ -863,6 +877,7 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
     this.automaticActiveTab_ = null;
     this.pendingAutomaticActiveTabUrl_ = '';
     this.pendingAutomaticActiveTabTitle_ = '';
+    this.$.composeboxInput.resetHeight();
     super.clearAllInputs(querySubmitted, shouldBlockAutoSuggestedTabs);
   }
 
@@ -888,8 +903,11 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
     const composeboxFile = ComposeboxFile.createFromFile(
         fileAttachment.uuid as unknown as UnguessableToken,
         {name: fileAttachment.name, type: fileAttachment.mimeType},
-        pendingStatus ?? ContextUploadStatus.kNotUploaded,
-        {dataUrl: fileAttachment.imageDataUrl ?? null, supportsUnimodal: true});
+        pendingStatus ?? ContextUploadStatus.kNotUploaded, {
+          dataUrl: fileAttachment.imageDataUrl ?? null,
+          iconUrl: fileAttachment.iconUrl ?? null,
+          supportsUnimodal: true,
+        });
     this.onFileContextAdded(composeboxFile);
   }
 
@@ -904,10 +922,6 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
     } as TabUpload);
   }
 
-  addFileContextForTesting(file: ComposeboxFile) {
-    this.onFileContextAdded(file);
-  }
-
   // TODO(crbug.com/486707842): Move this to contextual tasks composebox.
   setAutomaticActiveTabForTesting(file: ComposeboxFile) {
     this.automaticActiveTab_ = file;
@@ -918,13 +932,6 @@ export class ComposeboxElement extends ComposeboxEmbedderMixin
     this.updateAutoSuggestedTabContext_(tab);
   }
 
-  // TODO: crbug.com/486707842 - Move to the Contextual Tasks embedder
-  override onSmartTabSharingActiveChanged(e: CustomEvent<{active: boolean}>) {
-    super.onSmartTabSharingActiveChanged(e);
-    if (e.detail.active) {
-      this.clearContextForSmartTabSharingActive_();
-    }
-  }
 
   private clearContextForSmartTabSharingActive_() {
     this.clearManualTabs_();

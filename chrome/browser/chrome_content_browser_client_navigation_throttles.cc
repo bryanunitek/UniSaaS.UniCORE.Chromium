@@ -89,8 +89,7 @@
 #endif  // BUILDFLAG(DFMIFY_DEV_UI)
 
 #else  // BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/apps/link_capturing/link_capturing_navigation_throttle.h"
-#include "chrome/browser/apps/link_capturing/web_app_link_capturing_delegate.h"
+#include "chrome/browser/devtools/devtools_navigation_throttle.h"
 #include "chrome/browser/page_info/web_view_side_panel_throttle.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/lens/lens_overlay_side_panel_navigation_throttle.h"
@@ -107,7 +106,6 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/apps/app_service/app_install/app_install_navigation_throttle.h"
 #include "chrome/browser/apps/intent_helper/chromeos_disabled_apps_throttle.h"
-#include "chrome/browser/apps/link_capturing/chromeos_link_capturing_delegate.h"
 #include "chrome/browser/apps/link_capturing/chromeos_reimpl_navigation_capturing_throttle.h"
 #include "chrome/browser/ash/boca/on_task/on_task_locked_session_navigation_throttle.h"
 #include "chrome/browser/ash/login/signin/merge_session_navigation_throttle.h"
@@ -349,28 +347,10 @@ void CreateAndAddChromeThrottlesForNavigation(
       Profile::FromBrowserContext(handle.GetWebContents()->GetBrowserContext());
 
 #if !BUILDFLAG(IS_ANDROID)
-  std::unique_ptr<apps::LinkCapturingNavigationThrottle::Delegate>
-      link_capturing_delegate;
-
-#if BUILDFLAG(IS_CHROMEOS)
-  link_capturing_delegate =
-      std::make_unique<apps::ChromeOsLinkCapturingDelegate>();
-  bool url_to_apps_throttle_created =
-#else   // BUILDFLAG(IS_CHROMEOS)
-  link_capturing_delegate =
-      std::make_unique<web_app::WebAppLinkCapturingDelegate>();
-#endif  // BUILDFLAG(IS_CHROMEOS)
-      apps::LinkCapturingNavigationThrottle::MaybeCreateAndAdd(
-          registry, std::move(link_capturing_delegate));
 #if BUILDFLAG(IS_CHROMEOS)
   // TODO(crbug.com/366547977): This currently does nothing and allows all
   // navigations to proceed if v2 is enabled on ChromeOS. Implement.
-  bool chromeos_reimpl_navigation_throttle_created =
-      apps::ChromeOsReimplNavigationCapturingThrottle::MaybeCreateAndAdd(
-          registry);
-  // Verify the v1 and reimpl throttles have not been created at the same time.
-  CHECK(!chromeos_reimpl_navigation_throttle_created ||
-        !url_to_apps_throttle_created);
+  apps::ChromeOsReimplNavigationCapturingThrottle::MaybeCreateAndAdd(registry);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   web_app::NavigationCapturingRedirectionThrottle::MaybeCreateAndAdd(registry);
@@ -621,7 +601,7 @@ void CreateAndAddChromeThrottlesForNavigation(
 
 #if !BUILDFLAG(IS_ANDROID)
   web_app::IsolatedWebAppThrottle::MaybeCreateAndAdd(registry);
-
+  DevToolsNavigationThrottle::MaybeCreateAndAdd(registry);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   actor::ActorNavigationThrottle::MaybeCreateAndAdd(registry);

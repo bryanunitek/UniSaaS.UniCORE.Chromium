@@ -42,7 +42,6 @@ using chrome_test_util::ContextBarLeadingButtonWithLabel;
 using chrome_test_util::KindOfTest;
 using chrome_test_util::ScrollToTop;
 using chrome_test_util::SearchBar;
-using chrome_test_util::TabGridEditButton;
 using chrome_test_util::TappableBookmarkNodeWithLabel;
 
 BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
@@ -1550,7 +1549,7 @@ BookmarkStorageType kindOfTestToStorageType(KindOfTest kind) {
   [[EarlGrey
       selectElementWithMatcher:grey_accessibilityID(
                                    kBookmarksFolderPickerSearchScrimIdentifier)]
-      assertWithMatcher:grey_sufficientlyVisible()];
+      assertWithMatcher:grey_minimumVisiblePercent(0.5)];
 
   // Search for "Folder 2" and check the others disappeared.
   [[EarlGrey selectElementWithMatcher:SearchBar()]

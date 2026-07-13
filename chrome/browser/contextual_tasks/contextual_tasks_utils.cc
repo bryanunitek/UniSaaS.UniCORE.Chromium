@@ -22,6 +22,8 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_actions.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #endif
 #include "chrome/common/webui_url_constants.h"
@@ -59,6 +61,16 @@ CreateQueryControllerConfigParams() {
   config_params->send_lns_surface = true;
   config_params->enable_viewport_images = true;
   config_params->attach_page_title_and_url_to_suggest_requests = false;
+#if !BUILDFLAG(IS_ANDROID)
+  // For desktop, prioritize suggestions for the first attached document when
+  // the feature to open the cobrowse side panel with visual selection is
+  // enabled. This is needed to be able to see zero state suggestions in the
+  // cobrowse side panel.
+  if (omnibox::kAskGCoBrowseWithVisualSelection.Get()) {
+    config_params->prioritize_suggestions_for_the_first_attached_document =
+        true;
+  }
+#endif
   return config_params;
 }
 
@@ -254,6 +266,14 @@ bool ShouldShowSidePanel() {
 #endif
 }
 
+bool IsAndroidMobileFormFactor() {
+#if BUILDFLAG(IS_ANDROID)
+  return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_PHONE;
+#else
+  return false;
+#endif
+}
+
 GURL GetContextualTasksFunctionalURL(content::WebContents* web_contents) {
   auto* ui = GetWebUiInterface(web_contents);
   return ui ? ui->GetInnerFrameUrl() : GURL();
@@ -290,5 +310,38 @@ bool GetEffectivePinState(Profile* profile) {
 #endif
   return false;
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+void UpdatePinButtonVisibilityState(BrowserWindowInterface* browser_window,
+                                    bool eligible) {
+  if (!browser_window || !browser_window->GetActions()) {
+    return;
+  }
+
+  actions::ActionItem* const scope_action =
+      browser_window->GetActions()->root_action_item();
+  if (!scope_action) {
+    return;
+  }
+
+  actions::ActionItem* const action_item =
+      actions::ActionManager::Get().FindAction(
+          kActionSidePanelShowContextualTasks, scope_action);
+
+  if (action_item) {
+      // If it's not eligible, actively pull it out of the pinned model space.
+      // Do not pull it out if the user is currently in an incognito window, as
+      // this would unpin it for the parent profile.
+      if (!browser_window->GetProfile()->IsOffTheRecord()) {
+        if (auto* model =
+                PinnedToolbarActionsModel::Get(browser_window->GetProfile())) {
+          if (model->Contains(kActionSidePanelShowContextualTasks)) {
+            action_item->SetVisible(eligible);
+          }
+        }
+      }
+  }
+}
+#endif
 
 }  // namespace contextual_tasks

@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/containers/to_vector.h"
 #include "base/files/file_util.h"
@@ -131,14 +132,6 @@ using trace_analyzer::TraceAnalyzer;
 using trace_analyzer::TraceEventVector;
 
 namespace {
-
-bool IsWebUISource(const ukm::UkmSource* source) {
-  if (!source) {
-    return true;
-  }
-  return source->url().SchemeIs(content::kChromeUIScheme) ||
-         source->url().SchemeIs(content::kChromeUIUntrustedScheme);
-}
 
 constexpr char kCacheablePathPrefix[] = "/cacheable";
 
@@ -261,24 +254,14 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
 
   int64_t GetUKMPageLoadMetric(std::string metric_name) {
     std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
-        test_ukm_recorder_->GetMergedEntriesByName(
-            ukm::builders::PageLoad::kEntryName);
+        test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
 
-    for (const auto& kv : merged_entries) {
-      const ukm::UkmSource* source =
-          test_ukm_recorder_->GetSourceForSourceId(kv.first);
-      if (IsWebUISource(source)) {
-        continue;
-      }
-      auto* metric_value =
-          ukm::TestUkmRecorder::GetEntryMetric(kv.second.get(), metric_name);
-      if (!metric_value) {
-        continue;
-      }
-      return *metric_value;
-    }
-    ADD_FAILURE() << "Could not find PageLoad UKM entry for " << metric_name;
-    return 0;
+    EXPECT_EQ(1ul, merged_entries.size());
+    const auto& kv = merged_entries.begin();
+    const int64_t* recorded =
+        ukm::TestUkmRecorder::GetEntryMetric(kv->second.get(), metric_name);
+    EXPECT_TRUE(recorded != nullptr);
+    return (*recorded);
   }
 
   void MakeComponentFullscreen(const std::string& id) {
@@ -352,7 +335,7 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
   void TriggerNoStatePrefetch(const GURL& url) {
     prerender::NoStatePrefetchManager* no_state_prefetch_manager =
         prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
-            browser()->profile());
+            browser()->GetProfile());
     ASSERT_TRUE(no_state_prefetch_manager);
 
     prerender::test_utils::TestNoStatePrefetchContentsFactory*
@@ -380,14 +363,7 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
   void VerifyBasicPageLoadUkms(const GURL& expected_source_url) {
     const auto& entries =
         test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-    int checked_entries = 0;
     for (const auto& kv : entries) {
-      const ukm::UkmSource* source =
-          test_ukm_recorder_->GetSourceForSourceId(kv.first);
-      if (IsWebUISource(source)) {
-        continue;
-      }
-      checked_entries++;
       test_ukm_recorder_->ExpectEntrySourceHasUrl(kv.second.get(),
                                                   expected_source_url);
       EXPECT_TRUE(test_ukm_recorder_->EntryHasMetric(
@@ -426,7 +402,6 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
       EXPECT_TRUE(test_ukm_recorder_->EntryHasMetric(
           kv.second.get(), PageLoad::kSiteEngagementScoreName));
     }
-    EXPECT_EQ(1, checked_entries);
   }
 
   void VerifyNavigationMetrics(std::vector<GURL> expected_source_urls) {
@@ -491,11 +466,6 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
         NavigationTiming::kEntryName);
     int i = 0;
     for (const auto& kv : entries) {
-      const ukm::UkmSource* source =
-          test_ukm_recorder_->GetSourceForSourceId(kv.first);
-      if (IsWebUISource(source)) {
-        continue;
-      }
       test_ukm_recorder_->ExpectEntrySourceHasUrl(kv.second.get(),
                                                   expected_source_urls[i++]);
 
@@ -505,7 +475,6 @@ class PageLoadMetricsBrowserTest : public InProcessBrowserTest {
             test_ukm_recorder_->EntryHasMetric(kv.second.get(), metric));
       }
     }
-    ASSERT_EQ(expected_source_urls.size(), static_cast<size_t>(i));
   }
 
   content::WebContents* web_contents() const {
@@ -923,25 +892,13 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsBrowserTestWithInitialWebUIParam,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   NavigateToUntrackedUrl();
 
-  auto entries =
-      test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
+  {
+    auto entries =
+        test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
+    EXPECT_EQ(1u, entries.size());
 
-  // Filter out background WebUI navigations (e.g., NTP, side panels) that may
-  // be triggered when InitialWebUI is enabled, as they pollute the UKM entries
-  // for the primary test navigation.
-  size_t valid_count = 0;
-  for (const auto& kv : entries) {
-    if (!IsWebUISource(test_ukm_recorder_->GetSourceForSourceId(kv.first))) {
-      valid_count++;
-    }
-  }
-  EXPECT_EQ(1u, valid_count);
-
-  for (const auto& kv : entries) {
-    if (IsWebUISource(test_ukm_recorder_->GetSourceForSourceId(kv.first))) {
-      continue;
-    }
-    EXPECT_FALSE(test_ukm_recorder_->EntryHasMetric(kv.second.get(),
+    const auto& kv = entries.begin();
+    EXPECT_FALSE(test_ukm_recorder_->EntryHasMetric(kv->second.get(),
                                                     PageLoad::kWasCachedName));
   }
 
@@ -958,26 +915,15 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsBrowserTestWithInitialWebUIParam,
   // persisted at the end of the page load lifetime.
   NavigateToUntrackedUrl();
 
-  auto entries_2 =
-      test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
-  valid_count = 0;
-  for (const auto& kv : entries_2) {
-    const ukm::UkmSource* source =
-        test_ukm_recorder_->GetSourceForSourceId(kv.first);
-    if (!IsWebUISource(source)) {
-      valid_count++;
-    }
-  }
-  EXPECT_EQ(1u, valid_count);
+  {
+    auto entries =
+        test_ukm_recorder_->GetMergedEntriesByName(PageLoad::kEntryName);
+    EXPECT_EQ(1u, entries.size());
 
-  size_t cached_count = 0;
-  for (const auto& kv : entries_2) {
-    if (test_ukm_recorder_->EntryHasMetric(kv.second.get(),
-                                           PageLoad::kWasCachedName)) {
-      cached_count++;
-    }
+    const auto& kv = entries.begin();
+    EXPECT_TRUE(test_ukm_recorder_->EntryHasMetric(kv->second.get(),
+                                                   PageLoad::kWasCachedName));
   }
-  EXPECT_EQ(1u, cached_count);
 
   VerifyNavigationMetrics({url});
 }
@@ -1335,7 +1281,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest, IgnoreDownloads) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   content::DownloadTestObserverTerminal downloads_observer(
-      browser()->profile()->GetDownloadManager(),
+      browser()->GetProfile()->GetDownloadManager(),
       1,  // == wait_count (only waiting for "download-test3.gif").
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
 
@@ -1542,7 +1488,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsBrowserTest,
   ASSERT_TRUE(embedded_test_server()->Start());
 
   content::DownloadTestObserverTerminal downloads_observer(
-      browser()->profile()->GetDownloadManager(),
+      browser()->GetProfile()->GetDownloadManager(),
       1,  // == wait_count (only waiting for "download-test1.lib").
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
 
@@ -2479,7 +2425,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsResourceLoadBrowserTest,
       browser(), embedded_test_server()->GetURL(
                      "foo.com", "/cross_site_iframe_factory.html?foo")));
   waiter->Wait();
-  base::ByteCount one_frame_page_size = waiter->current_network_bytes();
+  base::ByteSize one_frame_page_size = waiter->current_network_bytes();
 
   waiter = CreatePageLoadMetricsTestWaiter("waiter");
   waiter->AddPageExpectation(TimingField::kLoadEvent);
@@ -2490,7 +2436,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsResourceLoadBrowserTest,
   // Verify that 7 iframes are fetched, with some amount of tolerance since
   // favicon is fetched only once.
   waiter->AddMinimumNetworkBytesExpectation(
-      7 * (one_frame_page_size - base::ByteCount(100)));
+      7 * (one_frame_page_size - base::ByteSize(100)).AsByteSize());
   waiter->Wait();
 }
 
@@ -2571,7 +2517,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsResourceLoadBrowserTest,
   main_html_response->Send(std::string(1000, ' '));
   main_html_response->Done();
   waiter->AddMinimumCompleteResourcesExpectation(1);
-  waiter->AddMinimumNetworkBytesExpectation(base::ByteCount(1000));
+  waiter->AddMinimumNetworkBytesExpectation(base::ByteSize(1000));
   waiter->Wait();
 
   script_response->WaitForRequest();
@@ -2583,7 +2529,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsResourceLoadBrowserTest,
   script_response->Send(std::string(1000, ' '));
   // Data received but resource not complete
   waiter->AddMinimumCompleteResourcesExpectation(1);
-  waiter->AddMinimumNetworkBytesExpectation(base::ByteCount(2000));
+  waiter->AddMinimumNetworkBytesExpectation(base::ByteSize(2000));
 
   // Network bytes information is sent only when the resource is complete.
   // So we need to call Wait() after finishing `script_response`.
@@ -2598,7 +2544,7 @@ IN_PROC_BROWSER_TEST_F(PageLoadMetricsResourceLoadBrowserTest,
   iframe_response->Send(std::string(2000, ' '));
   iframe_response->Done();
   waiter->AddMinimumCompleteResourcesExpectation(3);
-  waiter->AddMinimumNetworkBytesExpectation(base::ByteCount(4000));
+  waiter->AddMinimumNetworkBytesExpectation(base::ByteSize(4000));
   waiter->Wait();
 }
 
@@ -3455,7 +3401,7 @@ class PageLoadMetricsBrowserTestTerminatedPage
   void AddNewTab() {
     std::unique_ptr<content::WebContents> web_contents_to_add =
         content::WebContents::Create(
-            content::WebContents::CreateParams(browser()->profile()));
+            content::WebContents::CreateParams(browser()->GetProfile()));
 
     web_contents_to_add->GetController().LoadURL(
         embedded_test_server()->GetURL("/title1.html"), content::Referrer(),
@@ -3710,7 +3656,9 @@ IN_PROC_BROWSER_TEST_P(PageLoadMetricsBrowserTestNoRendererCrashedPage,
   destruction_observer.Wait();
   EXPECT_TRUE(web_contents() == contents);
   EXPECT_FALSE(contents->IsCrashed());
-  EXPECT_EQ(GURL(GetParam()), contents->GetLastCommittedURL());
+  // GetWithoutRef() allows chrome://process-internals/ to (sometimes) redirect
+  // to chrome://process-internals/#general. See crbug.com/526654572.
+  EXPECT_EQ(GURL(GetParam()), contents->GetLastCommittedURL().GetWithoutRef());
   EXPECT_FALSE(contents->HasUncommittedNavigationInPrimaryMainFrame());
 
   // Verify page load metric is recorded.
@@ -4289,7 +4237,7 @@ void PageLoadMetricsBackForwardCacheBrowserTest::VerifyPageEndReasons(
   for (const ukm::mojom::UkmEntry* entry :
        test_ukm_recorder_->GetEntriesByName(PageLoad::kEntryName)) {
     auto* source = test_ukm_recorder_->GetSourceForSourceId(entry->source_id);
-    if (!source || source->url() != url) {
+    if (source->url() != url) {
       continue;
     }
     if (test_ukm_recorder_->EntryHasMetric(
@@ -4338,7 +4286,7 @@ int64_t PageLoadMetricsBackForwardCacheBrowserTest::CountForMetricForURL(
   for (const ukm::mojom::UkmEntry* entry :
        test_ukm_recorder_->GetEntriesByName(entry_name)) {
     auto* source = test_ukm_recorder_->GetSourceForSourceId(entry->source_id);
-    if (!source || source->url() != url) {
+    if (source->url() != url) {
       continue;
     }
     if (test_ukm_recorder_->EntryHasMetric(entry, metric_name)) {

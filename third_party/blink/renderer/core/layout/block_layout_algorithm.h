@@ -35,7 +35,11 @@ struct PreviousInflowPosition {
   MarginStrut margin_strut;
   // > 0: Block-end annotation space of the previous line
   // < 0: Block-end annotation overflow of the previous line
+  // This field is used to pass information across line boxes.
   LayoutUnit block_end_annotation_space;
+  // Block-end annotation space of the previous sibling block.
+  // This field is used to pass information across child IFCs.
+  LayoutUnit previous_sibling_block_end_annotation_space;
   bool self_collapsing_child_had_clearance;
 };
 
@@ -162,6 +166,7 @@ class CORE_EXPORT BlockLayoutAlgorithm
 
   MinMaxSizesResult ComputeMinMaxSizes(const MinMaxSizesFloatInput&);
   const LayoutResult* Layout();
+  LayoutUnit ComputeInitialBlockStartAnnotationSpace() const;
 
  private:
   NOINLINE const LayoutResult* HandleNonsuccessfulLayoutResult(
@@ -233,7 +238,8 @@ class CORE_EXPORT BlockLayoutAlgorithm
       bool is_new_fc,
       const std::optional<LayoutUnit> bfc_block_offset = std::nullopt,
       bool has_clearance_past_adjoining_floats = false,
-      LayoutUnit block_start_annotation_space = LayoutUnit());
+      LayoutUnit block_start_annotation_space = LayoutUnit(),
+      LayoutUnit previous_sibling_block_end_annotation_space = LayoutUnit());
 
   // @return Estimated BFC block offset for the "to be layout" child.
   InflowChildData ComputeChildData(const PreviousInflowPosition&,
@@ -577,6 +583,10 @@ class CORE_EXPORT BlockLayoutAlgorithm
   // Set when performing an extra layout pass to correctly truncate trailing
   // margins for end margin trimming.
   bool is_relayout_for_margin_end_trim_ : 1 = false;
+
+  // Set to true if the child is already laid out to measure the `text-fit`
+  // scaling factor, preventing infinite recursion.
+  bool is_measuring_text_fit_ : 1 = false;
 
   // Set if last_non_self_collapsing_child_ should be left as-is, because we're
   // in a relayout pass (but not necessarily in a relayout pass for margin

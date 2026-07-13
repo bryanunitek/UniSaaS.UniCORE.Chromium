@@ -35,9 +35,9 @@ gfx::Size GetWindowSize(Browser* browser) {
   return bounds.size();
 }
 
-void VerifyColorsForFrameType(const Browser* browser, bool use_custom_frame) {
+void VerifyColorsForFrameType(Browser* browser, bool use_custom_frame) {
   ThemeService* theme_service =
-      ThemeServiceFactory::GetForProfile(browser->profile());
+      ThemeServiceFactory::GetForProfile(browser->GetProfile());
   EXPECT_EQ(use_custom_frame, theme_service->ShouldUseCustomFrame());
 
   ui::ColorProviderManager::ResetForTesting();
@@ -122,7 +122,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNativeWidgetAuraLinuxTest, NewWindowSize) {
   Profile* profile = browser()->profile();
   Browser::CreateParams params(profile, true /* user_gesture */);
   Browser* browser2 = Browser::Create(params);
-  browser2->window()->Show();
+  browser2->GetWindow()->Show();
 
   // The first window saves its placement on losing the active state, then the
   // second window needs to go through the initialisation, update its size and

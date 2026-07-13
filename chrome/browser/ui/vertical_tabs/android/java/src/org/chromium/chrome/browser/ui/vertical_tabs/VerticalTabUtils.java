@@ -15,6 +15,11 @@ import org.chromium.ui.base.DeviceFormFactor;
 /** Helper utilities for Vertical Tabs eligibility and preferences. */
 @NullMarked
 public class VerticalTabUtils {
+    /** The width of the vertical tabs SideUiContainer in dp. */
+    public static final int SIDE_UI_CONTAINER_WIDTH_DP = 206;
+
+    /** The width of the collapsed vertical tabs SideUiContainer in dp. */
+    public static final int SIDE_UI_CONTAINER_COLLAPSED_WIDTH_DP = 74;
 
     /**
      * Returns whether the current device is eligible for Vertical Tabs. Vertical Tabs require the
@@ -31,20 +36,6 @@ public class VerticalTabUtils {
             return false;
         }
         return ChromeSharedPreferences.getInstance()
-                .readBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, false);
-    }
-
-    /**
-     * Returns whether the "Show Tabs Vertically" entry point action should be displayed. This
-     * evaluates to true if the device is eligible for the feature, but the user has not yet
-     * switched to the vertical layout view.
-     */
-    public static boolean shouldShowVerticalTabsEntryPoint(Context context) {
-        if (!isVerticalTabsEligible(context)) {
-            return false;
-        }
-        // Return false if the layout is already active (vertical tabs is already visible).
-        return !ChromeSharedPreferences.getInstance()
                 .readBoolean(ChromePreferenceKeys.VERTICAL_TABS_ENABLED, false);
     }
 }

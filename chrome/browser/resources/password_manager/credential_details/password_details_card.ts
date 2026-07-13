@@ -18,9 +18,7 @@ import '../dialogs/edit_password_dialog.js';
 import '../dialogs/multi_store_delete_password_dialog.js';
 import '../sharing/share_password_flow.js';
 import '../sharing/metrics_utils.js';
-import '../dialogs/move_single_password_dialog.js';
 
-import {loadTimeData} from '//resources/js/load_time_data.js';
 import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {HelpBubbleMixin} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin.js';
 import type {CrButtonElement} from 'chrome://resources/cr_elements/cr_button/cr_button.js';
@@ -107,12 +105,6 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
 
       showEditPasswordDialog_: Boolean,
       showDeletePasswordDialog_: Boolean,
-      showMovePasswordDialog_: Boolean,
-
-      showSingleClickUploadUi_: {
-        type: Boolean,
-        value: () => loadTimeData.getBoolean('passwordUploadUiUpdate'),
-      },
 
       showShareButton_: {
         type: Boolean,
@@ -145,6 +137,14 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
     };
   }
 
+  static get observers() {
+    return [
+      'maybeRegisterSharingHelpBubble_(' +
+          'shouldRegisterSharingPromo, showShareButton_, ' +
+          'passwordSharingDisabled_)',
+    ];
+  }
+
   declare password: chrome.passwordsPrivate.PasswordUiEntry;
   declare groupName: string;
   declare iconUrl: string;
@@ -158,14 +158,8 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
   declare private showDeletePasswordDialog_: boolean;
   declare private showShareFlow_: boolean;
   declare private showShareButton_: boolean;
-  declare private showMovePasswordDialog_: boolean;
-  declare private showSingleClickUploadUi_: boolean;
   declare private trigger_: MoveToAccountStoreTrigger;
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.maybeRegisterSharingHelpBubble_();
-  }
 
   private isFederated_(): boolean {
     return !!this.password.federationText;
@@ -344,18 +338,9 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
             this.getCredentialTypeString_());
   }
 
-  private computeMovePasswordText_(): TrustedHTML {
-    return this.i18nAdvanced('moveSinglePassword');
-  }
-
   private onMovePasswordClicked_(e: Event) {
     assert(this.isAccountStoreUser);
     e.preventDefault();
-
-    if (!this.showSingleClickUploadUi_) {
-      this.showMovePasswordDialog_ = true;
-      return;
-    }
 
     PasswordManagerImpl.getInstance().movePasswordsToAccount(
         [this.password.id]);
@@ -373,25 +358,18 @@ export class PasswordDetailsCardElement extends PasswordDetailsCardElementBase {
         chrome.passwordsPrivate.PasswordStoreSet.DEVICE;
   }
 
-  private getUploadSinglePasswordId_(): string {
-    return this.showSingleClickUploadUi_ ? 'uploadSinglePasswordLarge' :
-                                           'uploadSinglePasswordSmall';
-  }
-
-  private onMovePasswordDialogClose_(): void {
-    this.showMovePasswordDialog_ = false;
-  }
-
   private onPasswordChanged_(): void {
     this.isPasswordVisible = false;
   }
 
-  private maybeRegisterSharingHelpBubble_(): void {
+  private maybeRegisterSharingHelpBubble_(
+      shouldRegisterSharingPromo: boolean, showShareButton: boolean,
+      passwordSharingDisabled: boolean): void {
     // Register the help bubble only if this is the first card in the list
     // (`shouldRegisterSharingPromo` is true), and the share button is visible
     // and not disabled.
-    if (!this.shouldRegisterSharingPromo ||
-        (!this.showShareButton_ && !this.passwordSharingDisabled_)) {
+    if (!shouldRegisterSharingPromo || !showShareButton ||
+        passwordSharingDisabled) {
       return;
     }
 

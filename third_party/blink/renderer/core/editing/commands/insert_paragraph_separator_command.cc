@@ -374,8 +374,9 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       if (paste_blockquote_into_unquoted_area_) {
         if (auto* highest_blockquote =
                 To<HTMLQuoteElement>(HighestEnclosingNodeOfType(
-                    canonical_pos, &IsMailHTMLBlockquoteElement)))
+                    canonical_pos, &IsMailHtmlBlockquoteElement))) {
           start_block = highest_blockquote;
+        }
       }
 
       if (list_child && list_child != start_block) {
@@ -413,7 +414,7 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       return;
 
     SetEndingSelection(SelectionForUndoStep::From(
-        SelectionInDOMTree::Builder()
+        SelectionInDomTree::Builder()
             .Collapse(Position::FirstPositionInNode(*parent))
             .Build()));
     if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
@@ -491,9 +492,7 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
 
     // In this case, we need to set the new ending selection.
     SetEndingSelection(SelectionForUndoStep::From(
-        SelectionInDOMTree::Builder()
-            .Collapse(insertion_position)
-            .Build()));
+        SelectionInDomTree::Builder().Collapse(insertion_position).Build()));
     if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
       SetEndingDomSelection(SelectionForUndoStep::From(
           SelectionInDomTree::Builder().Collapse(insertion_position).Build()));
@@ -522,9 +521,7 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
     if (visible_pos.IsNotNull() &&
         visible_pos.DeepEquivalent().AnchorNode()->GetLayoutObject()->IsBR()) {
       SetEndingSelection(SelectionForUndoStep::From(
-          SelectionInDOMTree::Builder()
-              .Collapse(insertion_position)
-              .Build()));
+          SelectionInDomTree::Builder().Collapse(insertion_position).Build()));
       if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {
         SetEndingDomSelection(
             SelectionForUndoStep::From(SelectionInDomTree::Builder()
@@ -675,8 +672,8 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
       DCHECK(!position_after_split.ComputeContainerNode()->GetLayoutObject() ||
              position_after_split.ComputeContainerNode()
                  ->GetLayoutObject()
-                 ->Style()
-                 ->ShouldCollapseWhiteSpaces())
+                 ->StyleRef()
+                 .ShouldCollapseWhiteSpaces())
           << position_after_split;
       DeleteInsignificantTextDownstream(position_after_split);
       if (position_after_split.AnchorNode()->IsTextNode()) {
@@ -688,7 +685,7 @@ void InsertParagraphSeparatorCommand::DoApply(EditingState* editing_state) {
   }
 
   SetEndingSelection(SelectionForUndoStep::From(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .Collapse(Position::FirstPositionInNode(*block_to_insert))
           .Build()));
   if (RuntimeEnabledFeatures::EditingUseDomPositionApiEnabled()) {

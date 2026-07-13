@@ -48,6 +48,9 @@
 #include "chrome/browser/sync/account_bookmark_sync_service_factory.h"
 #include "chrome/browser/sync/chrome_sync_client.h"
 #include "chrome/browser/sync/chrome_sync_controller_builder.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/sync/cross_device_theme_tracker_factory.h"
+#endif
 #include "chrome/browser/sync/data_type_store_service_factory.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
 #include "chrome/browser/sync/glue/extensions_activity_monitor.h"
@@ -55,6 +58,7 @@
 #include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
 #include "chrome/browser/sync/session_sync_service_factory.h"
 #include "chrome/browser/sync/sync_invalidations_service_factory.h"
+#include "chrome/browser/sync/tab_context_sync_service_factory.h"
 #include "chrome/browser/sync/user_event_service_factory.h"
 #include "chrome/browser/tab_group_sync/feature_utils.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
@@ -270,6 +274,8 @@ syncer::DataTypeController::TypeVector CreateCommonControllers(
       SendTabToSelfSyncServiceFactory::GetForProfile(profile));
   builder.SetSessionSyncService(
       SessionSyncServiceFactory::GetForProfile(profile));
+  builder.SetTabContextSyncService(
+      TabContextSyncServiceFactory::GetForProfile(profile));
   builder.SetSharingMessageBridge(
       SharingMessageBridgeFactory::GetForBrowserContext(profile));
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
@@ -357,6 +363,11 @@ syncer::DataTypeController::TypeVector CreateChromeControllers(
                                                                /*create=*/true)
           : nullptr);
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if !BUILDFLAG(IS_ANDROID)
+  builder.SetCrossDeviceThemeTracker(
+      CrossDeviceThemeTrackerFactory::GetForProfile(profile));
+#endif
 
   return builder.Build(sync_service);
 }
@@ -546,6 +557,7 @@ SyncServiceFactory::SyncServiceFactory()
   DependsOn(ConsentAuditorFactory::GetInstance());
 #if !BUILDFLAG(IS_ANDROID)
   DependsOn(contextual_tasks::ContextualTasksServiceFactory::GetInstance());
+  DependsOn(CrossDeviceThemeTrackerFactory::GetInstance());
 #endif  // !BUILDFLAG(IS_ANDROID)
   DependsOn(DataTypeStoreServiceFactory::GetInstance());
   DependsOn(DeviceInfoSyncServiceFactory::GetInstance());
@@ -576,6 +588,7 @@ SyncServiceFactory::SyncServiceFactory()
   DependsOn(SyncInvalidationsServiceFactory::GetInstance());
   DependsOn(supervised_user::FamilyLinkSettingsServiceFactory::GetInstance());
   DependsOn(SessionSyncServiceFactory::GetInstance());
+  DependsOn(TabContextSyncServiceFactory::GetInstance());
   DependsOn(TemplateURLServiceFactory::GetInstance());
 #if !BUILDFLAG(IS_ANDROID)
   DependsOn(ThemeServiceFactory::GetInstance());

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 #include "chrome/browser/contextual_tasks/contextual_tasks_composebox_handler.h"
 
+#include <algorithm>
 #include <set>
 
 #include "base/barrier_closure.h"
@@ -37,6 +38,8 @@
 #include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "components/contextual_search/contextual_search_service.h"
+#include "components/contextual_search/contextual_search_session_handle.h"
+#include "components/contextual_search/contextual_search_types.h"
 #include "components/contextual_tasks/public/context_decoration_params.h"
 #include "components/contextual_tasks/public/contextual_task_context.h"
 #include "components/contextual_tasks/public/contextual_tasks_service.h"
@@ -49,6 +52,7 @@
 #include "components/omnibox/common/composebox_features.h"
 #include "components/omnibox/common/input_state.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/tabs/public/tab_handle_factory.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/url_deduplication/url_deduplication_helper.h"
 #include "mojo/public/cpp/base/big_buffer.h"
@@ -62,6 +66,7 @@
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #else
 #include "base/android/content_uri_utils.h"
 #endif
@@ -203,10 +208,9 @@ ContextualTasksComposeboxHandler::ContextualTasksComposeboxHandler(
           std::move(pending_searchbox_page),
           profile,
           web_contents,
-          std::make_unique<OmniboxController>(
-              std::make_unique<ContextualTasksOmniboxClient>(profile,
-                                                             web_contents,
-                                                             this)),
+          std::make_unique<ContextualTasksOmniboxClient>(profile,
+                                                         web_contents,
+                                                         this),
           std::move(get_session_callback),
           std::move(clear_session_callback)),
       take_input_model_callback_(std::move(take_input_model_callback)),
@@ -223,15 +227,16 @@ ContextualTasksComposeboxHandler::ContextualTasksComposeboxHandler(
               &ContextualSearchboxHandler::CreateImageEncodingOptions),
           contextual_tasks::ContextualTasksContextServiceFactory::GetForProfile(
               profile),
-          webui::GetBrowserWindowInterface(
-              web_ui_interface->GetWebUIWebContents()))),
+          base::BindRepeating(
+              &contextual_tasks::ContextualTasksUIInterface::GetBrowser,
+              base::Unretained(web_ui_interface)))),
       recontextualizer_(std::make_unique<contextual_tasks::QueryContextualizer>(
           contextual_tasks_service_,
           desktop_delegate_.get())) {
   // Set the callback for getting suggest inputs from the session.
   // The session is owned by WebUI controller and accessed via callback.
   // It is safe to use Unretained because omnibox client is owned by `this`.
-  static_cast<ContextualTasksOmniboxClient*>(omnibox_controller()->client())
+  static_cast<ContextualTasksOmniboxClient*>(client())
       ->SetSuggestInputsCallback(base::BindRepeating(
           &ContextualTasksComposeboxHandler::GetSuggestInputs,
           base::Unretained(this)));
@@ -347,6 +352,8 @@ void ContextualTasksComposeboxHandler::SubmitQuery(
 void ContextualTasksComposeboxHandler::CreateAndSendQueryMessage(
     const std::string& query,
     bool is_voice_search) {
+  base::RecordAction(base::UserMetricsAction(
+      "ContextualTasks.Composebox.UserAction.QuerySubmitted"));
   auto* session_handle = GetContextualSessionHandle();
 
   // Retrieve the overlay token before closing the overlay, as the controller
@@ -378,6 +385,7 @@ void ContextualTasksComposeboxHandler::CreateAndSendQueryMessage(
     return;
   }
 
+  // TODO(crbug.com/528416084): Move this recontextualization logic to a helper.
   std::vector<contextual_tasks::QueryContextualizer::TabId>
       tabs_to_recontextualize;
   // Get the active tab handle now, as recontextualization is an async process
@@ -391,7 +399,21 @@ void ContextualTasksComposeboxHandler::CreateAndSendQueryMessage(
     if (tab_list) {
       active_tab = tab_list->GetActiveTab();
       if (active_tab && !has_visual_selection) {
-        tabs_to_recontextualize.push_back(active_tab->GetHandle().raw_value());
+        bool should_block_recontextualize = false;
+        if (omnibox::IsTabDeselectionInComposeboxEnabled()) {
+          if (session_handle) {
+            SessionID session_id =
+                sessions::SessionTabHelper::IdForTab(active_tab->GetContents());
+            GURL current_url = active_tab->GetContents()->GetLastCommittedURL();
+            should_block_recontextualize = session_handle->IsTabDeselected(
+                session_id, current_url,
+                base::UTF16ToUTF8(active_tab->GetTitle()));
+          }
+        }
+        if (!should_block_recontextualize) {
+          tabs_to_recontextualize.push_back(
+              active_tab->GetHandle().raw_value());
+        }
       }
     }
 
@@ -430,15 +452,21 @@ void ContextualTasksComposeboxHandler::CreateAndSendQueryMessage(
       },
       base::Unretained(this), query, task_id, overlay_token, is_voice_search);
 
-  recontextualizer_->Contextualize(
-      task_id, query, tabs_to_recontextualize, tabs_to_force_contextualize,
-      base::BindRepeating(
-          &ContextualTasksComposeboxHandler::OnPageContextIneligible,
-          base::Unretained(this)),
+  contextual_tasks::QueryContextualizer::ContextualizeParams params;
+  params.task_id = task_id;
+  params.query_text = query;
+  params.tabs_to_recontextualize = tabs_to_recontextualize;
+  params.auto_suggested_chip_tabs = tabs_to_force_contextualize;
+  params.on_ineligible_callback = base::BindRepeating(
+      &ContextualTasksComposeboxHandler::OnPageContextIneligible,
+      base::Unretained(this));
+  params.on_processed_callback =
       base::BindRepeating(&ContextualTasksComposeboxHandler::
                               OnTabProcessedForQueryContextualization,
-                          base::Unretained(this)),
-      std::move(callback), IsSmartTabSharingActive());
+                          base::Unretained(this));
+  params.complete_callback = std::move(callback);
+  params.enable_smart_tab_selection = IsSmartTabSharingActive();
+  recontextualizer_->Contextualize(std::move(params));
 }
 
 contextual_tasks::ContextualTasksService*
@@ -458,6 +486,9 @@ void ContextualTasksComposeboxHandler::UpdateStateFromUrl(const GURL& url) {
 
 void ContextualTasksComposeboxHandler::OnTaskChanged() {
   ClearFiles(/*should_block_auto_suggested_tabs=*/false);
+  // Maybe trigger lens overlay when Side Panel is done with navigation
+  // which triggers OnTaskChanged().
+  MaybeTriggerLens();
   InitializeInputStateModel();
 }
 
@@ -512,6 +543,42 @@ void ContextualTasksComposeboxHandler::InitializeInputStateModel() {
     std::vector<int32_t> restored_tab_ids =
         web_ui_interface_->GetRestoredTabIds();
     SearchboxHandler::page_->SetRestoredTabIds(restored_tab_ids);
+    // Set cached submitted tabs so they show up before thread loading is
+    // complete and after submission.
+    if (auto* session_handle = GetContextualSessionHandle()) {
+      std::vector<searchbox::mojom::TabInfoPtr> submitted_tabs;
+      std::vector<contextual_search::FileInfo> file_infos =
+          session_handle->GetSubmittedContextFileInfos();
+      // Ensures the tabs are ordered by their selection time.
+      std::sort(file_infos.begin(), file_infos.end(),
+                [](const contextual_search::FileInfo& a,
+                   const contextual_search::FileInfo& b) {
+                  return a.selection_time < b.selection_time;
+                });
+      for (const contextual_search::FileInfo& file_info : file_infos) {
+        if ((file_info.mime_type == lens::MimeType::kHtml ||
+             file_info.mime_type == lens::MimeType::kAnnotatedPageContent) &&
+            (file_info.tab_url.has_value() ||
+             file_info.tab_title.has_value())) {
+          searchbox::mojom::TabInfoPtr tab_info =
+              searchbox::mojom::TabInfo::New();
+          int32_t tab_id = 0;
+          if (file_info.tab_session_id.has_value()) {
+            tab_id = tabs::SessionMappedTabHandleFactory::GetInstance()
+                         .GetHandleForSessionId(
+                             file_info.tab_session_id.value().id());
+          }
+          tab_info->tab_id = tab_id;
+          tab_info->title = file_info.tab_title.value_or("");
+          tab_info->url = file_info.tab_url.value_or(GURL());
+          submitted_tabs.push_back(std::move(tab_info));
+        }
+      }
+      if (!submitted_tabs.empty()) {
+        SearchboxHandler::page_->SetAimThreadRestoredTabs(
+            std::move(submitted_tabs));
+      }
+    }
   }
 
   if (input_state_model_) {
@@ -529,6 +596,13 @@ void ContextualTasksComposeboxHandler::InitializeInputStateModel() {
     }
   }
 }
+
+bool ContextualTasksComposeboxHandler::IsContextualSearchTabSharingEligible()
+    const {
+  return web_ui_interface_ &&
+         web_ui_interface_->IsContextualTasksEligibleOnInit();
+}
+
 void ContextualTasksComposeboxHandler::SetAimThreadRestoredTabs(
     std::vector<searchbox::mojom::TabInfoPtr> tabs) {
   if (SearchboxHandler::page_) {
@@ -768,6 +842,12 @@ void ContextualTasksComposeboxHandler::AddTabContext(
     int32_t tab_id,
     bool delay_upload,
     AddTabContextCallback callback) {
+  if (!IsContextualSearchTabSharingEligible()) {
+    std::move(callback).Run(base::unexpected(
+        contextual_search::ContextUploadErrorType::kBrowserProcessingError));
+    return;
+  }
+
   if (!contextual_search::ContextualSearchService::IsContextSharingEnabled(
           profile_->GetPrefs())) {
     std::move(callback).Run(base::unexpected(
@@ -844,6 +924,11 @@ void ContextualTasksComposeboxHandler::ClearFiles(
 
 #if !BUILDFLAG(IS_ANDROID)
 void ContextualTasksComposeboxHandler::HandleLensButtonClick() {
+  base::RecordAction(base::UserMetricsAction(
+      "ContextualTasks.Composebox.UserAction.LensButtonClicked"));
+  base::UmaHistogramBoolean(
+      "ContextualTasks.Composebox.UserAction.LensButtonClicked", true);
+
   if (auto* controller = GetLensSearchController()) {
     if (controller->IsShowingUI()) {
       if (controller->invocation_source() ==
@@ -1014,6 +1099,24 @@ void ContextualTasksComposeboxHandler::DeleteContext(
   } else if (deleted_tab_url.has_value()) {
     auto_suggestion_manager->OnTabContextRemoved(deleted_tab_url.value());
   }
+}
+
+void ContextualTasksComposeboxHandler::MaybeTriggerLens() {
+#if !BUILDFLAG(IS_ANDROID)
+  if (!omnibox::kAskGCoBrowseWithVisualSelection.Get()) {
+    return;
+  }
+  if (auto* controller = GetLensSearchController()) {
+    if (controller->invocation_source() ==
+            lens::LensOverlayInvocationSource::kOmniboxPageAction) {
+      DCHECK(controller->invocation_source().has_value());
+      controller->SetThumbnailCreatedCallback(base::BindRepeating(
+          &ContextualTasksComposeboxHandler::OnLensThumbnailCreated,
+          weak_factory_.GetWeakPtr()));
+      controller->OpenLensOverlay(controller->invocation_source().value());
+    }
+  }
+#endif
 }
 
 void ContextualTasksComposeboxHandler::UpdateSuggestedTabContext(

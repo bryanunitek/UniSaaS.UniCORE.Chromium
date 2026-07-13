@@ -66,43 +66,10 @@ BrowserTabStripModelDelegate::BrowserTabStripModelDelegate(Browser* browser)
 
 BrowserTabStripModelDelegate::~BrowserTabStripModelDelegate() = default;
 
-bool BrowserTabStripModelDelegate::IsTabGlicPinned(tabs::TabHandle tab_handle) {
-  auto* service =
-      glic::GlicKeyedServiceFactory::GetGlicKeyedService(browser_->profile());
-
-  return service->active_instance_sharing_manager().IsTabPinned(tab_handle);
-}
-
-bool BrowserTabStripModelDelegate::GlicPinTabs(
-    base::span<const tabs::TabHandle> tab_handles) {
-  auto* service =
-      glic::GlicKeyedServiceFactory::GetGlicKeyedService(browser_->profile());
-
-  return service->active_instance_sharing_manager().PinTabs(tab_handles);
-}
-
-bool BrowserTabStripModelDelegate::GlicUnpinTabs(
-    base::span<const tabs::TabHandle> tab_handles) {
-  auto* service =
-      glic::GlicKeyedServiceFactory::GetGlicKeyedService(browser_->profile());
-
-  return service->active_instance_sharing_manager().UnpinTabs(tab_handles);
-}
-
-void BrowserTabStripModelDelegate::OpenGlicWindowFromSharedTab() {
-  auto* service =
-      glic::GlicKeyedServiceFactory::GetGlicKeyedService(browser_->profile());
-
-  if (!service->instance_coordinator().IsAnyPanelShowing()) {
-    service->ToggleUI(/*bwi=*/nullptr, /*prevent_close=*/true,
-                      glic::mojom::InvocationSource::kSharedTab);
-  }
-}
-
 void BrowserTabStripModelDelegate::GlicUnpinTabsFromAllConversations(
     base::span<const tabs::TabHandle> tab_handles) {
-  auto* service =
-      glic::GlicKeyedServiceFactory::GetGlicKeyedService(browser_->profile());
+  auto* service = glic::GlicKeyedServiceFactory::GetGlicKeyedService(
+      browser_->GetProfile());
   service->instance_coordinator().UnpinTabsFromAllInstances(
       tab_handles, glic::GlicUnpinTrigger::kContextMenu);
 }
@@ -127,7 +94,7 @@ Browser* BrowserTabStripModelDelegate::CreateNewStripWithTabs(
       Browser::WindowFeature::kFeatureTabStrip));
 
   // Create an empty new browser window the same size as the old one.
-  Browser::CreateParams params(browser_->profile(), true);
+  Browser::CreateParams params(browser_->GetProfile(), true);
   params.initial_bounds = window_bounds;
   params.initial_show_state = maximize ? ui::mojom::WindowShowState::kMaximized
                                        : ui::mojom::WindowShowState::kNormal;
@@ -174,7 +141,7 @@ bool BrowserTabStripModelDelegate::CanDuplicateContentsAt(int index) {
 }
 
 bool BrowserTabStripModelDelegate::IsTabStripEditable() {
-  return browser_->window()->IsTabStripEditable();
+  return BrowserWindow::FromBrowser(browser_)->IsTabStripEditable();
 }
 
 content::WebContents* BrowserTabStripModelDelegate::DuplicateContentsAt(
@@ -231,7 +198,7 @@ std::optional<SessionID> BrowserTabStripModelDelegate::CreateHistoricalTab(
   }
 
   sessions::TabRestoreService* service =
-      TabRestoreServiceFactory::GetForProfile(browser_->profile());
+      TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
 
   // We only create historical tab entries for tabbed browser windows.
   if (service && browser_->CanSupportWindowFeature(
@@ -250,11 +217,11 @@ void BrowserTabStripModelDelegate::CreateHistoricalGroup(
   }
 
   sessions::TabRestoreService* service =
-      TabRestoreServiceFactory::GetForProfile(browser_->profile());
+      TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
   if (service) {
-    service->CreateHistoricalGroup(
-        BrowserLiveTabContext::FindContextWithGroup(group, browser_->profile()),
-        group);
+    service->CreateHistoricalGroup(BrowserLiveTabContext::FindContextWithGroup(
+                                       group, browser_->GetProfile()),
+                                   group);
   }
 }
 
@@ -265,7 +232,7 @@ void BrowserTabStripModelDelegate::CreateHistoricalSplit(
   }
 
   sessions::TabRestoreService* service =
-      TabRestoreServiceFactory::GetForProfile(browser_->profile());
+      TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
   if (service) {
     service->CreateHistoricalSplit(browser_->GetFeatures().live_tab_context(),
                                    split_id);
@@ -291,7 +258,7 @@ void BrowserTabStripModelDelegate::WillCloseSplit(
 void BrowserTabStripModelDelegate::GroupCloseStopped(
     const tab_groups::TabGroupId& group) {
   sessions::TabRestoreService* service =
-      TabRestoreServiceFactory::GetForProfile(browser_->profile());
+      TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
   if (service) {
     service->GroupCloseStopped(group);
   }
@@ -303,12 +270,12 @@ void BrowserTabStripModelDelegate::SplitClosed(
     return;
   }
 
-  if (!browser_ || !browser_->profile()) {
+  if (!browser_ || !browser_->GetProfile()) {
     return;
   }
 
   sessions::TabRestoreService* service =
-      TabRestoreServiceFactory::GetForProfile(browser_->profile());
+      TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
   if (service) {
     service->SplitClosed(split_id);
   }
@@ -320,12 +287,12 @@ void BrowserTabStripModelDelegate::SplitCloseStopped(
     return;
   }
 
-  if (!browser_ || !browser_->profile()) {
+  if (!browser_ || !browser_->GetProfile()) {
     return;
   }
 
   sessions::TabRestoreService* service =
-      TabRestoreServiceFactory::GetForProfile(browser_->profile());
+      TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
   if (service) {
     service->SplitCloseStopped(split_id);
   }
@@ -350,7 +317,7 @@ bool BrowserTabStripModelDelegate::CanReload() const {
 void BrowserTabStripModelDelegate::AddToReadLater(
     std::vector<content::WebContents*> web_contentses) {
   ReadingListModel* model =
-      ReadingListModelFactory::GetForBrowserContext(browser_->profile());
+      ReadingListModelFactory::GetForBrowserContext(browser_->GetProfile());
   if (!model || !model->loaded()) {
     return;
   }
@@ -359,7 +326,7 @@ void BrowserTabStripModelDelegate::AddToReadLater(
 }
 
 bool BrowserTabStripModelDelegate::SupportsReadLater() {
-  return !browser_->profile()->IsGuestSession() && !IsForWebApp();
+  return !browser_->GetProfile()->IsGuestSession() && !IsForWebApp();
 }
 
 bool BrowserTabStripModelDelegate::IsForWebApp() {
@@ -434,13 +401,13 @@ void BrowserTabStripModelDelegate::OnRemovingAllTabsFromGroups(
 // BrowserTabStripModelDelegate, private:
 
 void BrowserTabStripModelDelegate::CloseFrame() {
-  browser_->window()->Close();
+  browser_->GetWindow()->Close();
 }
 
 bool BrowserTabStripModelDelegate::BrowserSupportsHistoricalEntries() {
   // We don't create historical tabs for incognito windows or windows without
   // profiles.
-  return browser_->profile() && !browser_->profile()->IsOffTheRecord();
+  return browser_->GetProfile() && !browser_->GetProfile()->IsOffTheRecord();
 }
 
 }  // namespace chrome

@@ -76,7 +76,7 @@ class HeightTransitionHandler {
     private boolean mTabStripVisible;
 
     /**
-     * The tab strip was suppressed by {@link suppressTapStrip()}. The method is called when the tab
+     * The tab strip was suppressed by {@link suppressTabStrip()}. The method is called when the tab
      * strip needs hiding in favor of other UI such as vertical tab.
      */
     private boolean mTabStripSuppressed;
@@ -105,6 +105,7 @@ class HeightTransitionHandler {
      *     TabStripTransitionDelegate}.
      * @param tabStripTransitionHandler The {@link TabStripTransitionHandler} instance to facilitate
      *     tab strip visibility transitions.
+     * @param suppressTabStripAtStart if {@code true}, suppress tab strip when Chrome starts.
      */
     HeightTransitionHandler(
             ControlContainer controlContainer,
@@ -113,7 +114,8 @@ class HeightTransitionHandler {
             Handler handler,
             TabObscuringHandler tabObscuringHandler,
             OneshotSupplier<TabStripTransitionDelegate> tabStripTransitionDelegateSupplier,
-            TabStripTransitionHandler tabStripTransitionHandler) {
+            TabStripTransitionHandler tabStripTransitionHandler,
+            boolean suppressTabStripAtStart) {
         mControlContainer = controlContainer;
         mTabStripHeightFromResource = tabStripHeightFromResource;
         mCallbackController = callbackController;
@@ -121,7 +123,8 @@ class HeightTransitionHandler {
         mTabStripTransitionDelegateSupplier = tabStripTransitionDelegateSupplier;
         mTabStripTransitionHandler = tabStripTransitionHandler;
 
-        mTabStripHeight = tabStripHeightFromResource;
+        mTabStripSuppressed = suppressTabStripAtStart;
+        mTabStripHeight = suppressTabStripAtStart ? 0 : tabStripHeightFromResource;
         mTabStripVisible = mTabStripHeight > 0;
         mDeferTransitionTokenHolder =
                 new TokenHolder(mCallbackController.makeCancelable(this::onTokenUpdate));
@@ -180,6 +183,8 @@ class HeightTransitionHandler {
 
     /** Called when the tab strip is suppressed in favor of other UI such as vertical tab. */
     void suppressTabStrip(boolean suppress) {
+        if (mTabStripSuppressed == suppress) return;
+
         mTabStripSuppressed = suppress;
         requestTransition();
     }
@@ -331,8 +336,9 @@ class HeightTransitionHandler {
 
         mTabStripVisible = showTabStrip;
         int newHeight =
-                (mUpdateStripVisibility && showTabStrip)
-                                || (!mUpdateStripVisibility && mForceUpdateHeight)
+                !mTabStripSuppressed
+                                && ((mUpdateStripVisibility && showTabStrip)
+                                        || (!mUpdateStripVisibility && mForceUpdateHeight))
                         ? calculateTabStripHeight()
                         : 0;
 

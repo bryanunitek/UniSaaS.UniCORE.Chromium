@@ -819,7 +819,7 @@ SkiaOutputSurfaceImplOnGpu::CreateSharedImageRepresentationSkia(
       gpu::SharedImageInfo(format, size, color_space, kTopLeft_GrSurfaceOrigin,
                            kPremul_SkAlphaType,
                            CopyOutputResult::kDefaultSharedImageUsage,
-                           std::string(debug_label)),
+                           debug_label),
       gpu::kNullSurfaceHandle);
   if (!result) {
     DLOG(ERROR) << "Failed to create shared image.";
@@ -1128,6 +1128,15 @@ void SkiaOutputSurfaceImplOnGpu::CopyOutputRGBAInTexture(
     // called.
     return;
   }
+
+  // End write access before sending the result to avoid racing with the
+  // client's subsequent readback.
+  scoped_write.reset();
+
+  // We conditionally move from request (if `should_wait_for_gpu_work` is true),
+  // DCHECK that we don't accidentally enter this codepath after the request was
+  // moved from.
+  DCHECK(request);
 
   if (request->has_blit_request()) {
     request->SendResult(std::make_unique<CopyOutputSharedImageResult>(
@@ -1539,6 +1548,10 @@ void SkiaOutputSurfaceImplOnGpu::CopyOutputNV12(
     return;
   }
 
+  // End write access before sending the result to avoid racing with the
+  // client's subsequent readback.
+  mailbox_access_data.scoped_write.reset();
+
   // We conditionally move from request (if `should_wait_for_gpu_work` is true),
   // DCHECK that we don't accidentally enter this codepath after the request was
   // moved from.
@@ -1895,10 +1908,6 @@ void SkiaOutputSurfaceImplOnGpu::ScheduleOverlays(
 void SkiaOutputSurfaceImplOnGpu::SetVSyncDisplayID(int64_t display_id,
                                                    bool force_update) {
   output_device_->SetVSyncDisplayID(display_id, force_update);
-}
-
-void SkiaOutputSurfaceImplOnGpu::RefreshRateChangedOnSameDisplay() {
-  output_device_->RefreshRateChangedOnSameDisplay();
 }
 
 #if BUILDFLAG(IS_ANDROID)

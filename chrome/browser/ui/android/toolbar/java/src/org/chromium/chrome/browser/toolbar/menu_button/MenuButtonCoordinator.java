@@ -29,6 +29,7 @@ import org.chromium.chrome.browser.theme.ThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonProperties.ShowBadgeProperty;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonProperties.ThemeProperty;
 import org.chromium.chrome.browser.toolbar.top.ToolbarChildButton;
+import org.chromium.chrome.browser.ui.actions.appmenu.MenuButtonState;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuButtonHelper;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinator;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
@@ -183,18 +184,21 @@ public class MenuButtonCoordinator extends ToolbarChildButton {
      * Set the underlying MenuButton view. Use only if the MenuButton instance isn't available at
      * construction time, e.g. if it's lazily inflated. This should only be called once, unless
      * switching the active toolbar.
+     *
      * @param menuButton The underlying MenuButton view.
      */
-    public void setMenuButton(MenuButton menuButton) {
-        assert menuButton != null;
+    public void setMenuButton(@Nullable MenuButton menuButton) {
         mMenuButton = menuButton;
 
         if (mChangeProcessor != null) {
             mChangeProcessor.destroy();
+            mChangeProcessor = null;
         }
-        mChangeProcessor =
-                PropertyModelChangeProcessor.create(
-                        mPropertyModel, menuButton, new MenuButtonViewBinder());
+        if (menuButton != null) {
+            mChangeProcessor =
+                    PropertyModelChangeProcessor.create(
+                            mPropertyModel, menuButton, new MenuButtonViewBinder());
+        }
     }
 
     /**
@@ -288,6 +292,12 @@ public class MenuButtonCoordinator extends ToolbarChildButton {
     public void setVisibility(boolean visible) {
         if (mMediator == null) return;
         mMediator.setVisibility(visible);
+    }
+
+    @Override
+    public boolean hasSpaceToShow() {
+        if (mMediator == null) return true;
+        return mMediator.hasSpaceToShow();
     }
 
     /**

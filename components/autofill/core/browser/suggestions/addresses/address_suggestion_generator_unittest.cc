@@ -1101,8 +1101,6 @@ TEST_F(AddressSuggestionGeneratorTest, SelectField_NoPrefixMatching) {
 // excluded, except when that suggestion is the only one, then it should not be.
 TEST_F(AddressSuggestionGeneratorTest,
        RemoveFieldByFieldFillingSuggestionsMatchingFieldContent) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kAutofillImproveAddressFieldSwapping};
   AutofillProfile profile1 = test::GetFullProfile();
   AutofillProfile profile2 = test::GetFullProfile2();
   address_data().AddProfile(profile1);
@@ -1144,8 +1142,6 @@ TEST_F(AddressSuggestionGeneratorTest,
 TEST_F(
     AddressSuggestionGeneratorTest,
     RemoveFieldByFieldFillingSuggestionsMatchingFieldContent_NoNormalization) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kAutofillImproveAddressFieldSwapping};
   AutofillProfile profile1 = test::GetFullProfile();
   AutofillProfile profile2 = test::GetFullProfile2();
   profile1.SetRawInfo(NAME_FULL, u"Test Name");
@@ -1215,9 +1211,6 @@ TEST_F(AddressSuggestionGeneratorTest, TestAddressSuggestion_HomeAndWork) {
 // Tests that AccountNameEmail has IPH feature.
 TEST_F(AddressSuggestionGeneratorTest,
        TestAddressSuggestion_AccountNameEmailIph) {
-  base::test::ScopedFeatureList features(
-      features::kAutofillEnableSupportForNameAndEmail);
-
   AutofillProfile profile_account_name_email = test::GetFullProfile();
   profile_account_name_email.SetRawInfo(EMAIL_ADDRESS, u"hoa@gmail.com");
 
@@ -1325,8 +1318,6 @@ class AddressLabelSuggestionGeneratorTest
 // as the main text.
 TEST_F(AddressLabelSuggestionGeneratorTest,
        CreateSuggestionsFromProfiles_AlternativeNameFieldMainText) {
-  base::test::ScopedFeatureList features{
-      features::kAutofillSupportPhoneticNameForJP};
   AutofillProfile profile(AddressCountryCode("JP"));
   test::SetProfileInfo(&profile, test::SetProfileInfoOptionsBuilder()
                                      .with_first_name("firstName")
@@ -1364,8 +1355,6 @@ TEST_F(AddressLabelSuggestionGeneratorTest,
 TEST_F(
     AddressLabelSuggestionGeneratorTest,
     CreateSuggestionsFromProfiles_TransliteratesHiraganaToKatakana_WhenLabelInKatakana) {
-  base::test::ScopedFeatureList features{
-      features::kAutofillSupportPhoneticNameForJP};
   AutofillProfile profile(AddressCountryCode("JP"));
   test::SetProfileInfo(&profile, test::SetProfileInfoOptionsBuilder()
                                      .with_first_name("firstName")
@@ -1404,8 +1393,6 @@ TEST_F(
 TEST_F(
     AddressLabelSuggestionGeneratorTest,
     CreateSuggestionsFromProfiles_DoesNotTransliterateHiraganaToKatakana_WhenLabelInHiragana) {
-  base::test::ScopedFeatureList features{
-      features::kAutofillSupportPhoneticNameForJP};
   AutofillProfile profile(AddressCountryCode("JP"));
   test::SetProfileInfo(&profile, test::SetProfileInfoOptionsBuilder()
                                      .with_first_name("firstName")
@@ -1808,6 +1795,30 @@ TEST_F(AddressSuggestionGeneratorTest, AlreadyAutofilledNoLabels) {
           EqualsSuggestion(SuggestionType::kSeparator),
           EqualsSuggestion(SuggestionType::kUndoOrClear),
           EqualsManageAddressesSuggestion()));
+}
+
+// Tests that address suggestions are not generated when contact info is blocked
+// by the AutofillSettings policy.
+TEST_F(AddressSuggestionGeneratorTest, AutofillSettingsBlocked) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy);
+
+  AutofillProfile p1 = test::GetFullProfile();
+  address_data().AddProfile(p1);
+
+  autofill_client()->SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo, true);
+
+  FormFieldData triggering_field;
+  std::vector<Suggestion> suggestions =
+      GetSuggestionsForProfiles(triggering_field, NAME_FIRST);
+  EXPECT_TRUE(suggestions.empty());
+
+  // Verify that turning off the policy restores suggestions.
+  autofill_client()->SetAutofillTypeBlockedByPolicy(
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo, false);
+  EXPECT_FALSE(GetSuggestionsForProfiles(triggering_field, NAME_FIRST).empty());
 }
 
 }  // namespace

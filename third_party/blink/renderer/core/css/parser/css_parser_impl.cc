@@ -292,10 +292,9 @@ static inline void FilterProperties(
     const CSSPropertyValue& property = values[i];
     if (property.PropertyID() == CSSPropertyID::kVariable) {
       const AtomicString& name = property.CustomPropertyName();
-      if (seen_custom_properties.Contains(name)) {
+      if (!seen_custom_properties.insert(name).is_new_entry) {
         continue;
       }
-      seen_custom_properties.insert(name);
     } else {
       const unsigned property_id_index =
           GetCSSPropertyIDIndex(property.PropertyID());
@@ -499,12 +498,12 @@ ParseSheetResult CSSParserImpl::ParseStyleSheet(
           static_cast<size_t>(LocalFrameUkmAggregator::kParseStyleSheet)));
     }
   }
-  TRACE_EVENT_BEGIN2("blink,blink_style", "CSSParserImpl::parseStyleSheet",
-                     "baseUrl", context->BaseURL().GetString().Utf8(), "mode",
-                     context->Mode());
+  TRACE_EVENT_BEGIN("blink,blink_style", "CSSParserImpl::parseStyleSheet",
+                    "baseUrl", context->BaseURL().GetString().Utf8(), "mode",
+                    context->Mode());
 
-  TRACE_EVENT_BEGIN0("blink,blink_style",
-                     "CSSParserImpl::parseStyleSheet.parse");
+  TRACE_EVENT_BEGIN("blink,blink_style",
+                    "CSSParserImpl::parseStyleSheet.parse");
   CSSParserTokenStream stream(string);
   CSSParserImpl parser(context, style_sheet);
   if (defer_property_parsing == CSSDeferPropertyParsing::kYes) {
@@ -538,11 +537,10 @@ ParseSheetResult CSSParserImpl::ParseStyleSheet(
         style_sheet->ParserAppendRule(rule);
       });
   style_sheet->SetHasSyntacticallyValidCSSHeader(first_rule_valid);
-  TRACE_EVENT_END0("blink,blink_style", "CSSParserImpl::parseStyleSheet.parse");
+  TRACE_EVENT_END("blink,blink_style");
 
-  TRACE_EVENT_END2("blink,blink_style", "CSSParserImpl::parseStyleSheet",
-                   "tokenCount", stream.TokenCount(), "length",
-                   string.length());
+  TRACE_EVENT_END("blink,blink_style", "tokenCount", stream.TokenCount(),
+                  "length", string.length());
   return result;
 }
 
@@ -2018,8 +2016,7 @@ StyleRuleNavigation* CSSParserImpl::ConsumeNavigationRule(
     StyleRule* parent_rule_for_nesting) {
   // Parse the prelude.
   wtf_size_t header_start_offset = stream.LookAheadOffset();
-  NavigationQuery* query =
-      NavigationParser::ParseQuery(stream, *context_->GetDocument());
+  NavigationQuery* query = NavigationParser::ParseQuery(stream);
   if (!query) {
     ConsumeErroneousAtRule(stream, CSSAtRuleID::kCSSAtRuleNavigation);
     return nullptr;

@@ -1845,6 +1845,15 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
                       *reference, *right_resolved, bounds.right.op, false));
     }
 
+    if (result_flags) {
+      CSSToLengthConversionData::Flags conversion_flags =
+          state.TakeLengthConversionFlags();
+      if (conversion_flags != 0) {
+        result_flags->unit_flags |=
+            ConversionFlagsToUnitFlags(conversion_flags);
+      }
+    }
+
     return result;
   }
 
@@ -1890,7 +1899,7 @@ KleeneValue MediaQueryEvaluator::EvalStyleFeature(
   }
 
   const CSSValue* computed_value =
-      CustomProperty(property_name, *media_values_->GetDocument())
+      CustomProperty(&property_name, *media_values_->GetDocument())
           .CSSValueFromComputedStyle(
               container->ComputedStyleRef(), nullptr /* layout_object */,
               false /* allow_visited_style */, CSSValuePhase::kComputedValue);

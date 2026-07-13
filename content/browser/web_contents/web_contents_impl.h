@@ -72,6 +72,7 @@
 #include "services/device/public/mojom/geolocation_context.mojom.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/fetch_api.mojom-forward.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/page/color_provider_color_maps.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
@@ -136,6 +137,7 @@ class NativeTheme;
 }  // namespace ui
 
 namespace content {
+class BackForwardCacheImpl;
 class BeforeUnloadBlockingDelegate;  // content_browser_test_utils_internal.h
 class BrowserPluginEmbedder;
 class BrowserPluginGuest;
@@ -405,7 +407,7 @@ class CONTENT_EXPORT WebContentsImpl
   BrowserContext* GetBrowserContext() override;
   base::WeakPtr<WebContents> GetWeakPtr() override;
   const UniqueToken& GetUniqueToken() const override;
-  const perfetto::NamedTrack& GetTracingTrack() const override;
+  const perfetto::Track& GetTracingTrack() const override;
   const GURL& GetURL() override;
   const GURL& GetVisibleURL() override;
   const GURL& GetLastCommittedURL() const override;
@@ -635,7 +637,8 @@ class CONTENT_EXPORT WebContentsImpl
   bool CompletedFirstVisuallyNonEmptyPaint() override;
   void UpdateFaviconURL(
       RenderFrameHostImpl* source,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override;
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override;
   const std::vector<blink::mojom::FaviconURLPtr>& GetFaviconURLs() override;
   void Resize(const gfx::Rect& new_bounds) override;
   gfx::Size GetSize() override;
@@ -809,7 +812,8 @@ class CONTENT_EXPORT WebContentsImpl
   void OnFocusedElementChangedInFrame(
       RenderFrameHostImpl* frame,
       const gfx::Rect& bounds_in_root_view,
-      blink::mojom::FocusType focus_type) override;
+      blink::mojom::FocusType focus_type,
+      blink::DOMNodeIdType editable_dom_node_id) override;
   void OnAdvanceFocus(RenderFrameHostImpl* source_rfh) override;
   FrameTree* CreateNewWindow(
       RenderFrameHostImpl* opener,
@@ -844,7 +848,8 @@ class CONTENT_EXPORT WebContentsImpl
   void ResourceLoadComplete(
       RenderFrameHostImpl* render_frame_host,
       const GlobalRequestID& request_id,
-      blink::mojom::ResourceLoadInfoPtr resource_load_information) override;
+      const GURL& original_url,
+      blink::mojom::ResourceLoadInfoPtr resource_load_info) override;
   void OnCookiesAccessed(RenderFrameHostImpl*,
                          const CookieAccessDetails& details) override;
   void OnTrustTokensAccessed(RenderFrameHostImpl*,
@@ -941,6 +946,8 @@ class CONTENT_EXPORT WebContentsImpl
       RenderFrameHost::LifecycleState old_state,
       RenderFrameHost::LifecycleState new_state) override;
   void SetWindowRect(const gfx::Rect& new_bounds) override;
+  void MoveWindowTo(const gfx::Point& origin) override;
+  void ResizeWindowTo(const gfx::Size& size) override;
   void UpdateWindowPreferredSize(RenderFrameHostImpl* render_frame_host,
                                  const gfx::Size& pref_size) override;
   std::vector<RenderFrameHostImpl*>
@@ -990,7 +997,7 @@ class CONTENT_EXPORT WebContentsImpl
   bool ShouldIgnoreInputEvents() override;
   void OnIgnoredUIEvent() override;
   void Activate() override;
-  void ShowCreatedWidget(int process_id,
+  void ShowCreatedWidget(ChildProcessId process_id,
                          int widget_route_id,
                          const gfx::Rect& initial_rect,
                          const gfx::Rect& initial_anchor_rect) override;
@@ -1231,7 +1238,6 @@ class CONTENT_EXPORT WebContentsImpl
   VisibleTimeRequestTrigger& GetVisibleTimeRequestTrigger() final;
   gfx::mojom::DelegatedInkPointRenderer* GetDelegatedInkRenderer(
       ui::Compositor* compositor) override;
-  void OnInputIgnored(const blink::WebInputEvent& event) override;
 #if BUILDFLAG(IS_ANDROID)
   gfx::PointF GetCurrentTouchSequenceOffset() override;
 #endif
@@ -1310,6 +1316,7 @@ class CONTENT_EXPORT WebContentsImpl
   void NotifyNavigationListPruned(const PrunedDetails& pruned_details) override;
   void NotifyNavigationEntriesDeleted() override;
   bool ShouldPreserveAbortedURLs() override;
+  BackForwardCacheImpl& GetBackForwardCache() override;
   void NotifyNavigationStateChangedFromController(
       InvalidateTypes changed_flags) override;
 #if BUILDFLAG(IS_ANDROID)
@@ -1673,6 +1680,10 @@ class CONTENT_EXPORT WebContentsImpl
   friend class TestWCDelegateForDialogsAndFullscreen;
 
   FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest, CaptureHoldsWakeLock);
+  FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest,
+                           OnColorProviderChangedNoOpDuringDestruction);
+  FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest,
+                           OnNativeThemeUpdatedNoOpDuringDestruction);
   FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest, NoJSMessageOnInterstitials);
   FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest, UpdateTitle);
   FRIEND_TEST_ALL_PREFIXES(WebContentsImplTest, FindOpenerRVHWhenPending);
@@ -2026,12 +2037,13 @@ class CONTENT_EXPORT WebContentsImpl
 
   // Finds the new RenderWidgetHost and returns it. Note that this can only be
   // called once as this call also removes it from the internal map.
-  RenderWidgetHostView* GetCreatedWidget(int process_id, int route_id);
+  RenderWidgetHostView* GetCreatedWidget(ChildProcessId process_id,
+                                         int route_id);
 
   // Finds the new CreatedWindow by |main_frame_widget_route_id|, initializes
   // it for renderer-initiated creation, and returns it. Note that this can only
   // be called once as this call also removes it from the internal map.
-  std::optional<CreatedWindow> GetCreatedWindow(int process_id,
+  std::optional<CreatedWindow> GetCreatedWindow(ChildProcessId process_id,
                                                 int main_frame_widget_route_id);
 
   // Execute a PageBroadcast Mojo method.
@@ -2346,6 +2358,12 @@ class CONTENT_EXPORT WebContentsImpl
 
   // Contains information about the WebContents tree structure.
   WebContentsTreeNode node_;
+
+  // BackForwardCache:
+  //
+  // Stores frozen RenderFrameHost. Restores them on history navigation.
+  // See BackForwardCache class documentation.
+  std::unique_ptr<BackForwardCacheImpl> back_forward_cache_;
 
   // Primary FrameTree of this WebContents instance. This WebContents might have
   // additional FrameTrees for features like prerendering and fenced frames,
@@ -2821,7 +2839,7 @@ class CONTENT_EXPORT WebContentsImpl
   std::optional<DragId> active_drag_id_;
 
   const UniqueToken web_contents_token_;
-  std::optional<base::trace_event::TrackRegistration<perfetto::NamedTrack>>
+  std::optional<base::trace_event::TrackRegistration<perfetto::StateTrack>>
       tracing_track_;
 
   void EmitTracingSlice(const std::string& name);

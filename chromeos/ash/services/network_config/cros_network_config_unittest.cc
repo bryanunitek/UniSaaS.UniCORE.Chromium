@@ -14,6 +14,7 @@
 #include "base/json/json_reader.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
@@ -63,9 +64,9 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/proxy_config/pref_proxy_config_tracker_impl.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
+#include "components/session_manager/test/test_user_session_manager.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
 #include "net/base/ip_address.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
@@ -113,8 +114,6 @@ constexpr char kTestApnCellularShillDictFmt[] =
             "Cellular.ActivationState": "activated", "Cellular.ICCID": "%s",
             "Profile": "%s", "Cellular.LastGoodAPN": %s})";
 
-static const re2::RE2 kApnIdRegex("[0-9a-fA-F]{32}");
-
 // Escaped twice, as it will be embedded as part of a JSON string, which should
 // have a single level of escapes still present.
 const char kOpenVPNTLSAuthContents[] =
@@ -161,6 +160,11 @@ struct ApnHistogramCounts {
   size_t num_disable_type_attach = 0u;
   size_t num_disable_type_default_and_attach = 0u;
 };
+
+const re2::RE2& GetApnIdRegex() {
+  static const base::NoDestructor<re2::RE2> regex("[0-9a-fA-F]{32}");
+  return *regex;
+}
 
 void CompareTrafficCounters(
     const std::vector<mojom::TrafficCounterPtr>& actual_traffic_counters,
@@ -238,7 +242,7 @@ mojom::ConfigPropertiesPtr CreateFakeVpnConfig(std::string name,
 
 bool OncApnHasId(const base::DictValue& apn) {
   if (const std::string* id = apn.FindString(::onc::cellular_apn::kId)) {
-    return re2::RE2::FullMatch(*id, kApnIdRegex);
+    return re2::RE2::FullMatch(*id, GetApnIdRegex());
   }
   return false;
 }
@@ -269,20 +273,27 @@ bool MojoApnHasId(const mojom::ApnPropertiesPtr& apn) {
   if (!apn->id.has_value()) {
     return false;
   }
-  return re2::RE2::FullMatch(*apn->id, kApnIdRegex);
+  return re2::RE2::FullMatch(*apn->id, GetApnIdRegex());
 }
 
 }  // namespace
 
 class CrosNetworkConfigTest : public testing::Test {
  public:
-  CrosNetworkConfigTest() {
+  CrosNetworkConfigTest() = default;
+  CrosNetworkConfigTest(const CrosNetworkConfigTest&) = delete;
+  CrosNetworkConfigTest& operator=(const CrosNetworkConfigTest&) = delete;
+  ~CrosNetworkConfigTest() override = default;
+
+  void SetUp() override {
     // TODO(b/278643115) Remove LoginState dependency.
     LoginState::Initialize();
     SystemTokenCertDbStorage::Initialize();
 
-    scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
-        std::make_unique<user_manager::FakeUserManager>());
+    ash::test::TestUserSessionManager::RegisterLocalStatePrefs(
+        local_state_.registry());
+    test_user_session_manager_ =
+        std::make_unique<ash::test::TestUserSessionManager>(&local_state_);
 
     NetworkCertLoader::Initialize();
     helper_ = std::make_unique<NetworkHandlerTestHelper>();
@@ -300,19 +311,16 @@ class CrosNetworkConfigTest : public testing::Test {
     SetupNetworkConfig(network_handler);
   }
 
-  CrosNetworkConfigTest(const CrosNetworkConfigTest&) = delete;
-  CrosNetworkConfigTest& operator=(const CrosNetworkConfigTest&) = delete;
-
-  ~CrosNetworkConfigTest() override {
+  void TearDown() override {
     carrier_lock_manager_.reset();
-    cros_network_config_test_helper_.reset();
     cros_network_config_.reset();
+    cros_network_config_test_helper_.reset();
     helper_.reset();
     if (traffic_counters::TrafficCountersHandler::IsInitialized()) {
       traffic_counters::TrafficCountersHandler::Shutdown();
     }
     NetworkCertLoader::Shutdown();
-    scoped_user_manager_.reset();
+    test_user_session_manager_.reset();
     SystemTokenCertDbStorage::Shutdown();
     LoginState::Shutdown();
   }
@@ -1284,11 +1292,11 @@ class CrosNetworkConfigTest : public testing::Test {
 
  private:
   base::test::SingleThreadTaskEnvironment task_environment_;
-  std::unique_ptr<NetworkHandlerTestHelper> helper_;
   TestingPrefServiceSimple local_state_;
-  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
-  std::unique_ptr<CrosNetworkConfig> cros_network_config_;
+  std::unique_ptr<ash::test::TestUserSessionManager> test_user_session_manager_;
+  std::unique_ptr<NetworkHandlerTestHelper> helper_;
   std::unique_ptr<CrosNetworkConfigTestHelper> cros_network_config_test_helper_;
+  std::unique_ptr<CrosNetworkConfig> cros_network_config_;
   std::unique_ptr<CrosNetworkConfigTestObserver> observer_;
   std::unique_ptr<carrier_lock::CarrierLockManager> carrier_lock_manager_;
   std::unique_ptr<FakeNetwork3gppHandler> fake_modem_handler_;

@@ -22,6 +22,7 @@
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/send_tab_to_self/features.h"
+#include "components/send_tab_to_self/metrics_util.h"
 #include "components/send_tab_to_self/send_tab_to_self_model.h"
 #include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
 #include "components/sync_device_info/device_info.h"
@@ -32,8 +33,6 @@
 namespace send_tab_to_self {
 
 namespace {
-
-constexpr size_t kMaxDevices = 5;
 
 static_assert(IDC_CONTENT_CONTEXT_SEND_TAB_TO_SELF_DEVICE_LAST -
                       IDC_CONTENT_CONTEXT_SEND_TAB_TO_SELF_DEVICE1 + 1 ==
@@ -65,7 +64,7 @@ void OnSendTabToDeviceComplete(base::WeakPtr<content::WebContents> web_contents,
     case SendTabToSelfResult::kFailureEntryRemoved:
     case SendTabToSelfResult::kFailureCommitTimeout:
     case SendTabToSelfResult::kFailureNoInternetConnection:
-      ShowTabSentFailure(web_contents.get(), result);
+      ShowTabSentFailure(web_contents.get(), result, GURL());
       break;
   }
 }
@@ -73,9 +72,11 @@ void OnSendTabToDeviceComplete(base::WeakPtr<content::WebContents> web_contents,
 }  // namespace
 
 SendTabToSelfContextMenuDelegate::SendTabToSelfContextMenuDelegate(
-    content::WebContents* web_contents)
+    content::WebContents* web_contents,
+    ShareEntryPoint entry_point)
     : web_contents_(web_contents ? web_contents->GetWeakPtr() : nullptr),
-      devices_(GetDevicesForDisplay()) {}
+      devices_(GetDevicesForDisplay()),
+      entry_point_(entry_point) {}
 
 SendTabToSelfContextMenuDelegate::~SendTabToSelfContextMenuDelegate() = default;
 
@@ -168,7 +169,12 @@ void SendTabToSelfContextMenuDelegate::ExecuteCommand(int command_id,
 
     UserEducationService::MaybeNotifyNewBadgeFeatureUsed(
         web_contents_->GetBrowserContext(),
-        send_tab_to_self::kSendTabToSelfEnhancedDesktopUI);
+        base::FeatureList::IsEnabled(
+            send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2)
+            ? send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2
+            : send_tab_to_self::kSendTabToSelfEnhancedDesktopUI);
+
+    RecordEntryPointInvoked(entry_point_);
 
     SendTabToSelfPageHandler* handler =
         SendTabToSelfPageHandler::GetOrCreateForWebContents(
@@ -178,8 +184,28 @@ void SendTabToSelfContextMenuDelegate::ExecuteCommand(int command_id,
         base::UTF16ToUTF8(web_contents_->GetTitle()),
         base::BindOnce(&OnSendTabToDeviceComplete, web_contents_,
                        devices_[device_index].device_name,
-                       devices_[device_index].form_factor));
+                       devices_[device_index].form_factor),
+        entry_point_);
   }
+}
+
+void SendTabToSelfContextMenuDelegate::OnMenuWillShow(
+    ui::SimpleMenuModel* source) {
+  if (!web_contents_) {
+    return;
+  }
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+  SendTabToSelfSyncService* service =
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile);
+  if (!service) {
+    return;
+  }
+
+  size_t device_count =
+      service->GetSendTabToSelfModel()->GetTargetDeviceInfoSortedList().size();
+  RecordTargetDeviceCount(entry_point_, EntryPointDisplayReason::kOfferFeature,
+                          device_count);
 }
 
 }  // namespace send_tab_to_self

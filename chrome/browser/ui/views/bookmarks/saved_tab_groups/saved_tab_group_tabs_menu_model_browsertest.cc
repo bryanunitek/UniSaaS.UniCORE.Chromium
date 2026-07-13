@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_tabs_menu_model.h"
 
-#include <memory>
 #include <optional>
 #include <string>
 
@@ -63,7 +62,7 @@ class SavedTabGroupTabsMenuModelBrowserTest : public InProcessBrowserTest {
 
  protected:
   TabGroupSyncService* GetSyncService() {
-    return TabGroupSyncServiceFactory::GetForProfile(browser()->profile());
+    return TabGroupSyncServiceFactory::GetForProfile(browser()->GetProfile());
   }
 
   base::test::ScopedFeatureList feature_list_;

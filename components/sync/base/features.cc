@@ -39,6 +39,9 @@ BASE_FEATURE(kSyncContextualTask, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncGeminiThread, base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kSyncEncryptedTabContextContainer,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kSyncThemesIos, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kNewTabPageCustomizationThemeSync,
@@ -92,7 +95,12 @@ BASE_FEATURE(kReplaceSyncPromosWithSignInPromos,
 );
 
 BASE_FEATURE(kReplaceSyncPromosWithSigninPromosNewSignin,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
 
 bool IsReplaceSyncPromosWithSignInPromosEnabled() {
   return base::FeatureList::IsEnabled(kReplaceSyncPromosWithSignInPromos) ||
@@ -100,8 +108,6 @@ bool IsReplaceSyncPromosWithSignInPromosEnabled() {
              kReplaceSyncPromosWithSigninPromosNewSignin);
 }
 
-BASE_FEATURE(kSyncSupportAlwaysSyncingPriorityPreferences,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncWalletFlightReservations,
              IS_AUTOFILL_AI_PLATFORM ? base::FEATURE_ENABLED_BY_DEFAULT
@@ -113,12 +119,6 @@ BASE_FEATURE(kSyncWalletVehicleRegistrations,
 
 BASE_FEATURE(kSpellcheckSeparateLocalAndAccountDictionaries,
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kEnableBookmarksSelectedTypeOnSigninForTesting,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kSearchEngineAvoidFaviconOnlyCommits,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 BASE_FEATURE(kReadingListEnableSyncTransportModeUponSignIn,
@@ -204,14 +204,14 @@ BASE_FEATURE(kSyncDeviceInfoUseWallClockTimer,
 BASE_FEATURE(kSyncValidateAccessToken, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSyncInvalidationsBypassScheduler,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_ANDROID)
 BASE_FEATURE(kSyncSearchEnginesAndroidLFF, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kAlwaysRegisterSessionsInvalidationsAndroid,
              base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kSyncUploadAndroidBuildFingerprintPrefix,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -220,6 +220,11 @@ BASE_FEATURE(kEstimateNewSignInUsersWithFinchAvailablePopulation,
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 BASE_FEATURE(kSyncFixWebSigninSessionDurationForShortLivedSessions,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSyncSimplifyDeviceNaming, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSyncUseServerDeterminedDeviceName,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace syncer

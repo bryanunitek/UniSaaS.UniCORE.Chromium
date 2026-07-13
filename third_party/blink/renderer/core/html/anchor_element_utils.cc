@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/space_split_string.h"
+#include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -63,6 +64,11 @@ bool ShouldInterveneDownloadByFramePolicy(LocalFrame* frame) {
                         WebFeature::kDownloadInAdFrameWithoutUserGesture);
       should_intervene_download = true;
     }
+  } else if (frame->IsAdScriptInStack()) {
+    // We only record kDownloadFromAdScript if kDownloadInAdFrame is not set.
+    // This avoids double counting and makes it easier to isolate the impact
+    // of ad scripts.
+    UseCounter::Count(document, WebFeature::kDownloadFromAdScript);
   }
   if (frame->DomWindow()->IsSandboxed(
           network::mojom::blink::WebSandboxFlags::kDownloads)) {
@@ -250,6 +256,16 @@ void AnchorElementUtils::HandleReferrerPolicyAttribute(
                       WebFeature::kHTMLAnchorElementReferrerPolicyAttribute);
     request.SetReferrerPolicy(policy);
   }
+}
+
+bool AnchorElementUtils::IsLinkClick(Event& event) {
+  auto* mouse_event = DynamicTo<MouseEvent>(event);
+  if ((event.type() != event_type_names::kClick &&
+       event.type() != event_type_names::kAuxclick) ||
+      !mouse_event) {
+    return false;
+  }
+  return mouse_event->IsLinkClickButton();
 }
 
 void AnchorElementUtils::EnforceBlobUrlNoopenerIfNeeded(

@@ -153,17 +153,19 @@ bool ShouldCacheResultTypeInContext(const ResultType result_type,
   switch (result_type) {
     case ResultType::kRemoteNoURL:
       // Only cache results for the NTP realbox if there is no contextual input.
-      if (omnibox::IsNTPRealbox(page_class)) {
+      if (page_class == OEP::NTP_REALBOX) {
         return !has_contextual_input;
       }
       // Composebox requests can't have contextual inputs and must not have any
-      // tools enabled to use stored response.
+      // tools or suggest inventory enabled to use stored response.
       if (omnibox::IsNTPComposebox(page_class)) {
         return base::FeatureList::IsEnabled(
                    omnibox::kZeroSuggestPrefetchingForComposebox) &&
                !has_contextual_input &&
                input_state.active_tool ==
-                   omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
+                   omnibox::ToolMode::TOOL_MODE_UNSPECIFIED &&
+               input.suggest_inventory() ==
+                   omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT;
       }
       // All other composebox's should not be using cached zps results.
       return !(omnibox::IsLensSearchbox(page_class) ||
@@ -405,8 +407,7 @@ void MaybeAddContextualSuggestParams(
       if (!input.context_tab_url().is_empty()) {
         search_terms_args.current_page_url = input.context_tab_url().spec();
       }
-    } else if (search_terms_args.page_classification ==
-                   metrics::OmniboxEventProto::NTP_COMPOSEBOX &&
+    } else if (search_terms_args.page_classification == OEP::NTP_COMPOSEBOX &&
                !client->IsPersonalizedUrlDataCollectionActive() &&
                !input.context_tab_title().empty()) {
       // Set `lens_overlay_suggest_inputs` when history sync is disabled, but
@@ -543,8 +544,7 @@ void ZeroSuggestProvider::StartPrefetch(const AutocompleteInput& input) {
 
   // Make a composebox prefetch request when the NTP zero suggest prefetch is
   // requested.
-  if (input.current_page_classification() ==
-          metrics::OmniboxEventProto::NTP_ZPS_PREFETCH &&
+  if (input.current_page_classification() == OEP::NTP_ZPS_PREFETCH &&
       base::FeatureList::IsEnabled(
           omnibox::kZeroSuggestPrefetchingForComposebox)) {
     if (base::FeatureList::IsEnabled(omnibox::kZeroSuggestPrefetchDebouncing)) {
@@ -631,19 +631,17 @@ void ZeroSuggestProvider::RunComposeboxPrefetch(
   }
 
   TemplateURLRef::SearchTermsArgs search_terms_args;
-  search_terms_args.page_classification =
-      metrics::OmniboxEventProto::NTP_COMPOSEBOX_PREFETCH;
-  search_terms_args.request_source =
-      TemplateURLRef::RequestSource::NTP_COMPOSEBOX;
+  search_terms_args.page_classification = OEP::NTP_COMPOSEBOX_PREFETCH;
+  search_terms_args.request_source = TemplateURLRef::RequestSource::COMPOSEBOX;
   search_terms_args.focus_type = input.focus_type();
   search_terms_args.current_page_url = std::string();
   search_terms_args.lens_overlay_suggest_inputs =
       input.lens_overlay_suggest_inputs();
   search_terms_args.input_state = input.input_state();
+  search_terms_args.suggest_inventory = input.suggest_inventory();
 
-  AutocompleteInput composebox_input(
-      input.text(), metrics::OmniboxEventProto::NTP_COMPOSEBOX_PREFETCH,
-      client()->GetSchemeClassifier());
+  AutocompleteInput composebox_input(input.text(), OEP::NTP_COMPOSEBOX_PREFETCH,
+                                     client()->GetSchemeClassifier());
   composebox_input.set_current_url(input.current_url());
   composebox_input.set_current_title(input.current_title());
   composebox_input.set_focus_type(input.focus_type());
@@ -694,6 +692,7 @@ void ZeroSuggestProvider::Start(const AutocompleteInput& input,
   search_terms_args.lens_overlay_suggest_inputs =
       input.lens_overlay_suggest_inputs();
   search_terms_args.input_state = input.input_state();
+  search_terms_args.suggest_inventory = input.suggest_inventory();
 
   MaybeAddContextualSuggestParams(client(), input, search_terms_args);
 
@@ -826,8 +825,7 @@ void ZeroSuggestProvider::OnURLLoadComplete(
   // The Contextual Search in Omnibox experience, which is only active on Web
   // page context, intentionally updates the cache with latest received results,
   // but does not publish the matches asynchronously.
-  if (input.current_page_classification() ==
-          metrics::OmniboxEventProto::OTHER &&
+  if (input.current_page_classification() == OEP::OTHER &&
       omnibox_feature_configs::ContextualSearch::Get()
           .IsEnabledWithPrefetch()) {
     return;
@@ -885,8 +883,7 @@ void ZeroSuggestProvider::OnPrefetchURLLoadComplete(
     // is essentially a no-op in this case.
     if (!client()->in_background_state() &&
         !(OmniboxFieldTrial::kZeroSuggestPrefetchingOnSRPCounterfactual.Get() &&
-          input.current_page_classification() ==
-              metrics::OmniboxEventProto::SRP_ZPS_PREFETCH &&
+          input.current_page_classification() == OEP::SRP_ZPS_PREFETCH &&
           result_type == ResultType::kRemoteSendURL)) {
       SearchSuggestionParser::Results unused_results;
       StoreRemoteResponse(SearchSuggestionParser::ExtractJsonData(

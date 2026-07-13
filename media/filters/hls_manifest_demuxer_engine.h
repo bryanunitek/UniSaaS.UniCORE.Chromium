@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
@@ -44,6 +45,7 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
                            scoped_refptr<base::SequencedTaskRunner> task_runner,
                            std::unique_ptr<TrackManager> track_manager,
                            bool was_already_tainted,
+                           url::Origin security_origin,
                            GURL root_playlist_uri,
                            MediaLog* media_log);
   ~HlsManifestDemuxerEngine() override;
@@ -69,8 +71,8 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
 
   void SelectVideoTrack(const MediaTrack::Id&) override;
   void SelectAudioTrack(const MediaTrack::Id&) override;
-  std::vector<DemuxerStream*> FilterDemuxerStreams(
-      std::vector<DemuxerStream*>&&) override;
+  std::vector<raw_ptr<DemuxerStream>> FilterDemuxerStreams(
+      std::vector<raw_ptr<DemuxerStream>>&&) override;
 
   // HlsRenditionHost implementation.
   void ReadMediaSegment(const hls::MediaSegment& segment,
@@ -177,7 +179,6 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
                   base::TimeDelta delay_time);
   void UpdateMediaPlaylistForRole(
       std::string role,
-      GURL uri,
       HlsDemuxerStatusCallback cb,
       HlsDataSourceProvider::ReadResult maybe_stream);
 
@@ -216,10 +217,8 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
 
   // Capture the stream before it gets posted to `cb` and update the internal
   // memory state and origin tainting.
-  void UpdateHlsDataSourceStats(
-      HlsDataSourceProvider::ReadCb cb,
-      HlsDataSourceProvider::ReadStatus::Or<
-          std::unique_ptr<HlsDataSourceStream>> result);
+  void UpdateHlsDataSourceStats(HlsDataSourceProvider::ReadCb cb,
+                                HlsDataSourceProvider::ReadResult result);
 
   // Helper to bind `UpdateHlsDataSourceStats` around a response CB.
   HlsDataSourceProvider::ReadCb BindStatsUpdate(
@@ -277,11 +276,17 @@ class MEDIA_EXPORT HlsManifestDemuxerEngine : public ManifestDemuxer::Engine,
   hls::ParseStatus::Or<scoped_refptr<hls::MediaPlaylist>>
   ParseMediaPlaylistFromStringSource(std::string_view source,
                                      GURL uri,
+                                     const url::Origin& manifest_origin,
                                      hls::types::DecimalInteger version);
 
   scoped_refptr<base::SequencedTaskRunner> media_task_runner_;
   std::unique_ptr<TrackManager> track_manager_
       GUARDED_BY_CONTEXT(media_sequence_checker_);
+
+  // The security origin of the frame in which the player is hosted. For
+  // manifests that are loaded via data urls, the frame security origin becomes
+  // the manifest security origin.
+  url::Origin security_origin_;
 
   // root playlist, either multivariant or media.
   GURL root_playlist_uri_;

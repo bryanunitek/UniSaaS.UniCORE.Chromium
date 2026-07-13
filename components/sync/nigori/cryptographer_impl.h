@@ -10,10 +10,11 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "components/sync/engine/cryptographer.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
 #include "components/sync/nigori/cross_user_sharing_keys.h"
 #include "components/sync/nigori/cross_user_sharing_public_private_key_pair.h"
-#include "components/sync/nigori/key_derivation_params.h"
 #include "components/sync/nigori/nigori_key_bag.h"
 
 namespace sync_pb {
@@ -78,8 +79,8 @@ class CryptographerImpl : public Cryptographer {
 
   // Adds the given Public-private key-pair associated with `version`. Replaces
   // any pre-existing key pair for the given version if exists.
-  void SetKeyPair(CrossUserSharingPublicPrivateKeyPair key_pair,
-                  uint32_t version);
+  void SetCrossUserSharingKeyPair(CrossUserSharingPublicPrivateKeyPair key_pair,
+                                  uint32_t version);
 
   // Sets or changes the default encryption key, which causes CanEncrypt() to
   // return true. `key_name` must not be empty and must represent a known key.
@@ -105,10 +106,10 @@ class CryptographerImpl : public Cryptographer {
 
   // Determines whether `key_pair_version` represents a known Public-private
   // key-pair.
-  bool HasKeyPair(uint32_t key_pair_version) const;
+  bool HasCrossUserSharingKeyPair(uint32_t key_pair_version) const;
 
   // Returns the number of generated key pairs.
-  size_t KeyPairSizeForMetrics() const;
+  size_t CrossUserSharingKeyPairSizeForMetrics() const;
 
   // Returns a key pair for a given `version`. The key pair with the given
   // `version` must exist.

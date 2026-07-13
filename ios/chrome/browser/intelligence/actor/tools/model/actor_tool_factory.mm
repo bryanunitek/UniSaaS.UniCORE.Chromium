@@ -6,12 +6,14 @@
 
 #import "components/optimization_guide/proto/features/actions_data.pb.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/actor_tool.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/attempt_login_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/click_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/history_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/navigate_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/scroll_to_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/scroll_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/select_tool.h"
+#import "ios/chrome/browser/intelligence/actor/tools/model/tab_management_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/type_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/model/wait_tool.h"
 #import "ios/chrome/browser/intelligence/actor/tools/public/actor_tool_types.h"
@@ -19,31 +21,45 @@
 
 namespace actor {
 
-ActorToolFactory::ActorToolFactory(ProfileIOS* profile) : profile_(profile) {}
+ActorToolFactory::ActorToolFactory(ProfileIOS* profile)
+    : profile_context_resolver_(profile) {}
 ActorToolFactory::~ActorToolFactory() = default;
 
 base::expected<std::unique_ptr<ActorTool>, ToolExecutionResult>
-ActorToolFactory::CreateTool(const optimization_guide::proto::Action& action) {
+ActorToolFactory::CreateTool(const optimization_guide::proto::Action& action,
+                             ToolDelegate* tool_delegate) {
+  if (IsToolDisabled(action.action_case())) {
+    return base::unexpected(
+        ToolExecutionResult(InternalToolErrorCode::kToolDisabledByFeature));
+  }
+
   // LINT.IfChange(CreateTool)
   switch (action.action_case()) {
     case optimization_guide::proto::Action::kNavigate:
-      return NavigateTool::Create(action.navigate(), profile_);
+      return NavigateTool::Create(action.navigate(), profile_context_resolver_);
     case optimization_guide::proto::Action::kClick:
-      return ClickTool::Create(action.click(), profile_);
+      return ClickTool::Create(action.click(), profile_context_resolver_);
     case optimization_guide::proto::Action::kBack:
-      return HistoryTool::Create(action.back(), profile_);
+      return HistoryTool::Create(action.back(), profile_context_resolver_);
     case optimization_guide::proto::Action::kForward:
-      return HistoryTool::Create(action.forward(), profile_);
+      return HistoryTool::Create(action.forward(), profile_context_resolver_);
     case optimization_guide::proto::Action::kSelect:
-      return SelectTool::Create(action.select(), profile_);
+      return SelectTool::Create(action.select(), profile_context_resolver_);
     case optimization_guide::proto::Action::kType:
-      return TypeTool::Create(action.type(), profile_);
+      return TypeTool::Create(action.type(), profile_context_resolver_);
     case optimization_guide::proto::Action::kWait:
-      return WaitTool::Create(action.wait(), profile_);
+      return WaitTool::Create(action.wait(), profile_context_resolver_);
     case optimization_guide::proto::Action::kScroll:
-      return ScrollTool::Create(action.scroll(), profile_);
+      return ScrollTool::Create(action.scroll(), profile_context_resolver_);
     case optimization_guide::proto::Action::kScrollTo:
-      return ScrollToTool::Create(action.scroll_to(), profile_);
+      return ScrollToTool::Create(action.scroll_to(),
+                                  profile_context_resolver_);
+    case optimization_guide::proto::Action::kAttemptLogin:
+      return AttemptLoginTool::Create(action.attempt_login(), tool_delegate,
+                                      profile_context_resolver_);
+    case optimization_guide::proto::Action::kCloseTab:
+      return TabManagementTool::CreateCloseTabTool(action.close_tab(),
+                                                   profile_context_resolver_);
     default:
       return base::unexpected(
           ToolExecutionResult(InternalToolErrorCode::kUnsupportedAction));
@@ -69,6 +85,8 @@ ActorToolFactory::GetSupportedCapabilities() const {
       optimization_guide::proto::Action::kScroll,
       optimization_guide::proto::Action::kScrollTo,
       optimization_guide::proto::Action::kSelect,
+      optimization_guide::proto::Action::kAttemptLogin,
+      optimization_guide::proto::Action::kCloseTab,
   };
   // LINT.ThenChange(//ios/chrome/browser/intelligence/actor/tools/model/actor_tool_factory.mm:CreateTool)
 

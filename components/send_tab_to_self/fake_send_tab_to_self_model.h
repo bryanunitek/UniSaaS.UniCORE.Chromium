@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,16 +36,20 @@ class FakeSendTabToSelfModel final : public SendTabToSelfModel {
       std::string_view guid) const override;
   std::vector<const SendTabToSelfEntry*>
   GetUnopenedEntriesTargetedToLocalDevice() const override;
+  std::vector<const SendTabToSelfEntry*> GetOpenedEntriesTargetedToLocalDevice()
+      const override;
   const SendTabToSelfEntry* SendEntry(
       const GURL& url,
       const std::string& title,
       const std::string& target_device_cache_guid,
       const PageContext& context,
       NavigationHistory navigation_history,
-      base::OnceCallback<void(SendTabToSelfResult)> commit_confirmation)
-      override;
+      base::OnceCallback<void(SendTabToSelfResult)> commit_confirmation,
+      ShareEntryPoint entry_point) override;
   void DismissEntry(std::string_view guid) override;
   void MarkEntryOpened(std::string_view guid) override;
+  void MarkEntryActivated(std::string_view guid,
+                          ShareActivatedEntryPoint entry_point) override;
   bool IsReady() override;
   bool HasValidTargetDevice() override;
   std::vector<TargetDeviceInfo> GetTargetDeviceInfoSortedList() override;
@@ -65,13 +70,29 @@ class FakeSendTabToSelfModel final : public SendTabToSelfModel {
       base::RepeatingCallback<void(const SendTabToSelfEntry*)>;
   void SetSendEntryCallback(SendEntryCallback callback);
 
+  struct RemoteEntryParams {
+    GURL url;
+    std::string title;
+    std::string target_device_cache_guid;
+    PageContext context = PageContext();
+    NavigationHistory navigation_history = {};
+    base::Time shared_time = base::Time();
+  };
+
   // Simulates an entry being added from a remote device.
+  // TODO(crbug.com/488072250): Optionally, use RemoteEntryParams instead of
+  // individual parameters, or an overload that does.
   const SendTabToSelfEntry* AddEntryRemotely(
       const GURL& url,
       const std::string& title,
       const std::string& target_device_cache_guid,
       const PageContext& context,
       NavigationHistory navigation_history);
+
+  // Simulates multiple entries being added from a remote device in a single
+  // batch.
+  std::vector<const SendTabToSelfEntry*> AddEntriesRemotely(
+      std::vector<RemoteEntryParams> entries_params);
 
   // Simulates an entry being removed from a remote device.
   void RemoveEntryRemotely(const std::string& guid);
@@ -80,6 +101,13 @@ class FakeSendTabToSelfModel final : public SendTabToSelfModel {
   const std::string& last_dismissed_guid() const {
     return last_dismissed_guid_;
   }
+  const std::string& last_activated_guid() const {
+    return last_activated_guid_;
+  }
+  std::optional<ShareActivatedEntryPoint> last_activated_entry_point() const {
+    return last_activated_entry_point_;
+  }
+  int activated_call_count() const { return activated_call_count_; }
 
  private:
   bool is_ready_ = true;
@@ -91,8 +119,13 @@ class FakeSendTabToSelfModel final : public SendTabToSelfModel {
   std::vector<TargetDeviceInfo> devices_;
   std::string last_opened_guid_;
   std::string last_dismissed_guid_;
+  std::string last_activated_guid_;
+  std::optional<ShareActivatedEntryPoint> last_activated_entry_point_;
+  int activated_call_count_ = 0;
   SendEntryCallback send_entry_callback_;
   SendTabToSelfResult send_result_ = SendTabToSelfResult::kSuccess;
+
+  bool is_adding_entries_remotely_ = false;
 };
 
 }  // namespace send_tab_to_self

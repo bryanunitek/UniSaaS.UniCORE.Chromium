@@ -37,8 +37,8 @@ import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
@@ -50,6 +50,7 @@ import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.omnibox.OmniboxFacility;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxFocusReason;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.ViewUtils;
@@ -130,10 +131,8 @@ public class LocationBarLayoutTest {
 
     @Test
     @SmallTest
-    @DisableIf.Device(DeviceFormFactor.DESKTOP)
-    @DisabledTest(message = "crbug.com/519767484")
     public void testDeleteButton() {
-        // Desktop does not show a delete button.
+        OmniboxCapabilities.setHasDesktopExperienceForTesting(false);
         OmniboxFacility omnibox = mPage.openOmnibox();
         omnibox.setText("testing").clickDelete();
 
@@ -321,12 +320,14 @@ public class LocationBarLayoutTest {
     @Restriction({DeviceFormFactor.PHONE})
     @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
     public void testPhoneUrlBarCentering_EnabledAndUnfocused() {
+        UrlBar urlBar = getUrlBar();
+        CriteriaHelper.pollUiThread(
+                () -> urlBar.getVisibility() == View.VISIBLE, "URL bar failed to become visible");
+
         CriteriaHelper.pollUiThread(
                 () -> {
                     LocationBarLayout locationBar = getLocationBar();
                     View statusView = locationBar.findViewById(R.id.location_bar_status);
-                    View urlBar = getUrlBar();
-
                     boolean isStatusVisible = statusView.getVisibility() == View.VISIBLE;
 
                     int leftSpace = isStatusVisible ? statusView.getLeft() : urlBar.getLeft();
@@ -335,11 +336,18 @@ public class LocationBarLayoutTest {
                     return Math.abs(leftSpace - rightSpace) <= LAYOUT_ROUNDING_TOLERANCE_PX;
                 },
                 "URL bar failed to center");
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertFalse(urlBar.isHorizontallyScrollable());
+                    assertEquals(0, urlBar.getScrollX());
+                });
     }
 
     @Test
     @MediumTest
     @Restriction({DeviceFormFactor.PHONE})
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
     public void testPhoneUrlBarCentering_FeatureDisabled() {
         CriteriaHelper.pollUiThread(
                 () -> {
@@ -451,6 +459,9 @@ public class LocationBarLayoutTest {
         View urlBar = getUrlBar();
         View statusView = getLocationBar().findViewById(R.id.location_bar_status);
 
+        CriteriaHelper.pollUiThread(
+                () -> urlBar.getVisibility() == View.VISIBLE, "URL bar failed to become visible");
+
         // Wait for initial centering to apply
         CriteriaHelper.pollUiThread(() -> urlBar.getLeft() != 0, "URL bar failed to layout");
 
@@ -482,6 +493,9 @@ public class LocationBarLayoutTest {
         UrlBar urlBar = getUrlBar();
         LocationBarLayout locationBar = getLocationBar();
 
+        CriteriaHelper.pollUiThread(
+                () -> urlBar.getVisibility() == View.VISIBLE, "URL bar failed to become visible");
+
         // 1. Set short URL
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -502,6 +516,12 @@ public class LocationBarLayoutTest {
                 },
                 "URL bar failed to center for short URL");
 
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertFalse(urlBar.isHorizontallyScrollable());
+                    assertEquals(0, urlBar.getScrollX());
+                });
+
         int initialLeft = urlBar.getLeft();
 
         // 2. Set long URL to force expansion/shifting
@@ -520,6 +540,11 @@ public class LocationBarLayoutTest {
         // Wait for position to change
         CriteriaHelper.pollUiThread(
                 () -> urlBar.getLeft() != initialLeft, "Position should change for long URL");
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    assertTrue(urlBar.isHorizontallyScrollable());
+                });
 
         // 3. Set short URL again
         ThreadUtils.runOnUiThreadBlocking(

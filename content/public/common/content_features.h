@@ -27,6 +27,7 @@ namespace features {
 // All features in alphabetical order. The features should be documented
 // alongside the definition of their values in the .cc file.
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAbortNavigationsFromTabClosures);
+
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAndroidCaptureKeyEvents);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAndroidDevToolsFrontend);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(
@@ -75,7 +76,6 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(kArtificialUIDelay);
 CONTENT_EXPORT BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kInitialWebUIDelayDuration);
 CONTENT_EXPORT BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kViewsUIDelayDuration);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAttachUnownedInnerWebContents);
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kAudioServiceLaunchOnStartup);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAudioServiceOutOfProcess);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kAudioServiceSandbox);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kBackgroundFetch);
@@ -103,6 +103,8 @@ inline constexpr const char kChildProcessSecurityPolicyRustPolicyRustOnly[] =
 inline constexpr const char kChildProcessSecurityPolicyRustPolicyRustAndCpp[] =
     "rust-and-cpp";
 CONTENT_EXPORT BASE_DECLARE_FEATURE(
+    kChildProcessSecurityPolicyRustProcessState);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(
     kClearCrossSiteCrossBrowsingContextGroupWindowName);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kCompositeBGColorAnimation);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kDeferSpeculativeRFHCreation);
@@ -112,6 +114,8 @@ CONTENT_EXPORT extern const base::FeatureParam<bool>
     kCreateSpeculativeRFHFilterRestore;
 CONTENT_EXPORT extern const base::FeatureParam<int>
     kCreateSpeculativeRFHDelayMs;
+// Allows full debugging of Top Chrome Webium in devtools.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kDebugTopChromeWebUI);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(
     kDeviceBoundSessionTerminationEvictBackForwardCache);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kDevToolsLiveEdit);
@@ -152,6 +156,7 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(kFedCmWebIdentitySubdomain);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kFedCmWithoutWellKnownEnforcement);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kFencedFramesEnforceFocus);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kFedCmNavigationInterception);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kFedCmNativeIdPs);
 #if BUILDFLAG(IS_ANDROID)
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kFluidResize);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(
@@ -172,7 +177,7 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE_PARAM(bool,
                                           kInitialWebUIHighStreamPriority);
 CONTENT_EXPORT BASE_DECLARE_FEATURE_PARAM(bool, kInitialWebUIWithoutSpellCheck);
 CONTENT_EXPORT BASE_DECLARE_FEATURE_PARAM(bool, kInitialWebUIWithoutTranslate);
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kInitialWebUISyncNavStartToCommit);
+
 CONTENT_EXPORT BASE_DECLARE_FEATURE_PARAM(std::string,
                                           kIgnoreDuplicateNavsOrigins);
 CONTENT_EXPORT BASE_DECLARE_FEATURE_PARAM(base::TimeDelta,
@@ -236,6 +241,7 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(kNoStatePrefetchHoldback);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kOriginIsolationHeader);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kOverscrollHistoryNavigation);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPeriodicBackgroundSync);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchActivationBeacon);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchOffTheMainThread);
 CONTENT_EXPORT extern const base::FeatureParam<bool>
     kPrefetchOffTheMainThreadUpdateMissingHeaderCache;
@@ -243,9 +249,11 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchPrerenderIntegration);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchProxy);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchRequestStatusListenerAsync);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPreloadingRespectUserAgentOverride);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2FallbackPrefetchSpecRules);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2ReuseHost);
 CONTENT_EXPORT BASE_DECLARE_FEATURE_PARAM(bool,
                                           kPrerender2ReuseSearchResultHost);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerenderActivationBeacon);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPreviewHandwritingGesture);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kFeaturePolicyHeader);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrivacySandboxAdsAPIsOverride);
@@ -305,8 +313,6 @@ CONTENT_EXPORT BASE_DECLARE_FEATURE(kServiceWorkerAutoPreload);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kServiceWorkerInterceptDownloads);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(
     kOptimizeWebRequestProxyForServiceWorkerAutoPreload);
-CONTENT_EXPORT BASE_DECLARE_FEATURE(
-    kServiceWorkerStaticRouterRaceNetworkRequestPerformanceImprovement);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kUserMediaCaptureOnFocus);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kWebLockScreenApi);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kWebOTP);

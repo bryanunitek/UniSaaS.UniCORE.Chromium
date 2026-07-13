@@ -8,20 +8,30 @@
 #include <memory>
 
 #include "base/notimplemented.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/supports_user_data.h"
+#include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
+#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_util.h"
 #include "chrome/browser/ui/views/location_bar/webui_location_bar.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_closer.h"
 #include "chrome/browser/ui/webui/webui_toolbar/browser_controls_service.h"
+#include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_drag_state.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
+#include "components/omnibox/browser/omnibox_text_util.h"
 #include "content/public/browser/web_contents.h"
 #include "net/cert/cert_status_flags.h"
+#include "third_party/blink/public/common/context_menu_data/edit_flags.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
+#include "ui/menus/simple_menu_model.h"
+#include "ui/touch_selection/touch_editing_controller.h"
 
 namespace {
 
@@ -48,9 +58,12 @@ OmniboxState::~OmniboxState() = default;
 
 WebUIReadOnlyOmnibox::UpdatePropagator::~UpdatePropagator() = default;
 
-WebUIReadOnlyOmnibox::WebUIReadOnlyOmnibox(OmniboxController* controller,
+WebUIReadOnlyOmnibox::WebUIReadOnlyOmnibox(LocationBar* location_bar,
+                                           OmniboxController* controller,
                                            UpdatePropagator& update_propagator)
     : OmniboxView(controller),
+      OmniboxContextMenuMixin<ui::SimpleMenuModel::Delegate>(location_bar,
+                                                             controller),
       update_propagator_(update_propagator),
       selection_(gfx::Range::InvalidRange()) {}
 
@@ -92,7 +105,27 @@ WebUIReadOnlyOmnibox::OnOmniboxAction(
 
     case toolbar_ui_api::mojom::OmniboxAction::Tag::kKey:
       return OnKey(*action->get_key());
+
+    case toolbar_ui_api::mojom::OmniboxAction::Tag::kMouse:
+      return OnMouse(*action->get_mouse());
+
+    case toolbar_ui_api::mojom::OmniboxAction::Tag::kDropText:
+      return OnDropText(*action->get_drop_text());
+
+    case toolbar_ui_api::mojom::OmniboxAction::Tag::kDropFile:
+      return OnDropFile(*action->get_drop_file());
   }
+}
+
+void WebUIReadOnlyOmnibox::HandleContextMenu(
+    views::Widget* widget,
+    const gfx::Point& point,
+    ui::mojom::MenuSourceType source_type,
+    int edit_flags) {
+  edit_flags_for_context_menu_ = edit_flags;
+  PrepareToShowContextMenu(base::BindOnce(
+      &WebUIReadOnlyOmnibox::OnContextMenuReady, weak_ptr_factory_.GetWeakPtr(),
+      widget, point, source_type));
 }
 
 void WebUIReadOnlyOmnibox::Update() {
@@ -119,10 +152,7 @@ void WebUIReadOnlyOmnibox::SetTextAndSelectedRange(
     const gfx::Range& selection) {
   text_ = text;
   inline_autocompletion_ = inline_autocompletion;
-
-  // The JS side will likely render the inline completion using selection,
-  // but conceptually we're at end of text.
-  selection_ = gfx::Range(text.size());
+  selection_ = selection;
   ResetFormatting();
 }
 
@@ -337,6 +367,33 @@ void WebUIReadOnlyOmnibox::UpdateSchemeStyle(const gfx::Range& range) {
   }
 }
 
+void WebUIReadOnlyOmnibox::ExecuteCommand(int command_id, int event_flags) {
+  NOTIMPLEMENTED() << command_id;
+}
+
+bool WebUIReadOnlyOmnibox::IsContextMenuForReadOnlyOmnibox() const {
+  // TODO(http://crbug.com/470042732): Once WebUILocationBar can be used for
+  // popups, this will need to return true for those.
+  return false;
+}
+
+const gfx::FontList& WebUIReadOnlyOmnibox::FontListForContextMenu() const {
+  const auto& typography_provider = views::TypographyProvider::Get();
+  return typography_provider.GetFont(CONTEXT_OMNIBOX_PRIMARY,
+                                     views::style::STYLE_PRIMARY);
+}
+
+bool WebUIReadOnlyOmnibox::IsContextMenuTextEditingCommandEnabled(
+    int command_id) const {
+  switch (command_id) {
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kPaste):
+      return edit_flags_for_context_menu_ &
+             blink::ContextMenuDataEditFlags::kCanPaste;
+    default:
+      return false;
+  }
+}
+
 toolbar_ui_api::mojom::OmniboxViewStatePtr
 WebUIReadOnlyOmnibox::ComputeMojoState() const {
   auto state = toolbar_ui_api::mojom::OmniboxViewState::New();
@@ -345,9 +402,12 @@ WebUIReadOnlyOmnibox::ComputeMojoState() const {
   if (selection_.IsValid()) {
     state->selection = selection_;
   }
+  state->formatted_full_url = controller()->client()->GetFormattedFullURL();
   state->inline_autocompletion = inline_autocompletion_;
   state->text_is_url = text_is_url_;
   state->additional_text = additional_text_;
+  state->user_input_in_progress =
+      controller()->edit_model()->user_input_in_progress();
 
   // Figure out all the breakpoints so we can go through text span-by-span.
   std::vector<size_t> breakpoints;
@@ -409,10 +469,20 @@ base::expected<std::monostate, mojo_base::mojom::ErrorPtr>
 WebUIReadOnlyOmnibox::OnFocusChange(
     const toolbar_ui_api::mojom::OmniboxActionFocusChange& focus_change) {
   if (focus_change.has_focus) {
+    selection_ = focus_change.selection;
     // TODO(crbug.com/500653057): Key state, though Views impl doesn't have it.
-    // TODO(crbug.com/503784990): May have to call ConsumeCtrlKey() when
-    //   acquiring focus, including via Ctrl-L.
     controller()->edit_model()->OnSetFocus(/*control_down=*/false);
+
+    if (focus_change.request_clear_keyword) {
+      controller()->edit_model()->ClearKeyword();
+    }
+    if (focus_change.start_zero_suggest) {
+      controller()->edit_model()->StartZeroSuggestRequest();
+    }
+    if (focus_change.activate_default_search) {
+      EnterKeywordModeForDefaultSearchProvider();
+    }
+    RequestUpdateWebUI();
   } else {
     controller()->edit_model()->OnWillKillFocus();
     if (auto* popup_closer = controller()->client()->GetOmniboxPopupCloser()) {
@@ -430,7 +500,7 @@ WebUIReadOnlyOmnibox::OnTextInput(
     OnBeforePossibleChange();
     ui_version_ = text_input.ui_version;
     SetTextAndSelectedRange(text_input.text, text_input.inline_autocompletion,
-                            gfx::Range(text_input.text.size()));
+                            text_input.selection);
     OnAfterPossibleChange(/*allow_keyword_ui_change=*/true);
   }
   return base::ok(std::monostate());
@@ -519,6 +589,74 @@ WebUIReadOnlyOmnibox::OnKey(
       break;
   }
   return base::ok(std::monostate());
+}
+
+base::expected<std::monostate, mojo_base::mojom::ErrorPtr>
+WebUIReadOnlyOmnibox::OnMouse(
+    const toolbar_ui_api::mojom::OmniboxActionMouse& mouse) {
+  // Either mouse up or mouse down permit launches.
+  ExternalProtocolHandler::PermitLaunchUrl();
+
+  if (mouse.is_mouse_down) {
+    // Mouse down clears the pseudo-focus the popup has.
+    if (controller()->IsPopupOpen()) {
+      OmniboxPopupSelection selection =
+          controller()->edit_model()->GetPopupSelection();
+      if (selection.state != OmniboxPopupSelection::KEYWORD_MODE) {
+        selection.state = OmniboxPopupSelection::NORMAL;
+        controller()->edit_model()->SetPopupSelection(selection);
+      }
+    }
+  } else {
+    // Mouse up may start zero-suggest.
+    if (mouse.start_zero_suggest) {
+      controller()->edit_model()->StartZeroSuggestRequest();
+    }
+  }
+  return base::ok(std::monostate());
+}
+
+base::expected<std::monostate, mojo_base::mojom::ErrorPtr>
+WebUIReadOnlyOmnibox::OnDropText(
+    const toolbar_ui_api::mojom::OmniboxActionDropText& drop_text) {
+  std::u16string text = omnibox::StripJavascriptSchemas(
+      base::CollapseWhitespace(drop_text.text, true));
+  base::TrimWhitespace(text, base::TRIM_ALL, &text);
+
+  SetUserText(text, /*update_popup=*/false);
+  SelectAll(false);
+  return base::ok(std::monostate());
+}
+
+base::expected<std::monostate, mojo_base::mojom::ErrorPtr>
+WebUIReadOnlyOmnibox::OnDropFile(
+    const toolbar_ui_api::mojom::OmniboxActionDropFile& drop_file) {
+  if (std::optional<GURL> url =
+          update_propagator_->ConsumeDroppedUrl(drop_file.drop_position)) {
+    std::u16string text = base::UTF8ToUTF16(url->spec());
+    if (!text.empty()) {
+      SetUserText(text, /*update_popup=*/false);
+      SelectAll(false);
+    }
+  }
+  return base::ok(std::monostate());
+}
+
+void WebUIReadOnlyOmnibox::OnContextMenuReady(
+    views::Widget* widget,
+    const gfx::Point& point,
+    ui::mojom::MenuSourceType source_type) {
+  menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
+  menu_model_->AddItemWithStringId(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), IDS_PASTE);
+  AddOmniboxSpecificItems(menu_model_.get());
+
+  menu_runner_ = std::make_unique<views::MenuRunner>(
+      menu_model_.get(),
+      views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU);
+  menu_runner_->RunMenuAt(widget, /*button_controller=*/nullptr,
+                          gfx::Rect(point, gfx::Size()),
+                          views::MenuAnchorPosition::kTopLeft, source_type);
 }
 
 ui::DomKey WebUIReadOnlyOmnibox::LookupAndCacheDomKey(

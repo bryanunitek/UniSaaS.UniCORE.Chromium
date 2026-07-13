@@ -308,7 +308,7 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
     backing_->CreateSharedImage(sii, flags, "GpuRasterTile");
     mailbox_needs_clear = true;
     ri_access = backing_->shared_image()->BeginRasterAccess(
-        ri, sii->GenUnverifiedSyncToken(),
+        ri, backing_->shared_image()->creation_sync_token(),
         /*readonly=*/false);
   } else {
     ri_access = backing_->shared_image()->BeginRasterAccess(
@@ -348,7 +348,8 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
       playback_rect, transform.translation(), recording_to_raster_scale,
       raster_source->requires_clear(),
       playback_settings.raster_inducing_scroll_offsets,
-      const_cast<RasterSource*>(raster_source)->max_op_size_hint());
+      const_cast<RasterSource*>(raster_source)->max_op_size_hint(),
+      base::RepeatingCallback<void(SkCanvas*, uint32_t)>());
   ri->EndRasterCHROMIUM();
   backing_->mailbox_sync_token =
       gpu::RasterScopedAccess::EndAccess(std::move(ri_access));

@@ -25,11 +25,12 @@
 #include "components/services/storage/privileged/mojom/indexed_db_client_state_checker.mojom.h"
 #include "components/services/storage/public/mojom/storage_service.mojom-forward.h"
 #include "content/browser/background_sync/background_sync_context_impl.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/content_index/content_index_context_impl.h"
+#include "content/browser/declarative_performance_observer/declarative_performance_observer_store.h"
 #include "content/browser/dom_storage/dom_storage_context_wrapper.h"
 #include "content/browser/locks/lock_manager.h"
 #include "content/browser/notifications/platform_notification_context_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/worker_host/dedicated_worker_service_impl.h"
 #include "content/common/content_export.h"
@@ -492,6 +493,9 @@ class CONTENT_EXPORT StoragePartitionImpl
       const network::OriginatingProcessId& process_id,
       const url::Origin& worker_origin);
 
+  mojo::PendingRemote<network::mojom::URLLoaderNetworkServiceObserver>
+  CreateURLLoaderNetworkObserverForDeviceBoundSessions();
+
   mojo::PendingRemote<network::mojom::DeviceBoundSessionAccessObserver>
   CreateDeviceBoundSessionObserverForServiceWorker();
 
@@ -573,10 +577,16 @@ class CONTENT_EXPORT StoragePartitionImpl
   void DecrementActiveDocumentCount(const net::NetworkIsolationKey& nik);
   int GetActiveDocumentCount(const net::NetworkIsolationKey& nik);
 
+  DeclarativePerformanceObserverStore*
+  GetDeclarativePerformanceObserverStore() {
+    return declarative_performance_observer_store_.get();
+  }
+
   enum class ContextType {
     kRenderFrameHostContext,
     kNavigationRequestContext,
     kSharedOrServiceWorkerContext,
+    kDeviceBoundSessionContext,
   };
 
  private:
@@ -645,16 +655,16 @@ class CONTENT_EXPORT StoragePartitionImpl
     static StoragePartitionImpl::URLLoaderNetworkContext CreateForNavigation(
         NavigationRequest& navigation_request);
 
-    // Used when `type` is `kRenderFrameHostContext`.
-    explicit URLLoaderNetworkContext(
-        GlobalRenderFrameHostId global_render_frame_host_id);
+    // Creates a URLLoaderNetworkContext for the service or shared worker.
+    static StoragePartitionImpl::URLLoaderNetworkContext
+    CreateForServiceOrSharedWorker(
+        const network::OriginatingProcessId& process_id,
+        const url::Origin& worker_origin);
 
-    // Used when `type` is `kSharedOrServiceWorkerContext`.
-    URLLoaderNetworkContext(const network::OriginatingProcessId& process_id,
-                            const url::Origin& worker_origin);
-
-    // Used when `type` is `kNavigationRequestContext`.
-    explicit URLLoaderNetworkContext(NavigationRequest& navigation_request);
+    // Creates a URLLoaderNetworkContext for background Device Bound Sessions
+    // requests.
+    static StoragePartitionImpl::URLLoaderNetworkContext
+    CreateForDeviceBoundSessions();
 
     // Returns true if `type` is `kNavigationRequestContext`.
     bool IsNavigationRequestContext() const;
@@ -678,6 +688,20 @@ class CONTENT_EXPORT StoragePartitionImpl
     bool IsPrimaryMainFrameRequest();
 
    private:
+    // Used when `type` is `kRenderFrameHostContext`.
+    explicit URLLoaderNetworkContext(
+        GlobalRenderFrameHostId global_render_frame_host_id);
+
+    // Used when `type` is `kSharedOrServiceWorkerContext`.
+    URLLoaderNetworkContext(const network::OriginatingProcessId& process_id,
+                            const url::Origin& worker_origin);
+
+    // Used when `type` is `kNavigationRequestContext`.
+    explicit URLLoaderNetworkContext(NavigationRequest& navigation_request);
+
+    // Used when `type` is `kDeviceBoundSessionContext`.
+    URLLoaderNetworkContext();
+
     ContextType type_;
     scoped_refptr<NavigationOrDocumentHandle> navigation_or_document_;
 
@@ -997,6 +1021,9 @@ class CONTENT_EXPORT StoragePartitionImpl
       performance_scenarios::PerformanceScenarioObserverList,
       performance_scenarios::MatchingScenarioObserver>
       performance_scenario_observation_{this};
+
+  std::unique_ptr<DeclarativePerformanceObserverStore>
+      declarative_performance_observer_store_;
 
   base::WeakPtrFactory<StoragePartitionImpl> weak_factory_{this};
 };

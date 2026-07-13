@@ -499,6 +499,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
     // Only used by Wayland, for root level windows.
     std::string wayland_app_id;
+    // The startup ID (or XDG activation token) used to associate the window
+    // with the launch event that created it. Used for both X11 and Wayland.
+    std::string startup_id;
 #endif  // BUILDFLAG(IS_LINUX)
 
     // If true then the widget uses software compositing.
@@ -1433,6 +1436,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // e.g. if set to kDark, colors will always be for the dark theme.
   void SetColorModeOverride(
       std::optional<ui::ColorProviderKey::ColorMode> color_mode);
+  std::optional<ui::ColorProviderKey::ColorMode> color_mode_override() const {
+    return color_mode_override_;
+  }
 
   // Sets an override for `user_color` when `GetColorProvider()` is requested.
   // e.g. if set to kDark, colors will always be for the dark theme.
@@ -1709,6 +1715,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // Set to true if the widget is in the process of being destroyed.
   bool is_destroying_ = false;
+
+  // Set to true after HandleWidgetDestroying called.
+  bool widget_destroying_handled_ = false;
 
   // Set to true after OnWidgetDestroyed called.
   bool native_widget_destroyed_ = false;

@@ -13,6 +13,7 @@
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_trigger_source.h"
 #include "components/autofill/core/browser/country_type.h"
+#include "components/autofill/core/browser/data_manager/addresses/account_name_email_store.h"
 #include "components/autofill/core/browser/data_manager/addresses/account_name_email_strike_manager_test_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/form_structure.h"
@@ -68,7 +69,7 @@ class AccountNameEmailStrikeManagerTest
 
  protected:
   base::test::TaskEnvironment task_environment_;
-  autofill::test::AutofillUnitTestEnvironment autofill_test_environment_;
+  test::AutofillUnitTestEnvironment autofill_test_environment_;
 };
 
 TEST_F(AccountNameEmailStrikeManagerTest,
@@ -76,7 +77,7 @@ TEST_F(AccountNameEmailStrikeManagerTest,
   autofill_manager().DidShowSuggestions(
       {CreateSuggestionForProfile(
           CreateAutofillProfileWithType(RecordType::kAccount))},
-      FormGlobalId(), FieldGlobalId(), base::DoNothing());
+      std::nullopt, FormGlobalId(), FieldGlobalId(), base::DoNothing());
   EXPECT_FALSE(test_api(GetAccountNameEmailStrikeManager())
                    .was_name_email_profile_suggestion_shown());
   EXPECT_FALSE(test_api(GetAccountNameEmailStrikeManager())
@@ -95,7 +96,7 @@ TEST_F(AccountNameEmailStrikeManagerTest,
   autofill_manager().DidShowSuggestions(
       {CreateSuggestionForProfile(
           CreateAutofillProfileWithType(RecordType::kAccountNameEmail))},
-      FormGlobalId(), FieldGlobalId(), base::DoNothing());
+      std::nullopt, FormGlobalId(), FieldGlobalId(), base::DoNothing());
   EXPECT_TRUE(test_api(GetAccountNameEmailStrikeManager())
                   .was_name_email_profile_suggestion_shown());
   EXPECT_FALSE(test_api(GetAccountNameEmailStrikeManager())
@@ -114,12 +115,12 @@ TEST_F(AccountNameEmailStrikeManagerTest,
   AutofillProfile profile =
       CreateAutofillProfileWithType(RecordType::kAccountNameEmail);
   autofill_manager().DidShowSuggestions({CreateSuggestionForProfile(profile)},
-                                        FormGlobalId(), FieldGlobalId(),
-                                        base::DoNothing());
+                                        std::nullopt, FormGlobalId(),
+                                        FieldGlobalId(), base::DoNothing());
   autofill_manager().OnDidFillOrPreviewForm(
       mojom::ActionPersistence::kPreview, FormStructure(FormData()),
-      AutofillField(), {}, {}, &profile, AutofillTriggerSource::kPopup,
-      std::nullopt);
+      AutofillField(), {}, {}, /*skip_reasons=*/{}, &profile,
+      AutofillTriggerSource::kPopup, std::nullopt);
 
   EXPECT_TRUE(test_api(GetAccountNameEmailStrikeManager())
                   .was_name_email_profile_suggestion_shown());
@@ -144,18 +145,18 @@ TEST_F(AccountNameEmailStrikeManagerTest,
   // implicit removal.
   autofill_client().GetPrefs()->SetInteger(
       prefs::kAutofillNameAndEmailProfileNotSelectedCounter,
-      features::kAutofillNameAndEmailProfileNotSelectedThreshold.Get());
+      AccountNameEmailStore::kNotSelectedThreshold);
 
   AutofillProfile profile =
       CreateAutofillProfileWithType(RecordType::kAccountNameEmail);
 
   autofill_manager().DidShowSuggestions({CreateSuggestionForProfile(profile)},
-                                        FormGlobalId(), FieldGlobalId(),
-                                        base::DoNothing());
+                                        std::nullopt, FormGlobalId(),
+                                        FieldGlobalId(), base::DoNothing());
   autofill_manager().OnDidFillOrPreviewForm(
       mojom::ActionPersistence::kPreview, FormStructure(FormData()),
-      AutofillField(), {}, {}, &profile, AutofillTriggerSource::kPopup,
-      std::nullopt);
+      AutofillField(), {}, {}, /*skip_reasons=*/{}, &profile,
+      AutofillTriggerSource::kPopup, std::nullopt);
 
   base::HistogramTester histogram_tester;
   autofill_manager().Reset();
@@ -168,12 +169,12 @@ TEST_F(AccountNameEmailStrikeManagerTest,
   AutofillProfile profile =
       CreateAutofillProfileWithType(RecordType::kAccountNameEmail);
   autofill_manager().DidShowSuggestions({CreateSuggestionForProfile(profile)},
-                                        FormGlobalId(), FieldGlobalId(),
-                                        base::DoNothing());
+                                        std::nullopt, FormGlobalId(),
+                                        FieldGlobalId(), base::DoNothing());
   autofill_manager().OnDidFillOrPreviewForm(
       mojom::ActionPersistence::kFill, FormStructure(FormData()),
-      AutofillField(), {}, {}, &profile, AutofillTriggerSource::kPopup,
-      std::nullopt);
+      AutofillField(), {}, {}, /*skip_reasons=*/{}, &profile,
+      AutofillTriggerSource::kPopup, std::nullopt);
 
   EXPECT_TRUE(test_api(GetAccountNameEmailStrikeManager())
                   .was_name_email_profile_suggestion_shown());
@@ -197,12 +198,12 @@ TEST_F(AccountNameEmailStrikeManagerTest,
       {CreateSuggestionForProfile(
            CreateAutofillProfileWithType(RecordType::kAccountNameEmail)),
        CreateSuggestionForProfile(account_profile)},
-      FormGlobalId(), FieldGlobalId(), base::DoNothing());
+      std::nullopt, FormGlobalId(), FieldGlobalId(), base::DoNothing());
 
   autofill_manager().OnDidFillOrPreviewForm(
       mojom::ActionPersistence::kFill, FormStructure(FormData()),
-      AutofillField(), {}, {}, &account_profile, AutofillTriggerSource::kPopup,
-      std::nullopt);
+      AutofillField(), {}, {}, /*skip_reasons=*/{}, &account_profile,
+      AutofillTriggerSource::kPopup, std::nullopt);
 
   EXPECT_TRUE(test_api(GetAccountNameEmailStrikeManager())
                   .was_name_email_profile_suggestion_shown());

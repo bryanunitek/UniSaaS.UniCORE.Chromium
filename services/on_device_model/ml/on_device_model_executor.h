@@ -16,7 +16,6 @@
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/native_library.h"
 #include "base/types/expected.h"
 #include "base/types/pass_key.h"
 #include "services/on_device_model/backend.h"
@@ -26,7 +25,6 @@
 #include "services/on_device_model/ml/chrome_ml_api.h"
 #include "services/on_device_model/ml/constraint_factory.h"
 #include "services/on_device_model/ml/session_accessor.h"
-#include "services/on_device_model/ml/ts_model.h"
 #include "services/on_device_model/public/cpp/model_assets.h"
 #include "services/on_device_model/public/mojom/on_device_model.mojom.h"
 #include "services/on_device_model/public/mojom/on_device_model_service.mojom.h"
@@ -53,10 +51,6 @@ class COMPONENT_EXPORT(ON_DEVICE_MODEL_ML) BackendImpl final
                  on_device_model::mojom::LoadModelResult>
   CreateWithResult(on_device_model::mojom::LoadModelParamsPtr params,
                    base::OnceClosure on_complete) override;
-  void LoadTextSafetyModel(
-      on_device_model::mojom::TextSafetyModelParamsPtr params,
-      mojo::PendingReceiver<on_device_model::mojom::TextSafetyModel> model)
-      override;
   std::pair<on_device_model::mojom::DevicePerformanceInfoPtr,
             on_device_model::mojom::DeviceInfoPtr>
   GetDeviceAndPerformanceInfo() override;
@@ -66,7 +60,6 @@ class COMPONENT_EXPORT(ON_DEVICE_MODEL_ML) BackendImpl final
 
  private:
   const raw_ptr<const ml::ChromeML> chrome_ml_;
-  base::SequenceBound<ml::TsHolder> ts_holder_;
 };
 
 class COMPONENT_EXPORT(ON_DEVICE_MODEL_ML) SessionImpl final

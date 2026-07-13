@@ -88,6 +88,7 @@
 #include "components/google/core/common/google_util.h"
 #include "components/history/core/common/pref_names.h"
 #include "components/lens/lens_features.h"
+#include "components/live_caption/caption_util.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/leak_detection_dialog_utils.h"
 #include "components/password_manager/core/browser/manage_passwords_referrer.h"
@@ -476,6 +477,12 @@ void AddAiStrings(content::WebUIDataSource* html_source) {
       {"indigoLabel", IDS_INDIGO_SETTINGS_LABEL},
       {"indigoSublabel", IDS_INDIGO_SETTINGS_SUB_LABEL},
 
+      // Google Search AI Mode and connected apps (AIM Workspace) strings.
+      {"googleSearchAiModeWorkspaceLabel",
+       IDS_SETTINGS_GOOGLE_SEARCH_AI_MODE_WORKSPACE_LABEL},
+      {"googleSearchAiModeWorkspaceSublabel",
+       IDS_SETTINGS_GOOGLE_SEARCH_AI_MODE_WORKSPACE_SUBLABEL},
+
       // AI Mode Search Settings strings for Smart Tab Sharing (STS)
       {"stsSettingsEntrypointGoogleSearchAiMode",
        IDS_STS_SETTINGS_ENTRYPOINT_GOOGLE_SEARCH_AI_MODE},
@@ -536,6 +543,9 @@ void AddAiStrings(content::WebUIDataSource* html_source) {
   html_source->AddString("passwordChangeSettingsUrl",
                          chrome::kChromeUiPasswordChangeUrl);
   html_source->AddString("indigoSavedUrl", features::kIndigoSavedUrl.Get());
+
+  html_source->AddString("googleSearchAiModeWorkspaceUrl",
+                         chrome::kMyActivitySearchServicesAppsUrl);
 }
 
 void AddAppearanceStrings(content::WebUIDataSource* html_source,
@@ -579,6 +589,8 @@ void AddAppearanceStrings(content::WebUIDataSource* html_source,
       {"sidePanelPosition", IDS_SETTINGS_SIDE_PANEL_POSITION},
       {"sidePanelAlignmentChromePanels",
        IDS_SETTINGS_SIDE_PANEL_ALIGNMENT_CHROME_PANELS},
+      {"sidePanelAlignmentA11yLabel",
+       IDS_SETTINGS_SIDE_PANEL_ALIGNMENT_A11Y_LABEL},
       {"tabSearchPosition", IDS_SETTINGS_TAB_SEARCH_POSITION},
       {"homePageNtp", IDS_SETTINGS_HOME_PAGE_NTP},
       {"changeHomePage", IDS_SETTINGS_CHANGE_HOME_PAGE},
@@ -635,10 +647,6 @@ void AddAppearanceStrings(content::WebUIDataSource* html_source,
                           tabs::IsVerticalTabsFeatureEnabled());
   html_source->AddBoolean("showVerticalTabsExpandOnHoverEnabled",
                           tabs::IsVerticalTabsExpandOnHoverFeatureEnabled());
-  html_source->AddBoolean(
-      "showTabSearchEnabled",
-      tabs::IsVerticalTabsFeatureEnabled() ||
-          base::FeatureList::IsEnabled(tabs::kHorizontalTabStripComboButton));
   html_source->AddBoolean("showProjectsPanelEnabled",
                           tab_groups::IsProjectsPanelFeatureEnabled());
   html_source->AddBoolean(
@@ -963,6 +971,9 @@ void AddGlicStrings(content::WebUIDataSource* html_source, Profile* profile) {
        IDS_SETTINGS_GLIC_EXPERIMENTAL_TRIGGERING_CONSIDER_1},
       {"glicExperimentalTriggeringConsider2",
        IDS_SETTINGS_GLIC_EXPERIMENTAL_TRIGGERING_CONSIDER_2},
+      {"glicMediaUnderstandingToggle", IDS_SETTINGS_GLIC_MEDIA_UNDERSTANDING},
+      {"glicMediaUnderstandingToggleSublabel",
+       IDS_SETTINGS_GLIC_MEDIA_UNDERSTANDING_SUBLABEL},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
@@ -1061,6 +1072,8 @@ void AddGlicStrings(content::WebUIDataSource* html_source, Profile* profile) {
   html_source->AddBoolean(
       "glicCanUseLive",
       glic::GlicEnabling::EnablementForProfile(profile).EligibleForLive());
+  html_source->AddBoolean("headlessCaptionsEnabled",
+                          captions::IsHeadlessCaptionFeatureSupported());
   html_source->AddBoolean(
       "actorLoginFederatedLoginSupportEnabled",
       base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin));
@@ -1076,7 +1089,6 @@ void AddResetStrings(content::WebUIDataSource* html_source, Profile* profile) {
   static constexpr webui::LocalizedString kLocalizedStrings[] = {
       {"resetPageTitle", IDS_SETTINGS_RESET},
       {"resetTrigger", IDS_SETTINGS_RESET_SETTINGS_TRIGGER},
-      {"resetPageExplanation", IDS_RESET_PROFILE_SETTINGS_EXPLANATION},
       {"resetPageExplanationBulletPoints",
        IDS_RESET_PROFILE_SETTINGS_EXPLANATION_IN_BULLET_POINTS},
       {"triggeredResetPageExplanation",
@@ -1087,15 +1099,11 @@ void AddResetStrings(content::WebUIDataSource* html_source, Profile* profile) {
       {"resetPageFeedback", IDS_SETTINGS_RESET_PROFILE_FEEDBACK},
 
       // Automatic reset banner (now a dialog).
-      {"resetAutomatedDialogTitle", IDS_SETTINGS_RESET_AUTOMATED_DIALOG_TITLE},
-      {"resetAutomatedDialogV2Title",
+      {"resetAutomatedDialogTitle",
        IDS_SETTINGS_RESET_AUTOMATED_DIALOG_V2_TITLE},
-      {"resetAutomatedDialogV2Body",
-       IDS_SETTINGS_RESET_AUTOMATED_DIALOG_V2_BODY},
+      {"resetAutomatedDialogBody", IDS_SETTINGS_RESET_AUTOMATED_DIALOG_V2_BODY},
       {"resetPinnedTabs", IDS_SETTINGS_RESET_PINNED_TABS},
       {"gotIt", IDS_SETTINGS_GOT_IT},
-      {"resetProfileBannerButton", IDS_SETTINGS_RESET_BANNER_RESET_BUTTON_TEXT},
-      {"resetProfileBannerDescription", IDS_SETTINGS_RESET_BANNER_TEXT},
       {"resetLearnMoreAccessibilityText",
        IDS_SETTINGS_RESET_LEARN_MORE_ACCESSIBILITY_TEXT},
   };
@@ -1104,13 +1112,6 @@ void AddResetStrings(content::WebUIDataSource* html_source, Profile* profile) {
   html_source->AddBoolean(
       "showResetProfileBanner",
       ResetSettingsHandler::ShouldShowResetProfileBanner(profile));
-  bool is_reset_shortcuts_feature_enabled = false;
-#if BUILDFLAG(IS_WIN)
-  // TODO(crbug.com/40192052): Remove this flag from the JS.
-  is_reset_shortcuts_feature_enabled = true;
-#endif
-  html_source->AddBoolean("showExplanationWithBulletPoints",
-                          is_reset_shortcuts_feature_enabled);
 
   html_source->AddString("resetPageLearnMoreUrl",
                          chrome::kResetProfileSettingsLearnMoreURL);
@@ -1472,15 +1473,25 @@ bool IsWalletServerStorageEnabled() {
          base::FeatureList::IsEnabled(syncer::kSyncWalletVehicleRegistrations);
 }
 
-bool AutofillAddOtherDatatypesPrefIsEnabled() {
+bool AutofillSettingsEnterprisePolicyEnabled() {
   return base::FeatureList::IsEnabled(
-      autofill::features::kAutofillAddOtherDatatypesPref);
+      autofill::features::kAutofillEnableAutofillSettingsEnterprisePolicy);
 }
 
 void AddAutofillStrings(content::WebUIDataSource* html_source,
                         Profile* profile,
                         content::WebContents* web_contents) {
   static constexpr webui::LocalizedString kLocalizedStrings[] = {
+      {"atMemoryTriggerSettingLabel",
+       IDS_SETTINGS_AUTOFILL_AT_MEMORY_TRIGGER_SETTING_LABEL},
+      {"atMemoryTriggerSettingSecondaryLabel",
+       IDS_SETTINGS_AUTOFILL_AT_MEMORY_TRIGGER_SETTING_SECONDARY_LABEL},
+      {"atMemoryTriggerSettingInputAreaLabel",
+       IDS_SETTINGS_AUTOFILL_AT_MEMORY_TRIGGER_SETTING_INPUT_AREA_LABEL},
+      {"atMemoryTriggerSettingEditButtonLabel",
+       IDS_SETTINGS_AUTOFILL_AT_MEMORY_TRIGGER_SETTING_EDIT_BUTTON_LABEL},
+      {"atMemoryTriggerSettingClearButtonLabel",
+       IDS_SETTINGS_AUTOFILL_AT_MEMORY_TRIGGER_SETTING_CLEAR_BUTTON_LABEL},
       {"autofillPageTitle", IDS_SETTINGS_AUTOFILL_AND_PASSWORDS},
       {"yourSavedInfoPageDescription",
        IDS_SETTINGS_YOUR_SAVED_INFO_DESCRIPTION},
@@ -1525,6 +1536,8 @@ void AddAutofillStrings(content::WebUIDataSource* html_source,
       {"enableProfilesLabel", IDS_AUTOFILL_ENABLE_PROFILES_TOGGLE_LABEL},
       {"autofillSyncToggleLabel", IDS_AUTOFILL_SYNC_TOGGLE_LABEL},
       {"enableProfilesSublabel", IDS_AUTOFILL_ENABLE_PROFILES_TOGGLE_SUBLABEL},
+      {"enableGmailOtpFillingTitle",
+       IDS_AUTOFILL_GMAIL_OTP_FILLING_TOGGLE_TITLE},
       {"emailVerificationLabel",
        IDS_AUTOFILL_SETTINGS_EMAIL_VERIFICATION_LABEL},
       {"emailVerificationSectionTitle",
@@ -1672,8 +1685,7 @@ void AddAutofillStrings(content::WebUIDataSource* html_source,
       {"addVirtualCard", IDS_AUTOFILL_ADD_VIRTUAL_CARD},
       {"savedToThisDeviceOnly",
        IDS_SETTINGS_PAYMENTS_SAVED_TO_THIS_DEVICE_ONLY},
-      {"localPasswordManager",
-       IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SAVING_ON_DEVICE},
+      {"localPasswordManager", IDS_PASSWORD_MANAGER_BRAND_NAME},
       {"removeVirtualCard", IDS_AUTOFILL_REMOVE_VIRTUAL_CARD},
       {"editServerCard", IDS_AUTOFILL_EDIT_SERVER_CREDIT_CARD},
       {"editServerCardInWallet",
@@ -1719,6 +1731,18 @@ void AddAutofillStrings(content::WebUIDataSource* html_source,
       {"autofillAiDescription", IDS_SETTINGS_AUTOFILL_AI_DESCRIPTION},
       {"autofillAiManageYourInfo", IDS_AUTOFILL_MANAGE_YOUR_INFO_LINK},
       {"autofillAiToggleSubLabel", IDS_SETTINGS_AUTOFILL_AI_TOGGLE_SUB_LABEL},
+      {"suggestionsFromGeminiQualityLoggingTitle",
+       IDS_SETTINGS_SUGGESTIONS_FROM_GEMINI_QUALITY_LOGGING_TITLE},
+      {"suggestionsFromGeminiWhenUsed1",
+       IDS_SETTINGS_SUGGESTIONS_FROM_GEMINI_WHEN_USED_1},
+      {"suggestionsFromGeminiWhenUsed2",
+       IDS_SETTINGS_SUGGESTIONS_FROM_GEMINI_WHEN_USED_2},
+      {"suggestionsFromGeminiConsider1",
+       IDS_SETTINGS_SUGGESTIONS_FROM_GEMINI_CONSIDER_1},
+      {"suggestionsFromGeminiConsider2",
+       IDS_SETTINGS_SUGGESTIONS_FROM_GEMINI_CONSIDER_2},
+      {"suggestionsFromGeminiConsider3",
+       IDS_SETTINGS_SUGGESTIONS_FROM_GEMINI_CONSIDER_3},
       {"autofillAiWhenOnSavedInfo",
        IDS_SETTINGS_AUTOFILL_AI_WHEN_ON_SAVED_INFO},
       {"autofillAiWhenOnCanFillDifficultFields",
@@ -1900,6 +1924,17 @@ void AddAutofillStrings(content::WebUIDataSource* html_source,
   html_source->AddBoolean(
       "emailVerificationProtocolEnabled",
       base::FeatureList::IsEnabled(features::kEmailVerificationProtocol));
+  html_source->AddBoolean("autofillGmailOtpFillingEnabled",
+                          base::FeatureList::IsEnabled(
+                              features::kGlicActorAutofillOneTimePassword));
+  html_source->AddString(
+      "enableGmailOtpFillingDescription",
+      l10n_util::GetStringFUTF16(
+          IDS_AUTOFILL_GMAIL_OTP_FILLING_TOGGLE_DESCRIPTION,
+          chrome::kGmailOtpFillingLearnMoreURL,
+          l10n_util::GetStringUTF16(IDS_SETTINGS_OPENS_IN_NEW_TAB)));
+  html_source->AddString("gmailOtpFillingLearnMoreUrl",
+                         chrome::kGmailOtpFillingLearnMoreURL);
   html_source->AddString(
       "plusAddressManagementUrl",
       plus_addresses::features::kPlusAddressManagementUrl.Get());
@@ -1922,10 +1957,14 @@ void AddAutofillStrings(content::WebUIDataSource* html_source,
       "autofillAiAvailableByDefault",
       base::FeatureList::IsEnabled(
           autofill::features::kAutofillAiAvailableByDefault));
+  html_source->AddBoolean(
+      "isAutofillAiWalletPassBranding2026Enabled",
+      base::FeatureList::IsEnabled(
+          autofill::features::kAutofillAiWalletPassBranding2026));
   html_source->AddBoolean("isWalletServerStorageEnabled",
                           IsWalletServerStorageEnabled());
-  html_source->AddBoolean("AutofillAddOtherDatatypesPrefIsEnabled",
-                          AutofillAddOtherDatatypesPrefIsEnabled());
+  html_source->AddBoolean("AutofillSettingsEnterprisePolicyEnabled",
+                          AutofillSettingsEnterprisePolicyEnabled());
 
   html_source->AddBoolean(
       "isUserEligibleForWalletablePassDetection",
@@ -1954,8 +1993,8 @@ void AddAutofillStrings(content::WebUIDataSource* html_source,
                           base::FeatureList::IsEnabled(
                               autofill::features::kAutofillAiReauthRequired));
 
-  html_source->AddString("personalContextSettingsUrl",
-                         personal_context::kPersonalContextSettingsURL);
+  html_source->AddString("personalContextConnectedAppsUrl",
+                         personal_context::kPersonalContextConnectedAppsURL);
 }
 
 void AddSignOutDialogStrings(content::WebUIDataSource* html_source,
@@ -2218,7 +2257,11 @@ void AddPeopleStrings(content::WebUIDataSource* html_source, Profile* profile) {
        IDS_SYNC_UNAVAILABLE_FOR_NON_GOOGLE_ACCOUNT},
       {"accountPageTitle", IDS_SETTINGS_ACCOUNT_PAGE_TITLE},
       {"accountDataTypesHeading", IDS_SETTINGS_ACCOUNT_DATATYPES_HEADING},
+#if BUILDFLAG(IS_CHROMEOS)
+      {"accountDataTypesBody", IDS_SETTINGS_ACCOUNT_BODY_CHROMEOS},
+#else
       {"accountDataTypesBody", IDS_SETTINGS_ACCOUNT_BODY},
+#endif
       {"googleServicesPageTitle", IDS_SETTINGS_GOOGLE_SERVICES_PAGE_TITLE},
       {"syncDisabledUserInformation", IDS_SETTINGS_ACCOUNT_SYNC_DISABLED},
 #if BUILDFLAG(IS_CHROMEOS)
@@ -2361,8 +2404,6 @@ void AddPrivacyStrings(content::WebUIDataSource* html_source,
       {"doNotTrackDialogMessage", IDS_SETTINGS_ENABLE_DO_NOT_TRACK_DIALOG_TEXT},
       {"doNotTrackDialogLearnMoreA11yLabel",
        IDS_SETTINGS_ENABLE_DO_NOT_TRACK_DIALOG_LEARN_MORE_ACCESSIBILITY_LABEL},
-      // TODO(crbug.com/40122957): This string is no longer used. Remove.
-      {"permissionsPageTitle", IDS_SETTINGS_PERMISSIONS},
       {"siteSettingsSublabel", IDS_SETTINGS_PERMISSIONS_DESCRIPTION},
       {"securityPageTitle", IDS_SETTINGS_SECURITY},
       {"securityPageDescription", IDS_SETTINGS_SECURITY_DESCRIPTION},
@@ -3514,6 +3555,14 @@ void AddSiteSettingsStrings(content::WebUIDataSource* html_source,
        IDS_SETTINGS_SITE_SETTINGS_AR_ALLOWED_EXCEPTIONS},
       {"siteSettingsArBlockedExceptions",
        IDS_SETTINGS_SITE_SETTINGS_AR_BLOCKED_EXCEPTIONS},
+      {"siteSettingsInlineCueMenuDescription",
+       IDS_SETTINGS_SITE_SETTINGS_INLINE_CUE_MENU_DESCRIPTION},
+      {"siteSettingsInlineCueMenuBlockedExceptions",
+       IDS_SETTINGS_SITE_SETTINGS_INLINE_CUE_MENU_BLOCKED_EXCEPTIONS},
+      {"siteSettingsInlineCueMenuAllowed",
+       IDS_SETTINGS_SITE_SETTINGS_INLINE_CUE_MENU_ALLOWED},
+      {"siteSettingsInlineCueMenuBlocked",
+       IDS_SETTINGS_SITE_SETTINGS_INLINE_CUE_MENU_BLOCKED},
       {"siteSettingsAutomaticDownloadsDescription",
        IDS_SETTINGS_SITE_SETTINGS_AUTOMATIC_DOWNLOADS_DESCRIPTION},
       {"siteSettingsAutomaticDownloadsAsk",
@@ -3880,6 +3929,9 @@ void AddSiteSettingsStrings(content::WebUIDataSource* html_source,
       {"siteSettingsArMidSentence", IDS_SITE_SETTINGS_TYPE_AR_MID_SENTENCE},
       {"siteSettingsArAsk", IDS_SETTINGS_SITE_SETTINGS_AR_ASK},
       {"siteSettingsArBlock", IDS_SETTINGS_SITE_SETTINGS_AR_BLOCK},
+      {"siteSettingsInlineCueMenu", IDS_SITE_SETTINGS_TYPE_INLINE_CUE_MENU},
+      {"siteSettingsInlineCueMenuMidSentence",
+       IDS_SITE_SETTINGS_TYPE_INLINE_CUE_MENU_MID_SENTENCE},
       {"siteSettingsVr", IDS_SITE_SETTINGS_TYPE_VR},
       {"siteSettingsVrMidSentence", IDS_SITE_SETTINGS_TYPE_VR_MID_SENTENCE},
       {"siteSettingsWebAppInstallation",

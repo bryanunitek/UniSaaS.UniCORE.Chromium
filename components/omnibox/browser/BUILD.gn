@@ -82,7 +82,7 @@ aggregate_vector_icons("omnibox_vector_icons") {
     "offline_pin_filled.icon",
     "offline_pin_old.icon",
     "page_chrome_refresh_old.icon",
-    "page_info.icon",
+    "page_info_custom.icon",
     "price_tracking_disabled_old.icon",
     "product_chrome_refresh_old.icon",
     "product_old.icon",
@@ -151,6 +151,9 @@ proto_library("partner_location_descriptor_proto") {
 }
 
 static_library("browser") {
+  _configs = configs
+  configs = []
+  configs = [ "//third_party/tflite:tflite_shim_config" ] + _configs
   sources = [
     "actions/contextual_search_action.cc",
     "actions/contextual_search_action.h",
@@ -285,6 +288,7 @@ static_library("browser") {
     "omnibox_log.h",
     "omnibox_logging_utils.cc",
     "omnibox_logging_utils.h",
+    "omnibox_metrics_constants.h",
     "omnibox_metrics_provider.cc",
     "omnibox_metrics_provider.h",
     "omnibox_navigation_observer.h",
@@ -329,6 +333,8 @@ static_library("browser") {
     "search_scoring_signals_annotator.h",
     "search_suggestion_parser.cc",
     "search_suggestion_parser.h",
+    "searchbox_utils.cc",
+    "searchbox_utils.h",
     "shortcuts_backend.cc",
     "shortcuts_backend.h",
     "shortcuts_constants.cc",
@@ -389,7 +395,6 @@ static_library("browser") {
     "//components/omnibox/resources:omnibox_pedal_synonyms",
     "//components/saved_tab_groups/public",
     "//components/security_state/core",
-    "//services/data_decoder/public/cpp",
     "//third_party/metrics_proto",
     "//third_party/omnibox_proto",
     "//third_party/tflite",
@@ -582,6 +587,8 @@ static_library("location_bar") {
       "autocomplete_scheme_classifier_android.cc",
       "autocomplete_scheme_classifier_android.h",
       "omnibox_url_emphasizer.cc",
+      "omnibox_word_boundary.cc",
+      "omnibox_word_boundary.h",
     ]
     deps += [ ":scheme_classifier_jni" ]
   }
@@ -628,6 +635,7 @@ if (is_android) {
     sources = [
       "android/java/src/org/chromium/components/omnibox/AutocompleteSchemeClassifier.java",
       "android/java/src/org/chromium/components/omnibox/OmniboxUrlEmphasizer.java",
+      "android/java/src/org/chromium/components/omnibox/OmniboxWordBoundary.java",
     ]
   }
 
@@ -637,6 +645,7 @@ if (is_android) {
     sources = [
       "android/java/src/org/chromium/components/omnibox/AutocompleteSchemeClassifier.java",
       "android/java/src/org/chromium/components/omnibox/OmniboxUrlEmphasizer.java",
+      "android/java/src/org/chromium/components/omnibox/OmniboxWordBoundary.java",
       "android/java/src/org/chromium/components/omnibox/SecurityStatusIcon.java",
     ]
     deps = [
@@ -928,6 +937,7 @@ source_set("unit_tests") {
     "remote_suggestions_service_unittest.cc",
     "scored_history_match_unittest.cc",
     "search_suggestion_parser_unittest.cc",
+    "searchbox_utils_unittest.cc",
     "shortcuts_backend_unittest.cc",
     "shortcuts_database_unittest.cc",
     "shortcuts_provider_unittest.cc",
@@ -1044,6 +1054,7 @@ source_set("unit_tests") {
   }
 
   if (is_android) {
+    sources += [ "omnibox_word_boundary_unittest.cc" ]
     deps += [ "//components/location/android:test_support" ]
   }
 
@@ -1086,10 +1097,6 @@ fuzzer_test("search_suggestion_parser_fuzzer") {
 
 mojom("mojo_bindings") {
   sources = [ "omnibox.mojom" ]
-  if (!is_ios) {
-    sources += [ "searchbox.mojom" ]
-  }
-
   webui_module_path = "chrome://resources/mojo/components/omnibox/browser"
 
   public_deps = [
@@ -1099,4 +1106,23 @@ mojom("mojo_bindings") {
     "//ui/gfx/mojom",
     "//url/mojom:url_mojom_gurl",
   ]
+
+  cpp_typemaps = []
+
+  if (!is_ios) {
+    sources += [ "searchbox.mojom" ]
+    cpp_typemaps += [
+      {
+        types = [
+          {
+            mojom = "searchbox.mojom.SuggestInventory"
+            cpp = "::omnibox::SuggestInventory"
+          },
+        ]
+        traits_headers = [ "searchbox_mojom_traits.h" ]
+        traits_sources = [ "searchbox_mojom_traits.cc" ]
+        traits_deps = [ "//third_party/omnibox_proto" ]
+      },
+    ]
+  }
 }

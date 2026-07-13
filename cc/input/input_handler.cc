@@ -36,6 +36,7 @@
 #include "cc/trees/property_tree.h"
 #include "cc/trees/scroll_node.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/events/types/scroll_types.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -64,6 +65,11 @@ InputHandlerClient::ScrollEventDispatchMode GetScrollEventDispatchMode() {
                  kScrollEventDispatchModeUseScrollPredictorForDeadline) {
     return InputHandlerClient::ScrollEventDispatchMode::
         kUseScrollPredictorForDeadline;
+  } else if (mode_name ==
+             ::features::
+                 kScrollEventDispatchModeDispatchScrollEventsUntilDeadline) {
+    return InputHandlerClient::ScrollEventDispatchMode::
+        kDispatchScrollEventsUntilDeadline;
   }
 
   return InputHandlerClient::ScrollEventDispatchMode::kEnqueueScrollEvents;
@@ -349,8 +355,9 @@ InputHandlerScrollResult InputHandler::ScrollUpdate(
     base::TimeDelta delayed_by) {
   // The current_native_scrolling_element should only be set for ScrollBegin.
   DCHECK(!scroll_state.data()->current_native_scrolling_element());
-  TRACE_EVENT2("cc", "InputHandler::ScrollUpdate", "dx", scroll_state.delta_x(),
-               "dy", scroll_state.delta_y());
+  TRACE_EVENT("cc", "InputHandler::ScrollUpdate", "dx", scroll_state.delta_x(),
+              "dy", scroll_state.delta_y(), "granularity",
+              scroll_state.delta_granularity());
 
   if (!CurrentlyScrollingNode())
     return InputHandlerScrollResult();
@@ -481,8 +488,6 @@ InputHandlerScrollResult InputHandler::ScrollUpdate(
   InputHandlerScrollResult scroll_result;
   scroll_result.did_scroll = did_scroll_content || did_scroll_top_controls;
   scroll_result.hit_snap_constraint = hit_snap_constraint;
-  // TODO(crbug.com/41102897): Refactor did_root_overscroll to instead store the
-  // ElementId of scroller that consumed the overscroll.
   scroll_result.did_overscroll_root =
       is_root_scroller && !unused_scroll_delta.IsZero();
   scroll_result.accumulated_root_overscroll = accumulated_root_overscroll_;
@@ -2351,7 +2356,9 @@ ScrollNode* InputHandler::FindNodeToLatch(ScrollState* scroll_state,
   ScrollNode* scroll_node = nullptr;
   ScrollNode* first_scrollable_node = nullptr;
   for (ScrollNode* cur_node = starting_node; cur_node;
-       cur_node = scroll_tree.MutableParent(cur_node)) {
+       cur_node = scroll_tree.HasParent(*cur_node)
+                      ? &scroll_tree.MutableParent(*cur_node)
+                      : nullptr) {
     if (GetViewport().ShouldScroll(*cur_node)) {
       // Don't chain scrolls past a viewport node. Once we reach that, we
       // should scroll using the appropriate viewport node which may not be
@@ -2654,7 +2661,9 @@ bool InputHandler::IsScrolledBy(LayerImpl* child, ScrollNode* ancestor) {
   ScrollTree& scroll_tree = GetScrollTree();
   for (ScrollNode* scroll_node =
            &scroll_tree.MutableNode(child->scroll_tree_index());
-       scroll_node; scroll_node = scroll_tree.MutableParent(scroll_node)) {
+       scroll_node; scroll_node = scroll_tree.HasParent(*scroll_node)
+                                      ? &scroll_tree.MutableParent(*scroll_node)
+                                      : nullptr) {
     if (scroll_node->id == ancestor->id)
       return true;
   }

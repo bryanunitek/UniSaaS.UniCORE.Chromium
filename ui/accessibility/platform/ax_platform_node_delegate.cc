@@ -113,7 +113,8 @@ std::u16string AXPlatformNodeDelegate::GetValueForControl() const {
     return std::u16string();
 
   std::u16string value =
-      GetString16Attribute(ax::mojom::StringAttribute::kValue);
+      base::UTF8ToUTF16(GetAriaValueTextOrValue().value_or(std::string()));
+
   if (GetData().IsRangeValueSupported() && value.empty()) {
     float numeric_value =
         GetData().GetFloatAttribute(ax::mojom::FloatAttribute::kValueForRange);
@@ -123,6 +124,28 @@ std::u16string AXPlatformNodeDelegate::GetValueForControl() const {
     }
   }
   return value;
+}
+
+std::optional<std::string> AXPlatformNodeDelegate::GetAriaValueTextOrValue()
+    const {
+  if (node_) {
+    return node_->GetAriaValueTextOrValue();
+  }
+
+  if (IsSelectElement(GetRole()) || GetData().IsAtomicTextField()) {
+    return GetStringAttribute(ax::mojom::StringAttribute::kValue);
+  }
+
+  if (GetData().IsRangeValueSupported() &&
+      HasStringAttribute(ax::mojom::StringAttribute::kAriaValueText)) {
+    return GetStringAttribute(ax::mojom::StringAttribute::kAriaValueText);
+  }
+
+  if (HasStringAttribute(ax::mojom::StringAttribute::kValue)) {
+    return GetStringAttribute(ax::mojom::StringAttribute::kValue);
+  }
+
+  return std::nullopt;
 }
 
 AXNodePosition::AXPositionInstance AXPlatformNodeDelegate::CreatePositionAt(
@@ -596,9 +619,7 @@ bool AXPlatformNodeDelegate::IsValidRelationTarget(
 }
 
 std::u16string AXPlatformNodeDelegate::GetAuthorUniqueId() const {
-  if (node_)
-    return node_->GetString16Attribute(ax::mojom::StringAttribute::kHtmlId);
-  return std::u16string();
+  return GetString16Attribute(ax::mojom::StringAttribute::kHtmlId);
 }
 
 AXPlatformNodeId AXPlatformNodeDelegate::GetUniqueId() const {

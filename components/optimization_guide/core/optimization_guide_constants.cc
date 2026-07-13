@@ -6,19 +6,6 @@
 
 namespace optimization_guide {
 
-const base::FilePath::CharType kUnindexedHintsFileName[] =
-    FILE_PATH_LITERAL("optimization-hints.pb");
-
-const char kRulesetFormatVersionString[] = "1.0.0";
-
-const char kLoadedHintLocalHistogramString[] =
-    "OptimizationGuide.LoadedHint.Result";
-
-const char kOptimizationGuideLanguageOverrideHeaderKey[] =
-    "x-optimization-guide-language-override";
-
-const base::FilePath::CharType kOptimizationGuideHintStore[] =
-    FILE_PATH_LITERAL("optimization_guide_hint_cache_store");
 
 const base::FilePath::CharType kOptimizationGuideModelStoreDirPrefix[] =
     FILE_PATH_LITERAL("optimization_guide_model_store");
@@ -40,11 +27,6 @@ const base::FilePath::CharType kAdapterCacheFile[] =
 
 const base::FilePath::CharType kProgramCacheFile[] =
     FILE_PATH_LITERAL("program_cache.bin");
-
-const base::FilePath::CharType kTsDataFile[] = FILE_PATH_LITERAL("ts.bin");
-
-const base::FilePath::CharType kTsSpModelFile[] =
-    FILE_PATH_LITERAL("ts_spm.model");
 
 const base::FilePath::CharType kOnDeviceModelExecutionConfigFile[] =
     FILE_PATH_LITERAL("on_device_model_execution_config.pb");

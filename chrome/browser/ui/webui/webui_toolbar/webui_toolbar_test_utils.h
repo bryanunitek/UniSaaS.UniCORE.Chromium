@@ -75,6 +75,20 @@ class MockToolbarUIServiceDelegate
                ::toolbar_ui_api::mojom::ToolbarUIService::
                    ShowContentSettingsBubbleCallback callback),
               (override));
+  MOCK_METHOD(
+      void,
+      OnPageActionClick,
+      (::toolbar_ui_api::mojom::PageActionId action_id,
+       ::toolbar_ui_api::mojom::PageActionTrigger trigger,
+       ::toolbar_ui_api::mojom::ToolbarUIService::OnPageActionClickCallback
+           callback),
+      (override));
+  MOCK_METHOD(void,
+              OnPageActionChipShowingChanged,
+              (::toolbar_ui_api::mojom::PageActionId action_id,
+               ::toolbar_ui_api::mojom::ToolbarUIService::
+                   OnPageActionChipShowingChangedCallback callback),
+              (override));
   MOCK_METHOD(void, OnPageInitialized, (), (override));
   MOCK_METHOD(void,
               InvokePinnedToolbarAction,
@@ -118,6 +132,15 @@ class MockToolbarUIServiceDelegate
               (toolbar_ui_api::mojom::OmniboxActionPtr action_ptr),
               (override));
   MOCK_METHOD(void, ShowAvatarMenu, (), (override));
+  MOCK_METHOD(void, SetAvatarButtonHovered, (bool), (override));
+  MOCK_METHOD(void, SetAvatarButtonFocused, (bool), (override));
+  MOCK_METHOD(void, SetAvatarButtonIPHPromoShowing, (bool), (override));
+  MOCK_METHOD(void, OnAppMenuFocusChanged, (bool), (override));
+  MOCK_METHOD(void, ExecuteExtensionAction, (const std::string&), (override));
+  MOCK_METHOD(void,
+              ShowExtensionContextMenu,
+              (const std::string&, ui::mojom::MenuSourceType),
+              (override));
 };
 
 class MockBrowserControlsServiceDelegate
@@ -166,6 +189,8 @@ class MockCommandUpdater : public CommandUpdater {
               (CommandObserver * observer),
               (override));
   MOCK_METHOD(bool, UpdateCommandEnabled, (int id, bool state), (override));
+  MOCK_METHOD(void, DisableAllCommands, (), (override));
+  MOCK_METHOD(std::vector<int>, GetAllIds, (), (const, override));
 };
 
 MATCHER_P(MatchesIconUpdate, expected, "") {

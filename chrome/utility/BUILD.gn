@@ -142,6 +142,7 @@ static_library("utility") {
     deps += [
       "//chrome/common:mojo_bindings",
       "//chrome/common/importer:interfaces",
+      "//chrome/services/reading_mode_metrics:lib",
       "//components/autofill/core/common",
       "//components/user_data_importer/common",
       "//components/user_data_importer/content",
@@ -256,6 +257,10 @@ static_library("utility") {
 
   if (enable_on_device_translation) {
     deps += [ "//components/on_device_translation/service:on_device_translation_service" ]
+  }
+
+  if (is_android) {
+    deps += [ "//chrome/services/readaloud" ]
   }
 }
 

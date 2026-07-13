@@ -16,16 +16,17 @@ source_set("language_tag") {
     "language_tag_matcher.h",
     "tag_converters.cc",
     "tag_converters.h",
-    "tags.cc",
     "tags.h",
   ]
 
   defines = [ "BASE_I18N_IMPLEMENTATION" ]
 
-  public_deps = [ ":base_i18n_export" ]
+  public_deps = [
+    ":base_i18n_export",
+    "//base/i18n/internal",
+  ]
   deps = [
     "//base",
-    "//base/i18n/internal",
     "//base/i18n/internal:canonical_language_tags",
     "//base/i18n/internal:i18n_icu_bridge_ffi",
   ]
@@ -40,6 +41,26 @@ source_set("unicodestring") {
   public_deps = [ "//third_party/icu" ]
 }
 
+source_set("timezone") {
+  sources = [
+    "timezone.cc",
+    "timezone.h",
+  ]
+
+  defines = [ "BASE_I18N_IMPLEMENTATION" ]
+
+  public_deps = [
+    ":base_i18n_export",
+    ":language_tag",
+    "//base",
+  ]
+
+  deps = [
+    ":unicodestring",
+    "//third_party/icu",
+  ]
+}
+
 source_set("time_formatting_types") {
   sources = [ "time_formatting_types.h" ]
 }
@@ -47,12 +68,14 @@ source_set("time_formatting_types") {
 source_set("unittests") {
   testonly = true
   sources = [
+    "bcp47_extensions_unittest.cc",
     "language_tag_matcher_unittest.cc",
     "language_tag_unittest.cc",
   ]
   deps = [
     "//base",
     "//base:i18n",
+    "//base/i18n/internal:unittests",
     "//base/test:test_support",
     "//testing/gmock",
     "//testing/gtest",

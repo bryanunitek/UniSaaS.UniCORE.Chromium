@@ -15,8 +15,10 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/indigo/indigo_image_replacement_manager.h"
+#include "chrome/browser/indigo/indigo_page_action_controller.h"
 #include "chrome/browser/indigo/indigo_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "net/base/filename_util.h"
@@ -34,6 +36,17 @@ std::optional<std::string> ReadFileToStringSync(const base::FilePath& path) {
     return content;
   }
   return std::nullopt;
+}
+
+IndigoTransformationResult MapInvokeErrorToTransformationResult(
+    chrome::mojom::IndigoInvokeError error) {
+  switch (error) {
+    case chrome::mojom::IndigoInvokeError::kNoPrimaryImageFound:
+      return IndigoTransformationResult::kNoPrimaryImageFound;
+    case chrome::mojom::IndigoInvokeError::
+        kPrimaryImageReplacementCreationFailed:
+      return IndigoTransformationResult::kPrimaryImageReplacementCreationFailed;
+  }
 }
 }  // namespace
 
@@ -132,6 +145,26 @@ void IndigoAgentHost::StartImageReplacement(
   auto* manager = IndigoImageReplacementManager::GetOrCreateForPage(page());
   manager->RegisterImageReplacement(std::move(replacement), is_primary);
   std::move(callback).Run();
+}
+
+void IndigoAgentHost::ReportInvokeError(
+    chrome::mojom::IndigoInvokeError error) {
+  // The renderer could report an invocation error between when Reset() is
+  // called and it's processed in the renderer process. We ignore the error in
+  // this case since the script will be reset shortly anyway.
+  if (pending_reset_ack_count_ > 0) {
+    return;
+  }
+
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(&page().GetMainDocument());
+  if (auto* tab = tabs::TabInterface::GetFromContents(web_contents)) {
+    if (auto* controller = IndigoPageActionController::From(tab)) {
+      controller->Reset(ResetType::kResetReplacementsAndContentScript);
+      controller->ShowInvocationErrorToast(
+          MapInvokeErrorToTransformationResult(error));
+    }
+  }
 }
 
 chrome::mojom::IndigoAgent& IndigoAgentHost::GetAgent() {

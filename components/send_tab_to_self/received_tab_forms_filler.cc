@@ -135,6 +135,13 @@ base::flat_set<AutofillTypeSet> ComputeUniqueTypeSets(
                                          std::move(unique_type_sets));
 }
 
+// Returns true if the pending field and the local field have the same
+// control type.
+bool HasSameControlType(const PageContext::FormField& pending_field,
+                        const autofill::AutofillField& local_field) {
+  return pending_field.form_control_type == local_field.form_control_type();
+}
+
 }  // namespace
 
 // static
@@ -290,13 +297,17 @@ ReceivedTabFormsFiller::FindPendingFieldMatching(
       form.form_signature(), field.GetFieldSignature()};
   if (const PageContext::FormField* match =
           FindPendingFieldBySignature(signature, form_unique_signatures)) {
-    return {match, FormFieldMatchOutcome::kMatchedBySignature};
+    if (HasSameControlType(*match, field)) {
+      return {match, FormFieldMatchOutcome::kMatchedBySignature};
+    }
   }
 
   // 3. Try fallback match using Autofill types (exact set match).
   if (const PageContext::FormField* match =
           FindPendingFieldByExactTypeSet(field, form_unique_type_sets)) {
-    return {match, FormFieldMatchOutcome::kMatchedByExactTypeSet};
+    if (HasSameControlType(*match, field)) {
+      return {match, FormFieldMatchOutcome::kMatchedByExactTypeSet};
+    }
   }
 
   return {};
@@ -306,8 +317,7 @@ const PageContext::FormField*
 ReceivedTabFormsFiller::FindPendingFieldByIdNameAndType(
     const autofill::AutofillField& field) const {
   auto it = pending_fields_.find(std::make_tuple(
-      field.id_attribute(), field.name_attribute(),
-      autofill::FormControlTypeToString(field.form_control_type())));
+      field.id_attribute(), field.name_attribute(), field.form_control_type()));
   return it != pending_fields_.end() ? &*it : nullptr;
 }
 
@@ -394,6 +404,14 @@ void ReceivedTabFormsFiller::FillForms(
         continue;
       }
 
+      // Don't fill fields that are considered sensitive. Since matching
+      // enforces identical control types, checking the local field's type
+      // is sufficient.
+      if (IsSensitiveFieldType(field->form_control_type())) {
+        pending_fields_.erase(*match.field);
+        continue;
+      }
+
       switch (match.outcome) {
         case FormFieldMatchOutcome::kMatchedByIdNameAndType:
           ++matched_id_name_type_count_;
@@ -408,12 +426,22 @@ void ReceivedTabFormsFiller::FillForms(
           NOTREACHED();
       }
 
-      manager->FillOrPreviewField(autofill::mojom::ActionPersistence::kFill,
-                                  autofill::mojom::FieldActionType::kReplaceAll,
-                                  form.ToFormData(), *field, match.field->value,
-                                  autofill::FillingProduct::kNone,
-                                  std::nullopt);
-      // Erase the successfully filled field immediately to prevent duplicate
+      // Do not fill fields that have been edited by the user.
+      // We also skip filling if the user has cleared a pre-filled field,
+      // as they likely want it to remain empty. We only fill if the field
+      // is empty and was initially empty as well.
+      const bool should_skip_filling =
+          (field->properties_mask() & autofill::kUserTyped) &&
+          (!field->value().empty() || !field->initial_value().empty());
+
+      if (!should_skip_filling) {
+        manager->FillOrPreviewField(
+            autofill::mojom::ActionPersistence::kFill,
+            autofill::mojom::FieldActionType::kReplaceAll, form.global_id(),
+            field->global_id(), match.field->value,
+            autofill::FillingProduct::kNone, std::nullopt);
+      }
+      // Erase the successfully matched field immediately to prevent duplicate
       // fills or double-logging in the destructor.
       pending_fields_.erase(*match.field);
     }

@@ -128,8 +128,7 @@ OnDeviceTailModelService::OnDeviceTailModelService(
   memory_consumer_registration_ =
       std::make_unique<base::MemoryConsumerRegistration>(
           "OnDeviceTailModelService", kMemoryConsumerTraits, this,
-          base::MemoryConsumerRegistration::CheckUnregister::kDisabled,
-          base::MemoryConsumerRegistration::CheckRegistryExists::kDisabled);
+          base::MemoryConsumerRegistration::CheckUnregister::kDisabled);
 }
 
 OnDeviceTailModelService::OnDeviceTailModelService()
@@ -166,7 +165,7 @@ void OnDeviceTailModelService::OnModelUpdated(
   }
 
   const std::optional<optimization_guide::proto::Any>& metadata =
-      model_info->GetModelMetadata();
+      model_info->model_metadata;
   std::optional<optimization_guide::proto::OnDeviceTailSuggestModelMetadata>
       tail_model_metadata = std::nullopt;
   if (metadata.has_value()) {
@@ -182,8 +181,7 @@ void OnDeviceTailModelService::OnModelUpdated(
   model_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&InitializeTailModelExecutor, tail_model_executor_.get(),
-                     model_info->GetModelFilePath(),
-                     model_info->GetAdditionalFiles(),
+                     model_info->model_file_path, model_info->additional_files,
                      tail_model_metadata.value()));
 }
 

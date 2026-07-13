@@ -6,11 +6,16 @@
 
 #import "base/apple/foundation_util.h"
 #import "base/check.h"
+#import "base/feature_list.h"
+#import "base/metrics/user_metrics.h"
+#import "components/autofill/core/common/autofill_features.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/signin_promo_view_configurator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/signin_promo_view_delegate.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/table_view_signin_promo_item.h"
+#import "ios/chrome/browser/autofill/model/autofill_ai_util.h"
 #import "ios/chrome/browser/settings/autofill/autofill_and_passwords/utils/autofill_and_passwords_item_utils.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_table_view_controller_constants.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_detail_icon_item.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -25,6 +30,7 @@
   BOOL _autofillProfileEnabled;
   BOOL _identityDocsEnabled;
   BOOL _travelInfoEnabled;
+  BOOL _shoppingEnabled;
   BOOL _shouldShowAutofillAIFeatures;
 
   // Updatable Items.
@@ -33,8 +39,7 @@
   TableViewDetailIconItem* _autofillProfileDetailItem;
   TableViewDetailIconItem* _identityDocsDetailItem;
   TableViewDetailIconItem* _travelInfoDetailItem;
-  TableViewDetailIconItem* _autofillSettingsDetailItem;
-
+  TableViewDetailIconItem* _shoppingDetailItem;
   BOOL _settingsAreDismissed;
 }
 
@@ -86,11 +91,19 @@
     _travelInfoDetailItem = TravelInfoItem(_travelInfoEnabled);
     [model addItem:_travelInfoDetailItem
         toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+
+    if (autofill::IsAmbientAutofillEnabled()) {
+      _shoppingDetailItem = ShoppingInfoItem(_shoppingEnabled);
+      [model addItem:_shoppingDetailItem
+          toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+    }
   }
 
-  _autofillSettingsDetailItem = AutofillSettingsItem();
-  [model addItem:_autofillSettingsDetailItem
-      toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+  if (base::FeatureList::IsEnabled(
+          autofill::features::kAutofillAiWithDataSchema)) {
+    [model addItem:AutofillSettingsItem()
+        toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+  }
 
   [self.delegate autofillAndPasswordsTableViewControllerDidLoadContent:self];
 }
@@ -125,9 +138,14 @@
       [self.delegate
           autofillAndPasswordsTableViewControllerDidSelectTravelInfo:self];
       break;
+    case SettingsItemTypeShoppingInfo:
+      [self.delegate
+          autofillAndPasswordsTableViewControllerDidSelectShopping:self];
+      break;
     case SettingsItemTypeAutofillSettings:
       [self.delegate
-          autofillAndPasswordsTableViewControllerDidSelectAutofillSettings:self];
+          autofillAndPasswordsTableViewControllerDidSelectAutofillSettings:
+              self];
       break;
     default:
       break;
@@ -143,7 +161,12 @@
   _passwordsEnabled = enabled;
 
   if (_passwordsDetailItem) {
-    _passwordsDetailItem.detailText = PasswordsItemDetailText(enabled);
+    if (IsYourSavedInfoSettingsPageIosEnabled()) {
+      _passwordsDetailItem.trailingDetailText =
+          PasswordsItemDetailText(enabled);
+    } else {
+      _passwordsDetailItem.detailText = PasswordsItemDetailText(enabled);
+    }
     [self reconfigureCellsForItems:@[ _passwordsDetailItem ]];
   }
 }
@@ -155,8 +178,13 @@
   _autofillCreditCardEnabled = enabled;
 
   if (_autofillCreditCardDetailItem) {
-    _autofillCreditCardDetailItem.detailText =
-        AutofillCreditCardItemDetailText(enabled);
+    if (IsYourSavedInfoSettingsPageIosEnabled()) {
+      _autofillCreditCardDetailItem.trailingDetailText =
+          AutofillCreditCardItemDetailText(enabled);
+    } else {
+      _autofillCreditCardDetailItem.detailText =
+          AutofillCreditCardItemDetailText(enabled);
+    }
     [self reconfigureCellsForItems:@[ _autofillCreditCardDetailItem ]];
   }
 }
@@ -168,8 +196,13 @@
   _autofillProfileEnabled = enabled;
 
   if (_autofillProfileDetailItem) {
-    _autofillProfileDetailItem.detailText =
-        AutofillProfileItemDetailText(enabled);
+    if (IsYourSavedInfoSettingsPageIosEnabled()) {
+      _autofillProfileDetailItem.trailingDetailText =
+          AutofillProfileItemDetailText(enabled);
+    } else {
+      _autofillProfileDetailItem.detailText =
+          AutofillProfileItemDetailText(enabled);
+    }
     [self reconfigureCellsForItems:@[ _autofillProfileDetailItem ]];
   }
 }
@@ -181,7 +214,12 @@
   _identityDocsEnabled = enabled;
 
   if (_identityDocsDetailItem) {
-    _identityDocsDetailItem.detailText = IdentityDocsItemDetailText(enabled);
+    if (IsYourSavedInfoSettingsPageIosEnabled()) {
+      _identityDocsDetailItem.trailingDetailText =
+          IdentityDocsItemDetailText(enabled);
+    } else {
+      _identityDocsDetailItem.detailText = IdentityDocsItemDetailText(enabled);
+    }
     [self reconfigureCellsForItems:@[ _identityDocsDetailItem ]];
   }
 }
@@ -193,16 +231,44 @@
   _travelInfoEnabled = enabled;
 
   if (_travelInfoDetailItem) {
-    _travelInfoDetailItem.detailText = TravelInfoItemDetailText(enabled);
+    if (IsYourSavedInfoSettingsPageIosEnabled()) {
+      _travelInfoDetailItem.trailingDetailText =
+          TravelInfoItemDetailText(enabled);
+    } else {
+      _travelInfoDetailItem.detailText = TravelInfoItemDetailText(enabled);
+    }
     [self reconfigureCellsForItems:@[ _travelInfoDetailItem ]];
   }
 }
 
-- (void)setShouldShowAutofillAIFeatures:(BOOL)shouldShow {
-  _shouldShowAutofillAIFeatures = shouldShow;
+- (void)setShoppingEnabled:(BOOL)enabled {
+  if (_shoppingEnabled == enabled) {
+    return;
+  }
+  _shoppingEnabled = enabled;
+
+  if (_shoppingDetailItem) {
+    if (IsYourSavedInfoSettingsPageIosEnabled()) {
+      _shoppingDetailItem.trailingDetailText =
+          ShoppingInfoItemDetailText(enabled);
+    } else {
+      _shoppingDetailItem.detailText = ShoppingInfoItemDetailText(enabled);
+    }
+    [self reconfigureCellsForItems:@[ _shoppingDetailItem ]];
+  }
 }
 
-#pragma mark - Sign-in Promo
+- (void)setShouldShowAutofillAIFeatures:(BOOL)shouldShow {
+  if (_shouldShowAutofillAIFeatures == shouldShow) {
+    return;
+  }
+  _shouldShowAutofillAIFeatures = shouldShow;
+  if (self.isViewLoaded) {
+    [self reloadData];
+  }
+}
+
+#pragma mark - AutofillAndPasswordsSigninPromoConsumer
 
 - (void)promoStateChanged:(BOOL)promoEnabled
         promoConfigurator:(SigninPromoViewConfigurator*)promoConfigurator
@@ -238,7 +304,8 @@
 }
 
 - (void)configureSigninPromoWithConfigurator:
-    (SigninPromoViewConfigurator*)configurator {
+            (SigninPromoViewConfigurator*)promoConfigurator
+                             identityChanged:(BOOL)identityChanged {
   TableViewModel* model = self.tableViewModel;
   if (![model hasSectionForSectionIdentifier:SettingsSectionIdentifierSignIn]) {
     return;
@@ -256,19 +323,32 @@
           [model itemAtIndexPath:path]);
 
   if (item) {
-    item.configurator = configurator;
+    item.configurator = promoConfigurator;
     [self reconfigureCellsForItems:@[ item ]];
   }
+}
+
+- (void)promoProgressStateDidChange {
+  [self.delegate
+      autofillAndPasswordsTableViewControllerPromoProgressStateDidChange:self];
+}
+
+- (void)signinPromoViewMediatorCloseButtonWasTapped:
+    (SigninPromoViewMediator*)mediator {
+  [self.delegate
+      autofillAndPasswordsTableViewControllerDidTapSigninPromoClose:self];
 }
 
 #pragma mark - SettingsControllerProtocol
 
 - (void)reportDismissalUserAction {
-  // TODO(crbug.com/500341282): Add missing metric.
+  base::RecordAction(
+      base::UserMetricsAction("MobileAutofillAndPasswordsSettingsClose"));
 }
 
 - (void)reportBackUserAction {
-  // TODO(crbug.com/500341282): Add missing metric.
+  base::RecordAction(
+      base::UserMetricsAction("MobileAutofillAndPasswordsSettingsBack"));
 }
 
 - (void)settingsWillBeDismissed {

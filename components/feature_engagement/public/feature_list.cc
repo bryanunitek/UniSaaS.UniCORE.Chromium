@@ -31,10 +31,14 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHAdaptiveButtonInTopToolbarCustomizationTranslateFeature,
     &kIPHAdaptiveButtonInTopToolbarCustomizationVoiceSearchFeature,
     &kIPHAdaptiveButtonPinGlicToolbarButtonFeature,
+    &kIPHAimActivationHint,
+    &kIPHAndroidBottomBarAim,
+    &kIPHAndroidBottomBarAimPromoDialog,
     &kIPHAndroidBottomBarGlic,
     &kIPHAndroidBottomBarNewTab,
     &kIPHAndroidBottomBarPromoDialog,
     &kIPHAndroidTabDeclutter,
+    &kIPHAndroidVerticalTabsPromoFeature,
     &kIPHAppRatingPromptFeature,
     &kIPHAppSpecificHistory,
     &kIPHAutoDarkOptOutFeature,
@@ -184,6 +188,7 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHiOSGeminiImageRemixFeature,
     &kIPHiOSGeminiLiveIPHFeature,
     &kIPHiOSGeminiLiveNewBadgeFeature,
+    &kIPHiOSGeminiWhatCanGeminiDo,
     &kIPHiOSHistoryOnOverflowMenuFeature,
     &kIPHiOSHomepageCustomizationNewBadge,
     &kIPHiOSHomepageLensNewBadge,
@@ -254,6 +259,7 @@ const base::Feature* const kAllFeatures[] = {
     // keep-sorted start case=no
     &kIPHBackNavigationMenuFeature,
     &kIPHBatterySaverModeFeature,
+    &kIPHBookmarkBarSimplifiedFeature,
     &kIPHCompanionSidePanelFeature,
     &kIPHCompanionSidePanelRegionSearchFeature,
     &kIPHComposeMSBBSettingsFeature,
@@ -277,6 +283,7 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHLensOverlayTranslateButtonFeature,
     &kIPHLiveCaptionFeature,
     &kIPHMemorySaverModeFeature,
+    &kIPHMultistepFilterPromoFeature,
     &kIPHPasswordManagerShortcutFeature,
     &kIPHPasswordSharingFeature,
     &kIPHPasswordsManagementBubbleAfterSaveFeature,
@@ -284,8 +291,10 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHPasswordsSavePrimingPromoFeature,
     &kIPHPasswordsSaveRecoveryPromoFeature,
     &kIPHPasswordsWebAppProfileSwitchFeature,
+    &kIPHPdfGlicSummarizeFeature,
     &kIPHPdfInkSignaturesFeature,
     &kIPHPdfSearchifyFeature,
+    &kIPHPdfTextAnnotationsFeature,
     &kIPHPerformanceInterventionDialogFeature,
     &kIPHPowerBookmarksSidePanelFeature,
     &kIPHPriceInsightsPageActionIconLabelFeature,
@@ -304,6 +313,7 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHShoppingCollectionFeature,
     &kIPHSideBySidePinnableFeature,
     &kIPHSideBySideTabSwitchFeature,
+    &kIPHSidePanelContextualTasksPinnableFeature,
     &kIPHSidePanelGenericPinnableFeature,
     &kIPHSidePanelLensOverlayPinnableFeature,
     &kIPHSidePanelLensOverlayPinnableFollowupFeature,
@@ -318,7 +328,6 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHTabGroupsSharedTabChangedFeature,
     &kIPHTabGroupsSharedTabFeedbackFeature,
     &kIPHTabSearchComboButtonFeature,
-    &kIPHTabSearchToolbarButtonFeature,
     &kIPHVerticalTabsExpandOnHoverFeature,
     &kIPHVerticalTabstripTutorialFeature,
     &kIPHWebUiHelpBubbleTestFeature,
@@ -345,7 +354,6 @@ const base::Feature* const kAllFeatures[] = {
     &kIPHAutofillOmniboxPaymentChipFeature,
     &kIPHAutofillVirtualCardCVCSuggestionFeature,
     &kIPHAutofillVirtualCardSuggestionFeature,
-    &kIPHCookieControlsFeature,
 // keep-sorted end
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) ||
@@ -360,15 +368,22 @@ const base::Feature* const kAllFeatures[] = {
 
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
     // keep-sorted start case=no
     &kIPHDesktopPWAsLinkCapturingLaunch,
     &kIPHDesktopPWAsLinkCapturingLaunchAppInTab,
+// keep-sorted end
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+        // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+    // keep-sorted start case=no
     &kIPHSignInBenefitsFeature,
     &kIPHSignInBenefitsNewSigninFeature,
     &kIPHSupervisedUserProfileSigninFeature,
 // keep-sorted end
-#endif  // BUILDFLAG(IS_WIN) ||  BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 #if BUILDFLAG(IS_WIN)
     // keep-sorted start case=no

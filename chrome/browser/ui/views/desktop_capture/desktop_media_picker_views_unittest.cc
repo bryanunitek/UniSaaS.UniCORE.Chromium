@@ -10,12 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/types/expected.h"
@@ -31,31 +29,27 @@
 #include "chrome/browser/ui/views/desktop_capture/desktop_media_source_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/views/chrome_test_views_delegate.h"
-#include "components/web_modal/test_web_contents_modal_dialog_host.h"
 #include "content/public/test/browser_task_environment.h"
-#include "media/audio/audio_features.h"
 #include "media/base/media_switches.h"
-#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/ui_base_switches.h"
 #include "ui/events/event_utils.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/controls/button/checkbox.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/button/md_text_button.h"
-#include "ui/views/controls/tabbed_pane/tabbed_pane.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/scoped_views_test_helper.h"
-#include "ui/views/test/test_views_delegate.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 
 #if BUILDFLAG(IS_MAC)
+#include "base/command_line.h"
 #include "base/mac/mac_util.h"
+#include "ui/base/ui_base_switches.h"
 #endif
 
 using ::blink::mojom::MediaStreamRequestResult;
@@ -406,13 +400,26 @@ TEST_P(DesktopMediaPickerViewsTest, OkButtonEnabledDuringAcceptSpecific) {
   EXPECT_EQ(fake_id, WaitForPickerResult());
 }
 
+TEST_P(DesktopMediaPickerViewsTest, AccessibleBubbleFrameViewTitle) {
+  // TODO(420734141): Make DesktopMediaPickerDialogView always have a
+  // BubbleFrameView.
+  views::BubbleFrameView* bubble_frame_view =
+      GetPickerDialogView()->GetBubbleFrameView();
+  if (bubble_frame_view) {
+    ui::AXNodeData ax_node;
+    bubble_frame_view->title()->GetViewAccessibility().GetAccessibleNodeData(
+        &ax_node);
+    EXPECT_EQ(ax_node.role, ax::mojom::Role::kHeading);
+    EXPECT_EQ(ax_node.GetStringAttribute(ax::mojom::StringAttribute::kName),
+              "Choose what to share");
+    EXPECT_EQ(
+        ax_node.GetIntAttribute(ax::mojom::IntAttribute::kHierarchicalLevel),
+        1);
+  }
+}
+
 #if BUILDFLAG(IS_MAC)
 TEST_P(DesktopMediaPickerViewsTest, OnPermissionUpdateWithPermissions) {
-  if (base::mac::MacOSMajorVersion() < 13) {
-    GTEST_SKIP()
-        << "ScreenCapturePermissionChecker only created for MacOS 13 and later";
-  }
-
   test_api_.OnPermissionUpdate(true);
 
   test_api_.SelectTabForSourceType(DesktopMediaList::Type::kScreen);
@@ -429,11 +436,6 @@ TEST_P(DesktopMediaPickerViewsTest, OnPermissionUpdateWithPermissions) {
 }
 
 TEST_P(DesktopMediaPickerViewsTest, OnPermissionUpdateWithoutPermissions) {
-  if (base::mac::MacOSMajorVersion() < 13) {
-    GTEST_SKIP()
-        << "ScreenCapturePermissionChecker only created for MacOS 13 and later";
-  }
-
   test_api_.OnPermissionUpdate(false);
 
   test_api_.SelectTabForSourceType(DesktopMediaList::Type::kScreen);

@@ -156,8 +156,10 @@ TEST_F(OverflowMenuConstantsTest, ActionTypeConversion) {
       case overflow_menu::ActionType::Identity:
         finalExpectedActionType = overflow_menu::ActionType::Identity;
         break;
-      case overflow_menu::ActionType::Signin:
-        finalExpectedActionType = overflow_menu::ActionType::Signin;
+      case overflow_menu::ActionType::SigninDeprecated:
+        continue;
+      case overflow_menu::ActionType::CustomizeHomePage:
+        finalExpectedActionType = overflow_menu::ActionType::CustomizeHomePage;
         break;
     }
 

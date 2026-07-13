@@ -8,16 +8,24 @@
 #include "base/functional/callback_helpers.h"
 #include "build/branding_buildflags.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/omnibox/aim_eligibility/aim_eligibility.mojom.h"  // nogncheck
+#include "chrome/browser/ui/webui/omnibox/aim_eligibility/extension/aim_eligibility_extension_bridge.h"  // nogncheck
 #include "components/guest_view/buildflags/buildflags.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/service_worker_version_base_info.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/manifest.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
+#include "ui/webui/color_change_listener/color_change_handler.h"
+#include "ui/webui/resources/cr_components/color_change_listener/color_change_listener.mojom.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
@@ -26,14 +34,13 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_extension_constants.h"
 #include "ash/webui/camera_app_ui/camera_app_ui.h"
 #include "build/config/chromebox_for_meetings/buildflags.h"
 #include "chrome/browser/ash/remote_apps/remote_apps_manager.h"
 #include "chrome/browser/ash/remote_apps/remote_apps_manager_factory.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos_factory.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chromeos/ash/components/enhanced_network_tts/enhanced_network_tts_impl.h"
 #include "chromeos/ash/components/enhanced_network_tts/mojom/enhanced_network_tts.mojom.h"
 #include "chromeos/ash/components/language_packs/language_packs_impl.h"
@@ -165,6 +172,30 @@ void BindBeforeUnloadControl(
   guest_view->FuseBeforeUnloadControl(std::move(receiver));
 }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+void BindColorChangeListenerForExtension(
+    const extensions::ExtensionId& extension_id,
+    content::RenderFrameHost* frame_host,
+    mojo::PendingReceiver<color_change_listener::mojom::PageHandler>
+        pending_receiver) {
+  auto* color_change_handler =
+      ui::ColorChangeHandler::GetOrCreateForCurrentDocument(frame_host);
+  bool mojo_js_enabled = extensions::util::IsMojoJsEnabledForExtension(
+      extension_id, frame_host->GetBrowserContext());
+  color_change_handler->Bind(std::move(pending_receiver),
+                             /*allow_non_webui=*/mojo_js_enabled);
+}
+
+void BindAimEligibilityPageHandlerFactory(
+    content::BrowserContext* browser_context,
+    mojo::PendingReceiver<aim_eligibility::mojom::PageHandlerFactory>
+        receiver) {
+  auto* bridge = AimEligibilityExtensionBridge::Get(
+      Profile::FromBrowserContext(browser_context));
+  if (bridge) {
+    bridge->BindFactoryReceiver(std::move(receiver));
+  }
+}
 
 }  // namespace
 
@@ -300,6 +331,21 @@ void PopulateChromeFrameBindersForExtension(
   binder_map->Add<mime_handler::MimeHandlerService>(&BindMimeHandlerService);
   binder_map->Add<mime_handler::BeforeUnloadControl>(&BindBeforeUnloadControl);
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+  if (extension->id() == extension_misc::kAimEligibilityExtensionId &&
+      extensions::Manifest::IsComponentLocation(extension->location())) {
+    binder_map->Add<aim_eligibility::mojom::PageHandlerFactory>(
+        base::BindRepeating(
+            [](content::RenderFrameHost* frame_host,
+               mojo::PendingReceiver<aim_eligibility::mojom::PageHandlerFactory>
+                   receiver) {
+              BindAimEligibilityPageHandlerFactory(
+                  frame_host->GetBrowserContext(), std::move(receiver));
+            }));
+    binder_map->Add<color_change_listener::mojom::PageHandler>(
+        base::BindRepeating(&BindColorChangeListenerForExtension,
+                            extension->id()));
+  }
 }
 
 void PopulateChromeServiceWorkerBindersForExtension(
@@ -336,6 +382,20 @@ void PopulateChromeServiceWorkerBindersForExtension(
             browser_context));
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  if (extension->id() == extension_misc::kAimEligibilityExtensionId &&
+      extensions::Manifest::IsComponentLocation(extension->location())) {
+    binder_map->Add<aim_eligibility::mojom::PageHandlerFactory>(
+        base::BindRepeating(
+            [](content::BrowserContext* context,
+               const content::ServiceWorkerVersionBaseInfo&,
+               mojo::PendingReceiver<aim_eligibility::mojom::PageHandlerFactory>
+                   receiver) {
+              BindAimEligibilityPageHandlerFactory(context,
+                                                   std::move(receiver));
+            },
+            browser_context));
+  }
 }
 
 }  // namespace extensions

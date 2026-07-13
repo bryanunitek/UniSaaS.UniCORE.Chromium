@@ -676,32 +676,19 @@ static bool NeedsPaintOffsetTranslation(
       return true;
   }
 
-  // Though we don't treat hidden backface as a direct compositing reason, it's
-  // very likely that the object will be composited, so a paint offset
-  // translation will be beneficial.
-  bool has_paint_offset_compositing_reason =
-      direct_compositing_reasons != CompositingReason::kNone ||
-      box_model.StyleRef().BackfaceVisibility() == EBackfaceVisibility::kHidden;
-  if (has_paint_offset_compositing_reason) {
-    // Don't let paint offset cross composited layer boundaries when possible,
-    // to avoid unnecessary full layer paint/raster invalidation when paint
-    // offset in ancestor transform node changes which should not affect the
-    // descendants of the composited layer.
-    if (RuntimeEnabledFeatures::PaintOffsetTranslationForCompositedEnabled()) {
-      // For now a LayoutInline applies paint properties only if it has a
-      // self-painting layer. See https://crbug.com/495746269.
-      return !box_model.IsLayoutInline() || box_model.HasSelfPaintingLayer();
-    }
-    if (box_model.IsLayoutBlock() || object.IsLayoutReplaced() ||
-        // Inline elements with backdrop-filter are also included to fix paint
-        // offset issue (see crbug.com/40716515).
-        (!object.StyleRef().BackdropFilter().IsEmpty() &&
-         object.IsLayoutInline()) ||
-        (direct_compositing_reasons &
-         CompositingReason::kViewTransitionElement) ||
-        (direct_compositing_reasons & CompositingReason::kElementCapture)) {
-      return true;
-    }
+  // Don't let paint offset cross composited layer boundaries when possible,
+  // to avoid unnecessary full layer paint/raster invalidation when paint
+  // offset in ancestor transform node changes which should not affect the
+  // descendants of the composited layer.
+  if (direct_compositing_reasons != CompositingReason::kNone ||
+      // Though we don't treat hidden backface as a direct compositing reason,
+      // it's very likely that the object will be composited, so a paint offset
+      // translation will be beneficial.
+      box_model.StyleRef().BackfaceVisibility() ==
+          EBackfaceVisibility::kHidden) {
+    // For now a LayoutInline applies paint properties only if it has a
+    // self-painting layer. See https://crbug.com/495746269.
+    return !box_model.IsLayoutInline() || box_model.HasSelfPaintingLayer();
   }
 
   return false;
@@ -1947,22 +1934,19 @@ FragmentPaintPropertyTreeBuilder::ParentForViewTransitionPseudoEffect() const {
 
 static void PopulateCanvasChildPaintState(HTMLCanvasElement* canvas,
                                           CanvasChildPaintState& paint_state) {
-  gfx::Size canvas_device_pixel_content_box =
+  const LayoutReplaced* replaced = To<LayoutReplaced>(canvas->GetLayoutBox());
+  const ComputedStyle& style = replaced->StyleRef();
+
+  paint_state.canvas_content_size =
+      gfx::SizeF(replaced->ReplacedContentRect().size);
+  paint_state.canvas_device_pixel_content_box =
       ResizeObserverUtilities::ComputeSnappedDevicePixelContentBox(
-          LogicalSize(canvas->GetLayoutBox()->ContentLogicalWidth(),
-                      canvas->GetLayoutBox()->ContentLogicalHeight()),
-          *canvas->GetLayoutBox(), canvas->GetLayoutBox()->StyleRef());
-
-  PhysicalRect canvas_content_size;
-  if (auto* replaced = DynamicTo<LayoutReplaced>(canvas->GetLayoutBox())) {
-    canvas_content_size = replaced->ReplacedContentRect();
-  } else {
-    canvas_content_size = canvas->GetLayoutBox()->PhysicalContentBoxRect();
-  }
-
-  paint_state.canvas_content_size = gfx::SizeF(canvas_content_size.size);
-  paint_state.canvas_device_pixel_content_box = canvas_device_pixel_content_box;
+          ToLogicalSize(replaced->PhysicalContentBoxRect().size,
+                        style.GetWritingMode()),
+          *replaced, style);
   paint_state.canvas_node_id = canvas->GetDomNodeId();
+  paint_state.animated_image_frame_index_map =
+      canvas->GetDocument().View()->GetAnimatedImageFrameIndexes();
 }
 static void PopulateCanvasChildState(const LayoutObject& object,
                                      EffectPaintPropertyNode::State& state) {
@@ -3300,11 +3284,16 @@ void FragmentPaintPropertyTreeBuilder::UpdateContentTranslation() {
       return;
     }
 
-    gfx::Point scroll_origin =
-        overscroll_area_tracker->DOMSortedElements()[index - 1]
-            ->GetPseudoElement(kPseudoIdOverscrollAreaParent)
-            ->GetLayoutBox()
-            ->ScrollOrigin();
+    gfx::Point scroll_origin;
+    for (wtf_size_t i = index; i > 0; --i) {
+      PseudoElement* pseudo =
+          overscroll_area_tracker->DOMSortedElements()[i - 1]->GetPseudoElement(
+              kPseudoIdOverscrollAreaParent);
+      if (LayoutBox* layout_box = pseudo->GetLayoutBox()) {
+        scroll_origin = layout_box->ScrollOrigin();
+        break;
+      }
+    }
 
     TransformPaintPropertyNode::State state{
         {gfx::Transform::MakeTranslation(scroll_origin.OffsetFromOrigin())}};
@@ -3423,6 +3412,16 @@ void FragmentPaintPropertyTreeBuilder::UpdateScrollNode() {
                                  box.StyleRef().OverscrollBehaviorX()),
                              static_cast<cc::OverscrollBehavior::Type>(
                                  box.StyleRef().OverscrollBehaviorY()));
+
+  // Reset overscroll-behavior to 'auto' on non-scrollable axes so they do not
+  // block scroll chaining or trigger local overscroll effects.
+  PhysicalAxes scrollable_axes = scrollable_area->ScrollableAxes();
+  if (!(scrollable_axes & kPhysicalAxesHorizontal)) {
+    state.overscroll_behavior.x = cc::OverscrollBehavior::Type::kAuto;
+  }
+  if (!(scrollable_axes & kPhysicalAxesVertical)) {
+    state.overscroll_behavior.y = cc::OverscrollBehavior::Type::kAuto;
+  }
 
   state.prevent_scroll_axis_locking =
       (box.StyleRef().ScrollAxisLock() == EScrollAxisLock::kNone);
@@ -4431,16 +4430,17 @@ void PaintPropertyTreeBuilder::UpdateForSelf() {
     }
   }
 
-  // Resolve the current composited clip path animation status. This is needed
-  // to determine whether we need to initialize paint properties for this
-  // object.
-  const bool is_in_fragment_container =
-      !RuntimeEnabledFeatures::FragmentedOofInCbEnabled() && pre_paint_info_ &&
-      pre_paint_info_->fragmentainer_is_oof_containing_block &&
-      IsA<LayoutBox>(object_) &&
-      (To<LayoutBox>(object_).PhysicalFragmentCount() > 1);
+  // Our own FragmentData will not have been populated at this point, but
+  // clip-path animations need to know whether there are >1 fragments to
+  // determine composited eligibility. So, we use the information collected
+  // earlier in the walk.
+  const bool object_is_fragmented =
+      (object_.IsBox() && To<LayoutBox>(object_).PhysicalFragmentCount() > 1) ||
+      (pre_paint_info_ && object_.IsInline() &&
+       pre_paint_info_->is_inside_fragment_child &&
+       !pre_paint_info_->is_last_for_node);
   ClipPathClipper::FallbackClipPathAnimationIfNecessary(
-      object_, /* should_force_fallback = */ is_in_fragment_container);
+      object_, /* should_force_fallback = */ object_is_fragmented);
 
   UpdatePaintingLayer();
   UpdateFragmentData();

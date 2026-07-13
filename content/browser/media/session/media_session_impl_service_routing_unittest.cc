@@ -12,8 +12,8 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "content/browser/media/session/media_session_impl.h"
-#include "content/browser/media/session/media_session_player_observer.h"
 #include "content/browser/media/session/mock_media_session_service_impl.h"
+#include "content/public/browser/media_session_player_observer.h"
 #include "content/public/test/test_media_session_client.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
@@ -24,6 +24,7 @@
 #include "services/media_session/public/mojom/constants.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/mediasession/media_session.mojom.h"
+#include "ui/gfx/geometry/size.h"
 
 using ::testing::_;
 using ::testing::AnyNumber;
@@ -70,7 +71,8 @@ class MockMediaSessionPlayerObserver : public MediaSessionPlayerObserver {
   MOCK_METHOD2(OnSeekTo, void(int player_id, base::TimeDelta seek_time));
   MOCK_METHOD2(OnSetVolumeMultiplier,
                void(int player_id, double volume_multiplier));
-  MOCK_METHOD1(OnEnterPictureInPicture, void(int player_id));
+  MOCK_METHOD2(OnEnterPictureInPicture,
+               void(int player_id, const std::optional<gfx::Size>& min_size));
   MOCK_METHOD2(OnSetAudioSinkId,
                void(int player_id, const std::string& raw_device_id));
   MOCK_METHOD2(OnSetMute, void(int player_id, bool mute));

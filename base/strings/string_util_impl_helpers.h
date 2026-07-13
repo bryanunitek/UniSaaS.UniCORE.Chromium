@@ -15,6 +15,7 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/third_party/icu/icu_utf.h"
@@ -101,16 +102,6 @@ TrimPositions TrimStringT(T input,
   return static_cast<TrimPositions>(
       (first_good_char == 0 ? TRIM_NONE : TRIM_LEADING) |
       (last_good_char == last_char ? TRIM_NONE : TRIM_TRAILING));
-}
-
-template <typename T, typename CharT = typename T::value_type>
-T TrimStringPieceT(T input, T trim_chars, TrimPositions positions) {
-  size_t begin =
-      (positions & TRIM_LEADING) ? input.find_first_not_of(trim_chars) : 0;
-  size_t end = (positions & TRIM_TRAILING)
-                   ? input.find_last_not_of(trim_chars) + 1
-                   : input.size();
-  return input.substr(std::min(begin, input.size()), end - begin);
 }
 
 template <typename T, typename CharT = typename T::value_type>
@@ -473,43 +464,6 @@ inline typename string_type::value_type* WriteIntoT(string_type* str,
   str->reserve(length_with_null);
   str->resize(length_with_null - 1);
   return str->data();
-}
-
-// Generic version for all JoinString overloads. |list_type| must be a sequence
-// (base::span or std::initializer_list) of strings/StringPieces (std::string,
-// std::u16string, std::string_view or std::u16string_view). |CharT| is either
-// char or char16_t.
-template <typename list_type,
-          typename T,
-          typename CharT = typename T::value_type>
-static std::basic_string<CharT> JoinStringT(list_type parts, T sep) {
-  if (std::empty(parts)) {
-    return std::basic_string<CharT>();
-  }
-
-  // Pre-allocate the eventual size of the string. Start with the size of all of
-  // the separators (note that this *assumes* parts.size() > 0).
-  size_t total_size = (parts.size() - 1) * sep.size();
-  for (const auto& part : parts) {
-    total_size += part.size();
-  }
-  std::basic_string<CharT> result;
-  result.reserve(total_size);
-
-  auto iter = parts.begin();
-  CHECK(iter != parts.end());
-  result.append(*iter);
-  UNSAFE_TODO(++iter);
-
-  for (; iter != parts.end(); UNSAFE_TODO(++iter)) {
-    result.append(sep);
-    result.append(*iter);
-  }
-
-  // Sanity-check that we pre-allocated correctly.
-  DCHECK_EQ(total_size, result.size());
-
-  return result;
 }
 
 // StringViewLike will match both std::basic_string_view<Char> and

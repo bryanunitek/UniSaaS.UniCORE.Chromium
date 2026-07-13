@@ -24,6 +24,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.metrics.TimingMetric;
@@ -75,6 +76,7 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
 
     private final int mBaseBottomPadding;
     private final int mBaseTopPadding;
+    private @SelectionController.Mode int mSelectionMode;
 
     /**
      * Interface that will receive notifications when the user is interacting with an item on the
@@ -305,6 +307,12 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
                 TimingMetric metric2 =
                         OmniboxMetrics.recordSuggestionsDropdownAsyncInflationWallTime();
                 TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsDropdown.Constructor")) {
+            boolean runsOnExpectedThread =
+                    OmniboxFeatures.sAsyncViewInflation.isEnabled()
+                            ? !ThreadUtils.runningOnUiThread()
+                            : ThreadUtils.runningOnUiThread();
+            OmniboxMetrics.recordSuggestionsDropdownInflationThreadMatchesExpectedThread(
+                    runsOnExpectedThread);
             mHandler = new Handler(Looper.getMainLooper());
 
             setFocusable(true);
@@ -323,9 +331,9 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
             mLayoutScrollListener = suggestionLayoutScrollListener;
             setLayoutManager(mLayoutScrollListener);
 
+            mSelectionMode = SelectionController.Mode.WRAPPING_WITH_SENTINEL;
             mSelectionController =
-                    new RecyclerViewSelectionController(
-                            mLayoutScrollListener, SelectionController.Mode.WRAPPING_WITH_SENTINEL);
+                    new RecyclerViewSelectionController(mLayoutScrollListener, mSelectionMode);
             addOnChildAttachStateChangeListener(mSelectionController);
 
             final Resources resources = context.getResources();
@@ -343,7 +351,6 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
             mViewHolderFactory = new OmniboxViewHolderFactory();
             if (OmniboxFeatures.sAsyncViewInflation.isEnabled()) {
                 mRecycledViewPool = new PreWarmingRecycledViewPool(mViewHolderFactory, context);
-                setRecycledViewPool(mRecycledViewPool);
             }
         }
     }
@@ -355,6 +362,12 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
      */
     public void setModelList(ModelList listItems) {
         setAdapter(new OmniboxSuggestionsDropdownAdapter(listItems, mViewHolderFactory));
+
+        // Set the recycled view pool AFTER the adapter is set. Otherwise,
+        // RecyclerView.setAdapter() will clear the pre-warmed pool.
+        if (mRecycledViewPool != null) {
+            setRecycledViewPool(mRecycledViewPool);
+        }
     }
 
     @Override
@@ -393,10 +406,48 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
         mNavigationListener = listener;
     }
 
+    /**
+     * Whether the first item of the suggestions list is currently keyboard selected. False if
+     * parked at the sentinel.
+     */
+    public boolean isFirstItemSelected() {
+        return mSelectionController.getPosition() != null
+                && mSelectionController.getPosition() == 0;
+    }
+
+    /**
+     * Whether the last item of the suggestions list is currently keyboard selected. False if parked
+     * at the sentinel.
+     */
+    public boolean isLastItemSelected() {
+        return mSelectionController.getPosition() != null
+                && mSelectionController.getPosition() == mSelectionController.getItemCount() - 1;
+    }
+
     /** Resets selection typically in response to changes to the list. */
     public void resetSelection() {
         mLayoutScrollListener.scrollToPositionWithOffset(0, 0);
         mSelectionController.reset();
+    }
+
+    /** Keyboard select the first item in the suggestions list. */
+    public void selectFirstItem() {
+        if (mSelectionController.getItemCount() == 0) return;
+        mSelectionController.setPosition(0);
+    }
+
+    /** Keyboard select the last item in the suggestions list. */
+    public void selectLastItem() {
+        if (mSelectionController.getItemCount() == 0) return;
+        mSelectionController.setPosition(mSelectionController.getItemCount() - 1);
+    }
+
+    /**
+     * Get the index of the currently keyboard-selected view, if any. Null if the sentinel is
+     * currently selected.
+     */
+    public @Nullable Integer getSelectedIndex() {
+        return mSelectionController.getPosition();
     }
 
     /**
@@ -405,12 +456,11 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
      * @param allow Whether parking at sentinel is allowed.
      */
     public void setAllowParkingAtSentinel(boolean allow) {
-        @SelectionController.Mode
-        int mode =
+        mSelectionMode =
                 allow
                         ? SelectionController.Mode.WRAPPING_WITH_SENTINEL
                         : SelectionController.Mode.WRAPPING;
-        mSelectionController.setSelectionMode(mode);
+        mSelectionController.setSelectionMode(mSelectionMode);
         mSelectionController.reset();
     }
 
@@ -620,7 +670,6 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
         return mAdapter;
     }
 
-    @VisibleForTesting
     SelectionController getSelectionControllerForTesting() {
         return mSelectionController;
     }

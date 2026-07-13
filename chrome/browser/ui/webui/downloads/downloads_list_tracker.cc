@@ -213,7 +213,7 @@ void DownloadsListTracker::Reset() {
 bool DownloadsListTracker::SetSearchTerms(
     const std::vector<std::string>& search_terms) {
   std::vector<std::u16string> new_terms;
-  new_terms.resize(search_terms.size());
+  new_terms.reserve(search_terms.size());
 
   for (const auto& t : search_terms) {
     new_terms.push_back(base::UTF8ToUTF16(t));
@@ -498,7 +498,9 @@ downloads::mojom::DataPtr DownloadsListTracker::CreateDownloadData(
   file_value->has_safe_browsing_verdict =
       WasSafeBrowsingVerdictObtained(download_item);
 
-  MaybeRecordDangerousDownloadWarningShown(download_model);
+  if (download_model.IsDangerous()) {
+    MaybeRecordDangerousDownloadWarningShown(download_model);
+  }
 
   if (download_item->IsDangerous()) {
     // It's likely that SHOWN has already been logged from the download bubble,

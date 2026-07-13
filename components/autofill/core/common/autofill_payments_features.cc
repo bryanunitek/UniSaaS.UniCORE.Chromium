@@ -32,12 +32,12 @@ BASE_FEATURE(kAutofillDisableBnplCountryCheckForTesting,
 // page using server-side AI.
 BASE_FEATURE(kAutofillEnableAiBasedAmountExtraction,
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
+    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
              base::FEATURE_ENABLED_BY_DEFAULT);
 #else
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS)
+        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 
 // When enabled, AI-based card recommendations will be offered on Autofill
 // when at least two credit card suggestions are shown.
@@ -160,11 +160,6 @@ BASE_FEATURE(kAutofillEnableCardBenefitsSync,
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
-// When enabled, runtime retrieval of CVC along with card number and expiry
-// from issuer for enrolled cards will be enabled during form fill.
-BASE_FEATURE(kAutofillEnableCardInfoRuntimeRetrieval,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 // When enabled, this will enhance the CVV storage project. The enhancement will
 // enable CVV storage suggestions for standalone CVC fields.
 BASE_FEATURE(kAutofillEnableCvcStorageAndFillingStandaloneFormEnhancement,
@@ -243,6 +238,11 @@ BASE_FEATURE(kAutofillEnablePayNowPayLaterTabs,
 BASE_FEATURE(kAutofillEnablePrefetchingRiskDataForRetrieval,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// When enabled, users that have previously turned off payments autofill will be
+// prompted to turn it back on in instances where they can benefit from it.
+BASE_FEATURE(kAutofillEnableResurrectingPaymentsUsers,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 // When enabled, the 'Save and Fill' suggestion will be offered in the credit
 // card dropdown menu for users who don't have any cards saved in Autofill.
 BASE_FEATURE(kAutofillEnableSaveAndFill, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -300,12 +300,12 @@ BASE_FEATURE(kAutofillEnableWalletBrandingV2,
 // eligibility.
 BASE_FEATURE(kAutofillPreferBuyNowPayLaterBlocklists,
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
+    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
              base::FEATURE_ENABLED_BY_DEFAULT);
 #else
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS)
+        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 
 // When enabled, this feature prioritizes showing the save card bubble over the
 // mandatory re-auth bubble when both are applicable.
@@ -318,6 +318,18 @@ BASE_FEATURE(kAutofillPrioritizeSaveCardOverMandatoryReauth,
 // TODO(crbug.com/40276036): Clean up after M139 branch (June 23, 2025).
 BASE_FEATURE(kAutofillRetryImageFetchOnFailure,
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_IOS)
+// When enabled, the strike limit for showing the save card bottom sheet on iOS
+// is increased from 1 to the value specified in the parameter and the default
+// value of the strike is 3.
+BASE_FEATURE(kAutofillSaveCardBottomSheetStrikeLimitIos,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+const base::FeatureParam<int> kMaxStrikesForSaveCardBottomSheetIos{
+    &kAutofillSaveCardBottomSheetStrikeLimitIos,
+    "max_strikes_for_bottom_sheet_ios", 3};
+#endif
 
 // Kill switch, when enabled, will prevent the display of the save card bubble
 // within a tab modal pop-up window.

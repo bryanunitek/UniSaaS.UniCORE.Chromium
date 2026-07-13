@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "base/check_deref.h"
+#include "base/strings/strcat.h"
+#include "base/strings/to_string.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
@@ -850,14 +852,14 @@ TEST_F(ActorFormFillingServiceTest, FillWithInvalidSuggestionId) {
 // select field.
 TEST_F(ActorFormFillingServiceTest, TriggerOnSelect) {
   FormData form = SeeForm(
-      {.fields = {{.server_type = ADDRESS_HOME_COUNTRY,
-                   .form_control_type = FormControlType::kSelectOne,
-                   .select_options =
-                       {SelectOption{.value = u"US", .text = u"United States"},
-                        SelectOption{.value = u"CA", .text = u"Canada"},
-                        SelectOption{.value = u"DE", .text = u"Germany"}}},
-                  {.server_type = ADDRESS_HOME_LINE1},
-                  {.server_type = ADDRESS_HOME_CITY}}});
+      {.fields = {
+           {.server_type = ADDRESS_HOME_COUNTRY,
+            .form_control_type = FormControlType::kSelectOne,
+            .select_options = {{{.value = u"US", .text = u"United States"},
+                                {.value = u"CA", .text = u"Canada"},
+                                {.value = u"DE", .text = u"Germany"}}}},
+           {.server_type = ADDRESS_HOME_LINE1},
+           {.server_type = ADDRESS_HOME_CITY}}});
 
   GetSuggestionsFuture request_future;
   service().GetSuggestions(tab(),
@@ -1026,6 +1028,19 @@ auto JournalEntryWithError(std::string_view expected_message) {
                              testing::HasSubstr(expected_message))))))));
 }
 
+auto JournalEntryWithSkipReason(std::string_view field_name,
+                                std::string_view expected_reason) {
+  return testing::Field(
+      &::actor::AggregatedJournal::Entry::data,
+      testing::Pointee(testing::Field(
+          &::actor::mojom::JournalEntry::details,
+          testing::Contains(testing::Pointee(testing::AllOf(
+              testing::Field(&::actor::mojom::JournalDetails::key,
+                             testing::Eq(std::string(field_name))),
+              testing::Field(&::actor::mojom::JournalDetails::value,
+                             testing::Eq(std::string(expected_reason)))))))));
+}
+
 TEST(ActorFormFillingServiceJournalTest,
      FillWithInvalidSuggestionId_LogsToJournal) {
   content::BrowserTaskEnvironment task_environment;
@@ -1043,12 +1058,41 @@ TEST(ActorFormFillingServiceJournalTest,
   EXPECT_CALL(observer, WillAddJournalEntry(JournalEntryWithError(
                             "Autofill manager not available")));
 
-  autofill::ActorFormFillingServiceImpl service(journal.GetSafeRef(),
-                                                ::actor::TaskId(1));
+  ActorFormFillingServiceImpl service(journal.GetSafeRef(), ::actor::TaskId(1));
 
-  service.FillForm(
-      mock_tab, /*form_index=*/0,
-      autofill::ActorFormFillingSelection(autofill::ActorSuggestionId(123)));
+  service.FillForm(mock_tab, /*form_index=*/0,
+                   ActorFormFillingSelection(ActorSuggestionId(123)));
+}
+
+TEST_F(ActorFormFillingServiceTest, LogsMultipleSkipReasonsToJournal) {
+  // We set role = CREDIT_CARD_NUMBER to trigger kFieldTypeUnrelated (15),
+  // and is_focusable = false to trigger kInvisibleField (5).
+  FormData form = SeeForm(
+      {.fields = {{.role = NAME_FULL},
+                  {.role = CREDIT_CARD_NUMBER, .is_focusable = false}}});
+
+  GetSuggestionsFuture future;
+  service().GetSuggestions(tab(),
+                           {AddressFillRequest({form.fields()[0].global_id()})},
+                           future.GetCallback());
+
+  ASSERT_THAT(future.Get(), HasValue());
+  std::vector<ActorFormFillingRequest> requests = future.Take().value();
+
+  MockJournalObserver observer(journal());
+
+  std::string expected_key = base::StrCat(
+      {"field_", base::ToString(form.fields()[1].renderer_id().value())});
+
+  // Expected skip reasons:
+  // - kNotInFilledSection (2)
+  // - kInvisibleField (5)
+  // - kNoValueToFill (16)
+  EXPECT_CALL(observer, WillAddJournalEntry(JournalEntryWithSkipReason(
+                            expected_key, "2, 5, 16")));
+
+  service().FillForm(tab(), /*form_index=*/0,
+                     ActorFormFillingSelection(requests[0].suggestions[0].id));
 }
 
 }  // namespace

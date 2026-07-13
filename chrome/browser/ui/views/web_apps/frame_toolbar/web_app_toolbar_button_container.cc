@@ -150,6 +150,7 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
   if (base::FeatureList::IsEnabled(features::kWebAppInstallDialog) &&
       app_controller->CanUserUninstall() &&
       !app_controller->IsPreinstalledOnly() &&
+      !app_controller->IsIsolatedWebApp() &&
       app_controller->IsFirstLaunchAfterInstall()) {
     auto* button = AddChildView(
         std::make_unique<WebAppUninstallToolbarButton>(base::BindRepeating(
@@ -167,6 +168,8 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
     button->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_RIGHT);
     button->SetTooltipText(
         l10n_util::GetStringUTF16(IDS_WEB_APP_UNINSTALL_BUTTON_FRAME_TOOLTIP));
+    button->SetProperty(views::kElementIdentifierKey,
+                        kWebAppUninstallButtonElementId);
     uninstall_button_ = button;
     views::SetHitTestComponent(uninstall_button_, static_cast<int>(HTCLIENT));
   }
@@ -189,7 +192,7 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
     ConfigureWebAppToolbarButton(window_controls_overlay_toggle_button_,
                                  toolbar_button_provider_);
     window_controls_overlay_toggle_button_->SetVisible(
-        browser_view_->should_show_window_controls_overlay_toggle());
+        browser_view_->is_window_controls_overlay_available());
   }
 
   if (app_controller->HasTitlebarContentSettings()) {
@@ -347,6 +350,15 @@ void WebAppToolbarButtonContainer::UpdateStatusIconsVisibility() {
       controller = active_tab->GetTabFeatures()->page_action_controller();
     }
     page_action_container_->SetController(controller);
+  }
+}
+
+// When Window Controls Overlay is enabled dynamically by the user clicking the
+// expand arrow toggle button, we clean up and remove the ephemeral uninstall
+// button if it exists.
+void WebAppToolbarButtonContainer::WindowControlsOverlayEnabledChanged() {
+  if (uninstall_button_ && browser_view_->IsWindowControlsOverlayEnabled()) {
+    RemoveChildViewT(std::exchange(uninstall_button_, nullptr));
   }
 }
 

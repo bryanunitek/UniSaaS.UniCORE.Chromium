@@ -32,7 +32,9 @@
 #include "chrome/browser/web_applications/file_utils_wrapper.h"
 #include "chrome/browser/web_applications/generated_icon_fix_manager.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_dev_install_manager.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_metrics_helper.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_user_installed_manager.h"
+#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_manager.h"
 #include "chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h"
 #include "chrome/browser/web_applications/jobs/uninstall/remove_web_app_job.h"
 #include "chrome/browser/web_applications/manifest_update_manager.h"
@@ -67,20 +69,21 @@
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync/model/data_type_store_service.h"
 #include "components/webapps/common/manifest_id_constants.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/isolated_web_apps_policy.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "third_party/blink/public/common/features.h"
+#include "url/origin.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #include "chrome/browser/web_applications/ash/migrations/adobe_express_oem_to_default_migration.h"
 #include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_cache_manager.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_manager.h"
 #include "chrome/browser/web_applications/web_app_run_on_os_login_manager.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #endif
@@ -384,7 +387,8 @@ void WebAppProvider::StartImpl() {
 void WebAppProvider::CreateSubsystems(Profile* profile) {
   audio_focus_id_map_ = std::make_unique<WebAppAudioFocusIdMap>();
   ui_manager_ = WebAppUiManager::Create(profile);
-  install_manager_ = std::make_unique<WebAppInstallManager>(profile);
+  install_manager_ =
+      std::make_unique<WebAppInstallManager>(profile->GetPrefs());
   manifest_update_manager_ = std::make_unique<ManifestUpdateManager>();
   externally_managed_app_manager_ =
       std::make_unique<ExternallyManagedAppManager>(profile);
@@ -646,6 +650,8 @@ void WebAppProvider::DoDelayedPostStartupWork() {
     }
   }
 #endif
+
+  ReportSubAppMetricsOnStartup();
 }
 
 void WebAppProvider::OnDefaultAppUpdateComplete(
@@ -657,6 +663,14 @@ void WebAppProvider::OnDefaultAppUpdateComplete(
       WebAppPrefGuardrails::GetForDefaultAppUpdateOnStartup(
           *profile_->GetPrefs());
   guardrails.RecordIgnore(app_id, clock().Now());
+}
+
+void WebAppProvider::ReportSubAppMetricsOnStartup() {
+  if (!content::AreIsolatedWebAppsEnabled(profile_) ||
+      !base::FeatureList::IsEnabled(blink::features::kSubApps)) {
+    return;
+  }
+  IsolatedWebAppMetricsHelper::ReportNumInstalledSubApps(registrar_unsafe());
 }
 
 }  // namespace web_app

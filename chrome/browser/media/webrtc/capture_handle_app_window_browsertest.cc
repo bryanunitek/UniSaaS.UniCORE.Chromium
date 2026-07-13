@@ -38,6 +38,7 @@
 #include "ui/gl/gl_switches.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
@@ -149,9 +150,9 @@ class WindowCaptureSession {
             permissions::PermissionRequestManager::ACCEPT_ALL);
 
     // This forces both tabs to pump video frames, preventing WebRTC timeouts.
-    target_browser_->window()->Show();
+    target_browser_->GetWindow()->Show();
     target_contents_->WasShown();
-    capturer_browser_->window()->Show();
+    capturer_browser_->GetWindow()->Show();
     capturer_contents_->WasShown();
     EXPECT_EQ("capture-success",
               content::EvalJs(capturer_contents_, "captureOtherTab();"));
@@ -423,6 +424,10 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(web_app::WebAppManagement::Type::kKiosk,
                     web_app::WebAppManagement::Type::kPolicy));
 
+// TODO(https://crbug.com/530967723): This entire sub-suite of tests is flaky in
+// ash; disabling.
+#if !BUILDFLAG(IS_CHROMEOS)
+
 class CaptureHandlePwaBrowserTest : public CaptureHandleWindowBrowserTest {
  public:
   CaptureHandlePwaBrowserTest() = default;
@@ -676,6 +681,8 @@ IN_PROC_BROWSER_TEST_F(CaptureHandlePwaBrowserTest,
   session_->NavigateTargetCrossDocumentAndWait("/title3.html");
   EXPECT_EQ(session_->ReadLastEvent(), "null");
 }
+
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 class CaptureHandleIwaWindowBrowserTest
     : public web_app::IsolatedWebAppBrowserTestHarness {
@@ -1011,8 +1018,13 @@ IN_PROC_BROWSER_TEST_F(CaptureHandleSystemWebAppBrowserTest,
   ASSERT_TRUE(swa_contents);
   EXPECT_TRUE(content::WaitForLoadStop(swa_contents));
 
-  Browser* swa_browser = ash::FindSystemWebAppBrowser(
-      browser()->profile(), ash::SystemWebAppType::SETTINGS);
+  ash::BrowserDelegate* swa_browser_delegate = ash::FindSystemWebAppBrowser(
+      browser()->profile(), ash::SystemWebAppType::SETTINGS,
+      ash::BrowserType::kApp);
+  Browser* swa_browser =
+      swa_browser_delegate
+          ? swa_browser_delegate->GetBrowser().GetBrowserForMigrationOnly()
+          : nullptr;
   ASSERT_TRUE(swa_browser);
 
   base::ScopedClosureRunner auto_close(

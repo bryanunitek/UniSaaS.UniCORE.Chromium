@@ -12,6 +12,7 @@
 
 #include "base/base64.h"
 #include "base/base64url.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
@@ -76,8 +77,6 @@ int EstimateFeedQueryRequestSize(const network::ResourceRequest& request) {
   return total_size;
 }
 
-// TODO(crbug.com/407797637): remove PREFETCHED_WEB_FEED and PREFETCHED_WEB_FEED
-// from feed_query.proto.
 GURL GetFeedQueryURL(feedwire::FeedQuery::RequestReason reason) {
   // Add URLs for Bling when it is supported.
   switch (reason) {
@@ -95,8 +94,6 @@ GURL GetFeedQueryURL(feedwire::FeedQuery::RequestReason reason) {
           "https://www.google.com/httpservice/retry/TrellisClankService/"
           "FeedQuery");
     case feedwire::FeedQuery::UNKNOWN_REQUEST_REASON:
-    case feedwire::FeedQuery::PREFETCHED_WEB_FEED:
-    case feedwire::FeedQuery::INTERACTIVE_WEB_FEED:
       return GURL();
   }
 }
@@ -435,7 +432,8 @@ class FeedNetworkImpl::NetworkFetch {
     }
     response_info.loader_start_time_ticks = loader_only_start_ticks_;
     response_info.encoded_size_bytes =
-        completion_status ? completion_status->encoded_data_length : 0;
+        completion_status ? completion_status->encoded_data_length.InBytes()
+                          : 0;
 
     if (loader_response_info) {
       size_t iter = 0;

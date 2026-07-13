@@ -9,8 +9,6 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import static org.chromium.chrome.browser.tasks.tab_management.MessageCardViewProperties.MESSAGE_TYPE;
 import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.CARD_ALPHA;
 import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.CARD_TYPE;
-import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.ModelType.TAB;
-import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.ModelType.TAB_GROUP;
 import static org.chromium.chrome.browser.tasks.tab_management.TabProperties.TAB_GROUP_COLOR_VIEW_PROVIDER;
 import static org.chromium.chrome.browser.tasks.tab_management.TabProperties.TAB_ID;
 import static org.chromium.chrome.browser.tasks.tab_management.TabProperties.THUMBNAIL_FETCHER;
@@ -72,7 +70,6 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.quick_delete.QuickDeleteAnimationGradientDrawable;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.MediaState;
-import org.chromium.chrome.browser.tab.SendTabToSelfTabCardLabelData;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabId;
@@ -85,6 +82,7 @@ import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeatures;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider.TabFaviconFetcher;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tab_ui.ThumbnailProvider;
 import org.chromium.chrome.browser.tab_ui.ThumbnailProvider.MultiThumbnailMetadata;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
@@ -93,7 +91,6 @@ import org.chromium.chrome.browser.tabmodel.TabClosureParamsUtils;
 import org.chromium.chrome.browser.tabmodel.TabGroupColorUtils;
 import org.chromium.chrome.browser.tabmodel.TabGroupObserver;
 import org.chromium.chrome.browser.tabmodel.TabGroupTitleUtils;
-import org.chromium.chrome.browser.tabmodel.TabGroupUtils;
 import org.chromium.chrome.browser.tabmodel.TabList;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelActionListener;
@@ -104,9 +101,9 @@ import org.chromium.chrome.browser.tasks.tab_management.TabActionButtonData.TabA
 import org.chromium.chrome.browser.tasks.tab_management.TabGridItemLongPressOrchestrator.OnLongPressTabItemEventListener;
 import org.chromium.chrome.browser.tasks.tab_management.TabGridItemTouchHelperCallback.OnDropOnArchivalMessageCardEventListener;
 import org.chromium.chrome.browser.tasks.tab_management.TabGridView.QuickDeleteAnimationStatus;
-import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListMode;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel.AnimationStatus;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties;
+import org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.ModelType;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.TabActionState;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.UiType;
 import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessageManager.MessageType;
@@ -359,7 +356,8 @@ public class TabListMediator implements TabListNotificationHandler {
         TabClosedFrom.TAB_STRIP,
         TabClosedFrom.GRID_TAB_SWITCHER,
         TabClosedFrom.GRID_TAB_SWITCHER_GROUP,
-        TabClosedFrom.VERTICAL_TABS
+        TabClosedFrom.VERTICAL_TABS,
+        TabClosedFrom.VERTICAL_TABS_GROUP
     })
     @Retention(RetentionPolicy.SOURCE)
     private @interface TabClosedFrom {
@@ -368,6 +366,7 @@ public class TabListMediator implements TabListNotificationHandler {
         int GRID_TAB_SWITCHER = 2;
         int GRID_TAB_SWITCHER_GROUP = 3;
         int VERTICAL_TABS = 4;
+        int VERTICAL_TABS_GROUP = 5;
     }
 
     private static final String TAG = "TabListMediator";
@@ -393,6 +392,7 @@ public class TabListMediator implements TabListNotificationHandler {
     private final @Nullable DataSharingTabManager mDataSharingTabManager;
     private final @Nullable Runnable mOnTabGroupCreation;
     private final TabModelObserver mTabModelObserver;
+    private final TabListLayoutDelegate mTabListLayoutDelegate;
     private final TabActionListener mTabClosedListener;
     private final TabGridItemTouchHelperCallback mTabGridItemTouchHelperCallback;
     private final @Nullable UndoBarExplicitTrigger mUndoBarExplicitTrigger;
@@ -438,7 +438,7 @@ public class TabListMediator implements TabListNotificationHandler {
                         updateActorUiState(model, state);
                     }
 
-                    if (mLayoutType != TabListLayoutType.FLAT && isTabInTabGroup(tab)) {
+                    if (mLayoutType == TabListLayoutType.GROUPED && isTabInTabGroup(tab)) {
                         int index = getIndexForTabIdWithRelatedTabs(tabId);
                         if (index != TabModel.INVALID_TAB_INDEX) {
                             PropertyModel groupModel = mModelList.get(index).model;
@@ -547,7 +547,8 @@ public class TabListMediator implements TabListNotificationHandler {
                     selectionDelegate.toggleSelectionForItem(
                             TabListEditorItemSelectionId.createTabGroupSyncId(syncId));
 
-                    @Nullable PropertyModel model = mModelList.getModelFromSyncId(syncId);
+                    @Nullable PropertyModel model =
+                            mModelList.getModelFromArchivedTabGroupSyncId(syncId);
                     if (model == null) return;
 
                     boolean selected = model.get(TabProperties.IS_SELECTED);
@@ -594,7 +595,7 @@ public class TabListMediator implements TabListNotificationHandler {
                     }
                     @Nullable PropertyModel model = mModelList.getModelFromTabId(tab.getId());
                     if (model == null
-                            || (mLayoutType != TabListLayoutType.FLAT
+                            || (mLayoutType == TabListLayoutType.GROUPED
                                     && getCurrentTabModelChecked().isTabInTabGroup(tab))) {
                         return;
                     }
@@ -618,7 +619,27 @@ public class TabListMediator implements TabListNotificationHandler {
                     }
                     model.set(
                             TabProperties.TITLE,
-                            getLatestTitleForTab(updatedTab, model, /* useDefault= */ true));
+                            getLatestTitleForTabOrGroup(updatedTab, model, /* useDefault= */ true));
+                }
+
+                @Override
+                public void onLoadStarted(Tab tab, boolean toDifferentDocument) {
+                    assert mShowingTabs;
+                    if (!toDifferentDocument) return;
+                    updateLoadingState(tab, true);
+                }
+
+                @Override
+                public void onLoadStopped(Tab tab, boolean toDifferentDocument) {
+                    assert mShowingTabs;
+                    if (!toDifferentDocument) return;
+                    updateLoadingState(tab, false);
+                }
+
+                @Override
+                public void onCrash(Tab tab) {
+                    assert mShowingTabs;
+                    updateLoadingState(tab, false);
                 }
 
                 @Override
@@ -628,7 +649,7 @@ public class TabListMediator implements TabListNotificationHandler {
 
                     @Nullable PropertyModel tabInfo = null;
                     @Nullable Tab tab = null;
-                    if (mLayoutType != TabListLayoutType.FLAT && isTabInTabGroup(updatedTab)) {
+                    if (mLayoutType == TabListLayoutType.GROUPED && isTabInTabGroup(updatedTab)) {
                         @Nullable Pair<Integer, Tab> indexAndTab =
                                 getIndexAndTabForTabGroupId(updatedTab.getTabGroupId());
                         if (indexAndTab == null) return;
@@ -683,7 +704,7 @@ public class TabListMediator implements TabListNotificationHandler {
                     @Nullable PropertyModel model;
                     Tab representativeTab = updatedTab;
                     boolean isTabGroupTabGrid =
-                            mLayoutType != TabListLayoutType.FLAT && isTabInTabGroup(updatedTab);
+                            mLayoutType == TabListLayoutType.GROUPED && isTabInTabGroup(updatedTab);
                     if (isTabGroupTabGrid) {
                         Token tabGroupId = updatedTab.getTabGroupId();
                         assumeNonNull(tabGroupId);
@@ -701,7 +722,7 @@ public class TabListMediator implements TabListNotificationHandler {
                     }
                     model.set(
                             TabProperties.MEDIA_INDICATOR,
-                            getTabGridMediaIndicator(representativeTab));
+                            getTabGridMediaIndicator(representativeTab, model));
                     if (isTabGroupTabGrid) {
                         updateDescriptionString(representativeTab, model);
                     }
@@ -712,20 +733,15 @@ public class TabListMediator implements TabListNotificationHandler {
                     int index = mModelList.indexFromTabId(tab.getId());
                     if (index == TabModel.INVALID_TAB_INDEX) return;
 
-                    updateTab(index, tab, /* isUpdatingId= */ false, /* quickMode= */ false);
-
                     // When pinning a tab in a group it will be removed from the group so the index
                     // update is unnecessary.
-                    if (mLayoutType == TabListLayoutType.FLAT) return;
-
-                    int finalIndex;
-                    if (mLayoutType == TabListLayoutType.NESTED) {
-                        finalIndex = getInsertionIndexOfTabForNestedGroups(tab);
-                    } else {
-                        finalIndex =
-                                mModelList.indexOfNthTabCard(
-                                        getCurrentTabModelChecked().indexOf(tab));
+                    if (mLayoutType == TabListLayoutType.FLAT) {
+                        updateTab(index, tab, /* isUpdatingId= */ false, /* quickMode= */ false);
+                        return;
                     }
+
+                    int finalIndex =
+                            mModelList.indexOfNthTabCard(getCurrentTabModelChecked().indexOf(tab));
                     // indexOfNthTabCard returns n + 1 if the index is higher than the number of
                     // tabs in the model list. Moving is implemented as removal then addition.
                     // The last valid index to add to is the size of the model list after the
@@ -733,11 +749,18 @@ public class TabListMediator implements TabListNotificationHandler {
                     if (finalIndex == TabModel.INVALID_TAB_INDEX) {
                         mModelList.removeAt(index);
                     } else {
-                        finalIndex = Math.min(finalIndex, mModelList.size() - 1);
-                        if (index != finalIndex) {
-                            mModelList.move(index, finalIndex);
-                        }
-                        mModelList.update(finalIndex, mModelList.get(finalIndex));
+                        ListItem item = mModelList.get(index);
+                        mModelList.removeAt(index);
+                        finalIndex = Math.min(finalIndex, mModelList.size());
+                        // Update properties while the item is detached to avoid temporary view type
+                        // mismatch in the adapter and double-notifications (change + remove).
+                        updateTab(
+                                item.model,
+                                finalIndex,
+                                tab,
+                                /* isUpdatingId= */ false,
+                                /* quickMode= */ false);
+                        mModelList.add(finalIndex, item);
                     }
                 }
             };
@@ -748,8 +771,7 @@ public class TabListMediator implements TabListNotificationHandler {
                 public void didChangeTabGroupTitle(Token tabGroupId, String newTitle) {
                     assert mShowingTabs;
 
-                    if (mLayoutType == TabListLayoutType.FLAT) return;
-                    updateTabGroupTitle(tabGroupId);
+                    mTabListLayoutDelegate.didChangeTabGroupTitle(tabGroupId, newTitle);
                 }
 
                 @Override
@@ -757,271 +779,58 @@ public class TabListMediator implements TabListNotificationHandler {
                         Token tabGroupId, @TabGroupColorId int newColor) {
                     assert mShowingTabs;
 
-                    if (mLayoutType == TabListLayoutType.FLAT) return;
-
-                    @Nullable Pair<Integer, Tab> indexAndTab =
-                            getIndexAndTabForTabGroupId(tabGroupId);
-                    if (indexAndTab == null) return;
-                    Tab tab = indexAndTab.second;
-                    PropertyModel model = mModelList.get(indexAndTab.first).model;
-
-                    updateTabGroupProperties(tab, model, newColor);
-                    updateFaviconForTab(model, tab, null, null);
-                    updateDescriptionString(tab, model);
-                    updateActionButtonDescriptionString(tab, model);
-                    updateThumbnailFetcher(model, tab.getId());
+                    mTabListLayoutDelegate.didChangeTabGroupColor(tabGroupId, newColor);
                 }
 
                 @Override
                 public void didChangeTabGroupCollapsed(
                         Token tabGroupId, boolean isCollapsed, boolean animate) {
                     assert mShowingTabs;
-                    if (mLayoutType != TabListLayoutType.NESTED) return;
 
-                    @Nullable Pair<Integer, Tab> indexAndTab =
-                            getIndexAndTabForTabGroupId(tabGroupId);
-                    if (indexAndTab == null) return;
-                    int headerIndex = indexAndTab.first;
-                    PropertyModel model = mModelList.get(headerIndex).model;
-
-                    if (isCollapsed == Boolean.TRUE.equals(model.get(TabProperties.IS_COLLAPSED))) {
-                        return;
-                    }
-
-                    model.set(TabProperties.IS_COLLAPSED, isCollapsed);
-
-                    if (isCollapsed) {
-                        removeChildTabs(tabGroupId);
-                    } else {
-                        insertChildTabs(tabGroupId, headerIndex);
-                    }
+                    mTabListLayoutDelegate.didChangeTabGroupCollapsed(
+                            tabGroupId, isCollapsed, animate);
                 }
 
                 @Override
                 public void didMoveWithinGroup(
                         Tab movedTab, int tabModelOldIndex, int tabModelNewIndex) {
                     assert mShowingTabs;
-
                     if (tabModelNewIndex == tabModelOldIndex) return;
 
-                    TabModel tabModel = getCurrentTabModelChecked();
-
-                    // For the tab switcher update the tab card correctly.
-                    int movedTabId = movedTab.getId();
-                    if (mLayoutType != TabListLayoutType.FLAT && mThumbnailProvider != null) {
-                        int indexInModel = getIndexForTabIdWithRelatedTabs(movedTabId);
-                        if (indexInModel == TabModel.INVALID_TAB_INDEX) return;
-
-                        Tab lastShownTab =
-                                tabModel.getRepresentativeTabAt(
-                                        tabModel.representativeIndexOf(movedTab));
-                        assumeNonNull(lastShownTab);
-                        PropertyModel model = mModelList.get(indexInModel).model;
-                        updateThumbnailFetcher(model, lastShownTab.getId());
-                        return;
-                    }
-
-                    // For the grid dialog or tab strip maintain order.
-                    int curPosition = mModelList.indexFromTabId(movedTabId);
-
-                    if (!isValidMovePosition(curPosition)) return;
-
-                    Tab destinationTab =
-                            tabModel.getTabAt(
-                                    tabModelNewIndex > tabModelOldIndex
-                                            ? tabModelNewIndex - 1
-                                            : tabModelNewIndex + 1);
-                    assumeNonNull(destinationTab);
-                    int newPosition = mModelList.indexFromTabId(destinationTab.getId());
-
-                    if (!isValidMovePosition(newPosition)) return;
-                    mModelList.move(curPosition, newPosition);
+                    mTabListLayoutDelegate.didMoveWithinGroup(
+                            movedTab, tabModelOldIndex, tabModelNewIndex);
                 }
 
                 @Override
                 public void didMoveTabOutOfGroup(Tab movedTab, int prevFilterIndex) {
                     assert mShowingTabs;
-
                     assert mTabGridDialogHandler == null || mLayoutType == TabListLayoutType.FLAT;
 
-                    TabModel tabModel = getCurrentTabModelChecked();
-                    Tab previousGroupTab = tabModel.getRepresentativeTabAt(prevFilterIndex);
-                    assumeNonNull(previousGroupTab);
-
-                    switch (mLayoutType) {
-                        case TabListLayoutType.NESTED:
-                            updateTabGroupStateInNestedLayout(movedTab);
-                            break;
-                        case TabListLayoutType.GROUPED:
-                            moveTabOutOfGroupInGroupedLayout(
-                                    movedTab, previousGroupTab, prevFilterIndex);
-                            break;
-                        case TabListLayoutType.FLAT:
-                            moveTabOutOfGroupInFlatLayout(movedTab, previousGroupTab);
-                            break;
-                    }
+                    mTabListLayoutDelegate.didMoveTabOutOfGroup(movedTab, prevFilterIndex);
                 }
 
                 @Override
                 public void didMergeTabToGroup(Tab movedTab, boolean isDestinationTab) {
                     assert mShowingTabs;
 
-                    TabModel tabModel = getCurrentTabModelChecked();
-                    if (mLayoutType == TabListLayoutType.NESTED) {
-                        updateTabGroupStateInNestedLayout(movedTab);
-                    } else if (mLayoutType == TabListLayoutType.GROUPED) {
-                        List<Tab> relatedTabs = getRelatedTabsForId(movedTab.getId());
-                        Pair<Integer, Integer> positions =
-                                mModelList.getIndexesForMergeToGroup(
-                                        tabModel, movedTab, isDestinationTab, relatedTabs);
-                        int srcIndex = positions.second;
-                        int desIndex = positions.first;
-
-                        // If only the desIndex is valid then just update the destination index to
-                        // the last shown tab in its group.
-                        if (desIndex != TabModel.INVALID_TAB_INDEX
-                                && srcIndex == TabModel.INVALID_TAB_INDEX) {
-                            @TabId
-                            int desIndexTabId =
-                                    mModelList.get(desIndex).model.get(TabProperties.TAB_ID);
-                            Tab desTab = tabModel.getTabById(desIndexTabId);
-                            assumeNonNull(desTab);
-                            Token desTabGroupId = desTab.getTabGroupId();
-                            Tab lastShownTab = desTab;
-                            if (desTabGroupId != null) {
-                                @TabId
-                                int lastShownTabId = tabModel.getGroupLastShownTabId(desTabGroupId);
-                                if (lastShownTabId != Tab.INVALID_TAB_ID) {
-                                    lastShownTab = tabModel.getTabById(lastShownTabId);
-                                }
-                            }
-                            assert lastShownTab != null;
-                            updateTab(desIndex, lastShownTab, true, false);
-                            return;
-                        }
-
-                        if (!isValidMovePosition(srcIndex) || !isValidMovePosition(desIndex)) {
-                            return;
-                        }
-
-                        // We merged the source group to the destination group. Remove the source
-                        // group and update the destination group.
-                        mModelList.removeAt(srcIndex);
-                        desIndex =
-                                srcIndex > desIndex
-                                        ? desIndex
-                                        : mModelList.getTabIndexBefore(desIndex);
-                        Tab newSelectedTabInMergedGroup =
-                                tabModel.getRepresentativeTabAt(
-                                        mModelList.getTabCardCountsBefore(desIndex));
-                        assumeNonNull(newSelectedTabInMergedGroup);
-                        if (newSelectedTabInMergedGroup != null) {
-                            updateTab(desIndex, newSelectedTabInMergedGroup, true, false);
-                        }
-
-                        // TODO(crbug.com/434246302): These metrics are probably wrong as it looks
-                        // like they get emitted per-tab merged, rather than per-group merged.
-                        if (getRelatedTabsForId(movedTab.getId()).size() == 2) {
-                            // When users use drop-to-merge to create a group.
-                            RecordUserAction.record("TabGroup.Created.DropToMerge");
-                        } else {
-                            RecordUserAction.record("TabGrid.Drag.DropToMerge");
-                        }
-                    } else {
-                        // If no tab is present we can't check if the added tab is part of the
-                        // current group. Assume it isn't since a group state with 0 tab should be
-                        // impossible.
-                        @Nullable PropertyModel model = mModelList.getFirstTabPropertyModel();
-                        if (model == null) return;
-
-                        // If the added tab is part of the group add it and update the dialog.
-                        int firstTabId = model.get(TabProperties.TAB_ID);
-                        Tab firstTab = tabModel.getTabById(firstTabId);
-                        if (firstTab == null
-                                || !Objects.equals(
-                                        firstTab.getTabGroupId(), movedTab.getTabGroupId())) {
-                            return;
-                        }
-
-                        addObserversForTab(movedTab);
-                        onTabAdded(movedTab);
-                        if (mTabGridDialogHandler != null) {
-                            mTabGridDialogHandler.updateDialogContent(
-                                    tabModel.getGroupLastShownTabId(firstTab.getTabGroupId()));
-                        }
-                    }
+                    mTabListLayoutDelegate.didMergeTabToGroup(movedTab, isDestinationTab);
                 }
 
                 @Override
                 public void didMoveTabGroup(
                         Tab movedTab, int tabModelOldIndex, int tabModelNewIndex) {
                     assert mShowingTabs;
-
-                    if (mLayoutType == TabListLayoutType.FLAT
-                            || tabModelNewIndex == tabModelOldIndex) {
+                    if (tabModelNewIndex == tabModelOldIndex) {
                         return;
                     }
-                    List<Tab> relatedTabs = getRelatedTabsForId(movedTab.getId());
-                    TabModel tabModel = getCurrentTabModelChecked();
-                    Tab currentGroupSelectedTab =
-                            TabGroupUtils.getSelectedTabInGroupForTab(tabModel, movedTab);
-                    int curPosition = mModelList.indexFromTabId(currentGroupSelectedTab.getId());
-                    if (curPosition == TabModel.INVALID_TAB_INDEX) {
-                        // Sync TabListModel with updated TabModel.
-                        int indexToUpdate =
-                                mModelList.indexOfNthTabCard(
-                                        tabModel.representativeIndexOf(
-                                                tabModel.getTabAt(tabModelOldIndex)));
-                        mModelList.updateTabListModelIdForGroup(
-                                currentGroupSelectedTab, indexToUpdate);
-                        curPosition = mModelList.indexFromTabId(currentGroupSelectedTab.getId());
-                    }
-                    if (!isValidMovePosition(curPosition)) return;
 
-                    // Find the tab which was in the destination index before this move. Use
-                    // that tab to figure out the new position.
-                    int destinationTabIndex =
-                            tabModelNewIndex > tabModelOldIndex
-                                    ? tabModelNewIndex - relatedTabs.size()
-                                    : tabModelNewIndex + 1;
-                    Tab destinationTab = tabModel.getTabAt(destinationTabIndex);
-                    assumeNonNull(destinationTab);
-                    Tab destinationGroupSelectedTab =
-                            TabGroupUtils.getSelectedTabInGroupForTab(tabModel, destinationTab);
-                    int newPosition =
-                            mModelList.indexFromTabId(destinationGroupSelectedTab.getId());
-                    if (newPosition == TabModel.INVALID_TAB_INDEX) {
-                        int indexToUpdate =
-                                mModelList.indexOfNthTabCard(
-                                        tabModel.representativeIndexOf(destinationTab)
-                                                + (tabModelNewIndex > tabModelOldIndex ? 1 : -1));
-                        mModelList.updateTabListModelIdForGroup(
-                                destinationGroupSelectedTab, indexToUpdate);
-                        newPosition =
-                                mModelList.indexFromTabId(destinationGroupSelectedTab.getId());
-                    }
-                    if (!isValidMovePosition(newPosition)) return;
-
-                    mModelList.move(curPosition, newPosition);
+                    mTabListLayoutDelegate.didMoveTabGroup(
+                            movedTab, tabModelOldIndex, tabModelNewIndex);
                 }
 
                 @Override
                 public void didCreateNewGroup(Tab destinationTab, TabModel tabModel) {
-                    // On new group creation for the tab group representation in the GTS, update
-                    // the tab group color icon.
-                    int groupIndex = tabModel.representativeIndexOf(destinationTab);
-                    Tab groupTab = tabModel.getRepresentativeTabAt(groupIndex);
-                    assumeNonNull(groupTab);
-                    PropertyModel model = mModelList.getModelFromTabId(groupTab.getId());
-
-                    if (model != null) {
-                        Token tabGroupId = destinationTab.getTabGroupId();
-                        assumeNonNull(tabGroupId);
-                        @TabGroupColorId
-                        int colorId = tabModel.getTabGroupColorWithFallback(tabGroupId);
-                        updateTabGroupProperties(destinationTab, model, colorId);
-                        updateFaviconForTab(model, groupTab, null, null);
-                    }
+                    mTabListLayoutDelegate.didCreateNewGroup(destinationTab, tabModel);
                 }
 
                 @Override
@@ -1030,20 +839,9 @@ public class TabListMediator implements TabListNotificationHandler {
                         @Nullable Token oldTabGroupId,
                         @DidRemoveTabGroupReason int removalReason) {
                     assert mShowingTabs;
-                    if (mLayoutType != TabListLayoutType.NESTED || oldTabGroupId == null) return;
 
-                    // In layouts that support nested tab groups, when a group is destroyed (due to
-                    // tab closures, ungrouping, etc.), the corresponding Group Header card needs
-                    // to be removed as well.
-                    for (int i = 0; i < mModelList.size(); i++) {
-                        PropertyModel model = mModelList.get(i).model;
-                        if (isTabGroupHeader(model)
-                                && oldTabGroupId.equals(
-                                        model.get(TabProperties.TAB_GROUP_HEADER_ID))) {
-                            mModelList.removeAt(i);
-                            break;
-                        }
-                    }
+                    mTabListLayoutDelegate.didRemoveTabGroup(
+                            oldRootId, oldTabGroupId, removalReason);
                 }
             };
 
@@ -1070,7 +868,7 @@ public class TabListMediator implements TabListNotificationHandler {
      * @param componentId The {@link TabComponentId} identifying the parent UI container hosting
      *     this tab list.
      * @param initialTabActionState The initial {@link TabActionState} to use for the shown tabs.
-     *     Must always be CLOSABLE for TabListMode.STRIP.
+     *     Must always be CLOSABLE for TabListMode.BOTTOM_STRIP.
      * @param dataSharingTabManager The service used to initiate data sharing.
      * @param onTabGroupCreation Should be run when the UI is used to create a tab group.
      * @param undoBarExplicitTrigger Interface to explicitly trigger the undo closure snackbar.
@@ -1123,6 +921,22 @@ public class TabListMediator implements TabListNotificationHandler {
         mAllowedSelectionCount = allowedSelectionCount;
         mIsSingleContextMode = isSingleContextMode;
 
+        switch (mLayoutType) {
+            case TabListLayoutType.FLAT:
+                mTabListLayoutDelegate =
+                        new FlatLayoutDelegate(this, mModelList, mTabGridDialogHandler);
+                break;
+            case TabListLayoutType.GROUPED:
+                mTabListLayoutDelegate =
+                        new GroupedLayoutDelegate(this, mModelList, mThumbnailProvider);
+                break;
+            case TabListLayoutType.NESTED:
+                mTabListLayoutDelegate = new NestedLayoutDelegate(this, mModelList);
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported layout type: " + mLayoutType);
+        }
+
         mTabModelObserver =
                 new TabModelObserver() {
                     @Override
@@ -1135,12 +949,12 @@ public class TabListMediator implements TabListNotificationHandler {
 
                         int oldIndex = mModelList.indexFromTabId(lastId);
                         if (oldIndex == TabModel.INVALID_TAB_INDEX
-                                && mLayoutType != TabListLayoutType.FLAT) {
+                                && mLayoutType == TabListLayoutType.GROUPED) {
                             oldIndex = getIndexForTabIdWithRelatedTabs(lastId);
                         }
                         int newIndex = mModelList.indexFromTabId(tabId);
                         if (newIndex == TabModel.INVALID_TAB_INDEX
-                                && mLayoutType != TabListLayoutType.FLAT) {
+                                && mLayoutType == TabListLayoutType.GROUPED) {
                             // If a tab in tab group does not exist in model and needs to be
                             // selected, identify the related tab ids and determine newIndex
                             // based on if any of the related ids are present in model.
@@ -1148,7 +962,7 @@ public class TabListMediator implements TabListNotificationHandler {
                             // For UNDO ensure we update the representative tab in the model.
                             if (type == TabSelectionType.FROM_UNDO
                                     && newIndex != Tab.INVALID_TAB_ID) {
-                                modelList.updateTabListModelIdForGroup(tab, newIndex);
+                                mModelList.updateTabListModelIdForGroup(tab, newIndex);
                             }
                         }
 
@@ -1185,7 +999,11 @@ public class TabListMediator implements TabListNotificationHandler {
                                     RecordUserAction.record("GridTabSwitcher.UndoCloseTabGroup");
                                     break;
                                 case TabClosedFrom.VERTICAL_TABS:
-                                    RecordUserAction.record("VerticalTabs.UndoCloseTab");
+                                    RecordUserAction.record("Android.VerticalTabs.UndoCloseTab");
+                                    break;
+                                case TabClosedFrom.VERTICAL_TABS_GROUP:
+                                    RecordUserAction.record(
+                                            "Android.VerticalTabs.UndoCloseTabGroup");
                                     break;
                                 default:
                                     assert false
@@ -1262,6 +1080,17 @@ public class TabListMediator implements TabListNotificationHandler {
                             // TabModel and TabListModel may be in the process of syncing up through
                             // restoring. Examples of this situation are switching between
                             // light/dark mode in incognito, exiting multi-window mode, etc.
+                            if (mLayoutType == TabListLayoutType.NESTED) {
+                                int tabUiIndex = mModelList.indexFromTabId(tab.getId());
+                                if (tabUiIndex != TabModel.INVALID_TAB_INDEX) {
+                                    updateTab(tabUiIndex, tab, false, false);
+                                }
+                                if (tab.getTabGroupId() != null) {
+                                    updateTabGroupTitle(tab.getTabGroupId());
+                                }
+                                return;
+                            }
+
                             int tabListModelIndex = mModelList.indexOfNthTabCard(filterIndex);
                             if (mModelList.indexFromTabId(currentGroupSelectedTab.getId())
                                     != tabListModelIndex) {
@@ -1269,6 +1098,37 @@ public class TabListMediator implements TabListNotificationHandler {
                             }
                             updateTab(tabListModelIndex, currentGroupSelectedTab, false, false);
                         }
+                    }
+
+                    @Override
+                    public void didMoveTab(Tab tab, int newIndex, int curIndex) {
+                        assert mShowingTabs;
+
+                        // Standalone tab moves triggered from external sources need to be
+                        // explicitly synced to the ModelList for GROUPED and NESTED layouts.
+                        if (mLayoutType == TabListLayoutType.FLAT) return;
+
+                        // Intra-group move or merging into group.
+                        if (tab.getTabGroupId() != null) {
+                            return;
+                        }
+
+                        int currentUiIndex = mModelList.indexFromTabId(tab.getId());
+                        if (currentUiIndex == TabModel.INVALID_TAB_INDEX) return;
+
+                        // Moving out of a group.
+                        // This assumes the move event is dispatched before the ungroup event
+                        // (didMoveTabOutOfGroup) is processed, meaning the UI model still has the
+                        // old grouping metadata.
+                        PropertyModel model = mModelList.get(currentUiIndex).model;
+                        if (TabProperties.isTabInGroup(model)
+                                || TabProperties.isTabGroupHeader(model)) {
+                            return;
+                        }
+
+                        // Standalone tab movement.
+                        int targetUiIndex = mTabListLayoutDelegate.getInsertionIndexOfTab(tab);
+                        mModelList.moveItem(currentUiIndex, targetUiIndex);
                     }
 
                     @Override
@@ -1281,26 +1141,29 @@ public class TabListMediator implements TabListNotificationHandler {
 
                         removeObserversForTab(tab);
 
-                        // If the tab closed was part of a tab group and the closure was triggered
-                        // from the tab switcher, update the group to reflect the closure instead of
-                        // closing the tab.
-                        // For nested group layouts, the header does not need to be
-                        // updated in-place because the webpage tab card is closed directly.
                         TabModel tabModel = mCurrentTabModelSupplier.get();
-                        if (mLayoutType == TabListLayoutType.GROUPED
-                                && tabModel != null
-                                && tabModel.tabGroupExists(tab.getTabGroupId())) {
-                            int groupIndex = tabModel.representativeIndexOf(tab);
-                            Tab groupTab = tabModel.getRepresentativeTabAt(groupIndex);
-                            assumeNonNull(groupTab);
-                            if (!groupTab.isClosing()) {
-                                updateTab(
-                                        mModelList.indexOfNthTabCard(groupIndex),
-                                        groupTab,
-                                        true,
-                                        false);
-
-                                return;
+                        Token tabGroupId = tab.getTabGroupId();
+                        if (tabModel != null
+                                && tabGroupId != null
+                                && tabModel.tabGroupExists(tabGroupId)) {
+                            if (mLayoutType == TabListLayoutType.GROUPED) {
+                                // If the tab closed was part of a tab group and the closure was
+                                // triggered from a grouped layout, update the group to reflect the
+                                // closure instead of closing the tab.
+                                int groupIndex = tabModel.representativeIndexOf(tab);
+                                Tab groupTab = tabModel.getRepresentativeTabAt(groupIndex);
+                                assumeNonNull(groupTab);
+                                if (!groupTab.isClosing()) {
+                                    updateTab(
+                                            mModelList.indexOfNthTabCard(groupIndex),
+                                            groupTab,
+                                            /* isUpdatingId= */ true,
+                                            /* quickMode= */ false);
+                                    return;
+                                }
+                            } else if (mLayoutType == TabListLayoutType.NESTED) {
+                                updateTabGroupHeaderId(tabGroupId);
+                                updateTabGroupTitle(tabGroupId);
                             }
                         }
 
@@ -1321,6 +1184,17 @@ public class TabListMediator implements TabListNotificationHandler {
 
                         mModelList.removeAt(index);
                     }
+
+                    @Override
+                    public void didChangePinState(Tab tab) {
+                        int index = mModelList.indexFromTabId(tab.getId());
+                        if (index != TabModel.INVALID_TAB_INDEX) {
+                            mModelList
+                                    .get(index)
+                                    .model
+                                    .set(TabProperties.IS_PINNED, tab.getIsPinned());
+                        }
+                    }
                 };
 
         mTabClosedListener =
@@ -1330,11 +1204,27 @@ public class TabListMediator implements TabListNotificationHandler {
                             View view, int tabId, @Nullable MotionEventInfo triggeringMotion) {
                         // TODO(crbug.com/40638921): Consider disabling all touch events during
                         // animation.
-                        if (mModelList.indexFromTabId(tabId) == TabModel.INVALID_TAB_INDEX) return;
+
+                        int closingTabIndex = mModelList.indexFromTabId(tabId);
+                        if (closingTabIndex == TabModel.INVALID_TAB_INDEX) return;
+
+                        if (mLayoutType == TabListLayoutType.NESTED) {
+                            // The last tab is clipped from top during animation.
+                            if (view != null && view.getParent() instanceof View rootItemView) {
+                                boolean isLastTab = closingTabIndex == mModelList.size() - 1;
+                                rootItemView.setTag(R.id.tab_clip_from_top, isLastTab);
+                            }
+                        }
 
                         TabModel tabModel = getCurrentTabModelChecked();
                         Tab closingTab = tabModel.getTabById(tabId);
                         if (closingTab == null) return;
+
+                        @TabClosingSource
+                        int tabClosingSource =
+                                mComponentId == TabComponentId.VERTICAL_TABS
+                                        ? TabClosingSource.VERTICAL_TAB_STRIP
+                                        : TabClosingSource.UNKNOWN;
 
                         setUseShrinkCloseAnimation(tabId, /* useShrinkCloseAnimation= */ true);
                         if (mLayoutType == TabListLayoutType.GROUPED
@@ -1346,7 +1236,7 @@ public class TabListMediator implements TabListNotificationHandler {
                             TabUiUtils.closeTabGroup(
                                     tabModel,
                                     tabId,
-                                    /* tabClosingSource= */ TabClosingSource.UNKNOWN,
+                                    tabClosingSource,
                                     /* allowUndo= */ true,
                                     /* hideTabGroups= */ true,
                                     getOnMaybeTabClosedCallback(tabId));
@@ -1361,6 +1251,7 @@ public class TabListMediator implements TabListNotificationHandler {
                                 TabClosureParams.closeTab(closingTab)
                                         .recommendedNextTab(nextTab)
                                         .allowUndo(allowUndo)
+                                        .tabClosingSource(tabClosingSource)
                                         .build();
 
                         @Nullable TabModelActionListener listener =
@@ -1378,10 +1269,11 @@ public class TabListMediator implements TabListNotificationHandler {
                     @Override
                     public void run(
                             View view, String syncId, @Nullable MotionEventInfo triggeringMotion) {
-                        int index = mModelList.indexFromSyncId(syncId);
+                        int index = mModelList.indexFromArchivedTabGroupSyncId(syncId);
                         if (index == TabModel.INVALID_TAB_INDEX) return;
 
-                        @Nullable PropertyModel model = mModelList.getModelFromSyncId(syncId);
+                        @Nullable PropertyModel model =
+                                mModelList.getModelFromArchivedTabGroupSyncId(syncId);
                         if (model != null) {
                             assumeNonNull(mTabGroupSyncService);
                             SavedTabGroup tabGroup = mTabGroupSyncService.getGroup(syncId);
@@ -1487,11 +1379,11 @@ public class TabListMediator implements TabListNotificationHandler {
                         swipeSafeTabActionListener,
                         mTabGridDialogHandler,
                         TabUiMetricsHelper.getComponentNameForMetrics(componentId),
-                        mLayoutType != TabListLayoutType.FLAT,
+                        mLayoutType,
                         onDragStateChangedListener);
     }
 
-    private TabModel getCurrentTabModelChecked() {
+    TabModel getCurrentTabModelChecked() {
         TabModel tabModel = mCurrentTabModelSupplier.get();
         assert tabModel != null;
         return tabModel;
@@ -1625,12 +1517,19 @@ public class TabListMediator implements TabListNotificationHandler {
     }
 
     private void onGroupClosedFrom(int tabId) {
-        // TODO(crbug.com/509226293): Support tracking group closure source for Vertical Tabs
-        // when group-level actions are supported.
-        sTabClosedFromMap.put(tabId, TabClosedFrom.GRID_TAB_SWITCHER_GROUP);
+        @TabClosedFrom int from;
+        if (mComponentId == TabComponentId.GRID_TAB_SWITCHER) {
+            from = TabClosedFrom.GRID_TAB_SWITCHER_GROUP;
+        } else if (mComponentId == TabComponentId.VERTICAL_TABS) {
+            from = TabClosedFrom.VERTICAL_TABS_GROUP;
+        } else {
+            Log.w(TAG, "Attempting to close tab group from Unknown UI: " + mComponentId);
+            return;
+        }
+        sTabClosedFromMap.put(tabId, from);
     }
 
-    private List<Tab> getRelatedTabsForId(int id) {
+    List<Tab> getRelatedTabsForId(int id) {
         TabModel tabModel = mCurrentTabModelSupplier.get();
         return tabModel == null ? new ArrayList<>() : tabModel.getRelatedTabList(id);
     }
@@ -1644,289 +1543,58 @@ public class TabListMediator implements TabListNotificationHandler {
         return tabIds;
     }
 
-    private int getInsertionIndexOfTab(Tab tab) {
-        if (tab == null) return TabList.INVALID_TAB_INDEX;
-
-        if (mLayoutType == TabListLayoutType.NESTED) {
-            return getInsertionIndexOfTabForNestedGroups(tab);
-        }
-
-        boolean onlyShowRelatedTabs = mLayoutType == TabListLayoutType.FLAT;
-        return getInsertionIndexOfTabForFlatOrGrouped(tab, onlyShowRelatedTabs);
-    }
-
-    private int getInsertionIndexOfTabForFlatOrGrouped(Tab tab, boolean onlyShowRelatedTabs) {
-        int tabIndex = TabList.INVALID_TAB_INDEX;
-        if (onlyShowRelatedTabs) {
-            // Compute the index of the tab within the tab's group.
-            @Nullable PropertyModel model = mModelList.getFirstTabPropertyModel();
-            if (model == null) return TabList.INVALID_TAB_INDEX;
-
-            List<Tab> related = getRelatedTabsForId(model.get(TabProperties.TAB_ID));
-            tabIndex = related.indexOf(tab);
-        } else {
-            // Compute the index of the tab out of all tabs in the filter (ignore tabs that are not
-            // the representative tab in a group).
-            TabModel tabModel = getCurrentTabModelChecked();
-            int count = tabModel.getIndividualTabAndGroupCount();
-            for (int i = 0; i < count; i++) {
-                @Nullable Tab representativeTab = tabModel.getRepresentativeTabAt(i);
-                if (representativeTab != null && tab.getId() == representativeTab.getId()) {
-                    tabIndex = i;
-                    break;
-                }
-            }
-        }
-
-        // The current implementation of TAB_GROUP card types places all groups at the beginning of
-        // the model list. As a result, if any tab group cards exist, adjust the index for tab
-        // insertion to start after the allotted count of tab groups in the model list.
-        tabIndex += mModelList.getTabGroupCardCount();
-
-        // Get the position of the nth tab card ignoring any other CARD_TYPE entries present in the
-        // model list outside of TAB and TAB_GROUP.
-        return mModelList.indexOfNthTabCard(tabIndex);
-    }
-
+    // TODO(crbug.com/509226293): Move this to NestedLayoutDelegate.
     /**
-     * Spatial indexing helper for nested layouts. Maps a backend Tab's absolute index to its
-     * corresponding UI list position.
+     * Ensures that a group header exists in NESTED layout. If not, it creates and inserts one.
+     *
+     * @param tab A representative tab of the group.
+     * @param tabGroupId The group ID.
+     * @param targetUiIndex The UI index where the header should be inserted if missing.
+     * @return true if a header was created and inserted, false otherwise.
      */
-    private int getInsertionIndexOfTabForNestedGroups(Tab tab) {
-        if (tab == null) return TabList.INVALID_TAB_INDEX;
-
-        TabModel tabModel = getCurrentTabModelChecked();
-
-        // Pre-compute the backend index lookup map to avoid nested lookups.
-        Map<Integer, Integer> tabIdToBackendIndexMap = new HashMap<>();
-        for (int i = 0; i < tabModel.getCount(); i++) {
-            Tab t = tabModel.getTabAt(i);
-            if (t != null) {
-                tabIdToBackendIndexMap.put(t.getId(), i);
-            }
+    boolean ensureGroupHeaderExistsInNestedLayout(Tab tab, Token tabGroupId, int targetUiIndex) {
+        if (mLayoutType != TabListLayoutType.NESTED
+                || tabGroupId == null
+                || targetUiIndex == TabModel.INVALID_TAB_INDEX) {
+            return false;
         }
 
-        Integer targetTabModelIndex = tabIdToBackendIndexMap.get(tab.getId());
-        if (targetTabModelIndex == null) {
-            return TabList.INVALID_TAB_INDEX;
+        if (mModelList.indexFromTabGroupId(tabGroupId) == TabModel.INVALID_TAB_INDEX) {
+            addTabInfoToModelForGroup(tab, tabGroupId, targetUiIndex);
+            return true;
         }
 
-        boolean isTargetTabPinned = tab.getIsPinned();
-        Token targetTabGroupId = tab.getTabGroupId();
-        if (targetTabGroupId != null && tabModel.getTabGroupCollapsed(targetTabGroupId)) {
-            return TabList.INVALID_TAB_INDEX; // Hidden if the group is collapsed.
-        }
-
-        int targetTabCurrentIndex = mModelList.indexFromTabId(tab.getId());
-        int targetInsertionUiIndex = TabModel.INVALID_TAB_INDEX;
-        boolean isScanningTargetGroup = false;
-
-        for (int currentIndex = 0; currentIndex < mModelList.size(); currentIndex++) {
-            if (currentIndex == targetTabCurrentIndex) {
-                continue;
-            }
-
-            PropertyModel currentModel = mModelList.get(currentIndex).model;
-            if (currentModel.get(CARD_TYPE) != TAB) {
-                continue;
-            }
-            int currentTabId = currentModel.get(TabProperties.TAB_ID);
-            Tab currentTab = tabModel.getTabById(currentTabId);
-            if (currentTab == null) {
-                continue;
-            }
-            Integer currentTabModelIndex = tabIdToBackendIndexMap.get(currentTabId);
-            if (currentTabModelIndex == null) {
-                continue;
-            }
-
-            // If the current card is pinned:
-            // - If target tab is regular, skip it (regular tabs go after pinned tabs).
-            // - If target tab is pinned, insert it here if its backend index is smaller than the
-            // current pinned card's backend index (to preserve relative order). Otherwise, skip it.
-            if (isPinnedCard(currentModel)) {
-                if (isTargetTabPinned) {
-                    if (hasHigherBackendIndex(currentTabModelIndex, targetTabModelIndex)) {
-                        return adjustIndexForTabMovement(currentIndex, targetTabCurrentIndex);
-                    }
-                }
-                continue;
-            }
-
-            // If we reach the first regular card and the target tab is pinned, it belongs at the
-            // end of the pinned tab section.
-            if (isTargetTabPinned) {
-                return adjustIndexForTabMovement(currentIndex, targetTabCurrentIndex);
-            }
-
-            // For tabs belonging to a group, find the group header, scan its children, and insert
-            // the tab in relative backend order.
-            if (targetTabGroupId != null) {
-                // Match the target group's header card.
-                if (isTabGroupHeader(currentModel)) {
-                    if (targetTabGroupId.equals(currentTab.getTabGroupId())) {
-                        isScanningTargetGroup = true;
-                        targetInsertionUiIndex =
-                                adjustIndexForTabMovement(currentIndex + 1, targetTabCurrentIndex);
-                        continue;
-                    }
-                }
-
-                // Scan consecutive children of this group.
-                if (isScanningTargetGroup) {
-                    if (targetTabGroupId.equals(currentModel.get(TabProperties.TAB_GROUP_ID))) {
-                        // Insert before the first sibling with a higher index.
-                        if (hasHigherBackendIndex(currentTabModelIndex, targetTabModelIndex)) {
-                            return adjustIndexForTabMovement(currentIndex, targetTabCurrentIndex);
-                        }
-                        targetInsertionUiIndex =
-                                adjustIndexForTabMovement(currentIndex + 1, targetTabCurrentIndex);
-                    } else {
-                        // Insert at the end of the group after exiting its children bounds.
-                        return targetInsertionUiIndex;
-                    }
-                }
-            }
-            // For standalone tabs or group headers, compare with top-level items.
-            else {
-                // Only compare top-level items, skip nested child rows.
-                if (currentModel.get(TabProperties.TAB_GROUP_ID) != null) {
-                    continue;
-                }
-
-                // Resolve the maximum backend index: for group headers, it is the highest index
-                // among all tabs in that group; for standalone tabs, it is the tab's own index.
-                int maxIndex = TabModel.INVALID_TAB_INDEX;
-                if (isTabGroupHeader(currentModel)) {
-                    List<Tab> groupTabs = tabModel.getRelatedTabList(currentTabId);
-                    for (Tab t : groupTabs) {
-                        Integer idx = tabIdToBackendIndexMap.get(t.getId());
-                        if (idx != null) {
-                            maxIndex = Math.max(maxIndex, idx);
-                        }
-                    }
-                } else {
-                    maxIndex = currentTabModelIndex;
-                }
-
-                if (hasHigherBackendIndex(maxIndex, targetTabModelIndex)) {
-                    return adjustIndexForTabMovement(currentIndex, targetTabCurrentIndex);
-                }
-            }
-        }
-
-        return targetInsertionUiIndex != TabModel.INVALID_TAB_INDEX
-                ? targetInsertionUiIndex
-                : adjustIndexForTabMovement(mModelList.size(), targetTabCurrentIndex);
+        return false;
     }
 
-    private void updateTabGroupStateInNestedLayout(Tab tab) {
-        int srcIndex = mModelList.indexFromTabId(tab.getId());
-        if (srcIndex == TabModel.INVALID_TAB_INDEX) {
-            // TODO(crbug.com/509226293): Address this for external/GTS operations (like
-            // group-to-group merges) where a tab is moved from a collapsed group (hidden in VT)
-            // to an expanded group. In this case, we must dynamically generate a new child card
-            // row so it doesn't vanish.
-            return;
-        }
-
-        PropertyModel model = mModelList.get(srcIndex).model;
-        Token oldTabGroupId = model.get(TabProperties.TAB_GROUP_ID);
-        Token newTabGroupId = tab.getTabGroupId();
-
-        if (newTabGroupId == null) {
-            // Tab is moving out of a group (becoming standalone).
-            clearTabGroupProperties(model);
-        } else {
-            // Tab is moving into a group.
-            TabModel tabModel = getCurrentTabModelChecked();
-            @TabGroupColorId int colorId = tabModel.getTabGroupColorWithFallback(newTabGroupId);
-            model.set(TabProperties.TAB_GROUP_ID, newTabGroupId);
-            updateTabGroupProperties(tab, model, colorId);
-        }
-
-        bindTabActionStateProperties(mTabActionState, tab, model);
-
-        int desIndex = getInsertionIndexOfTabForNestedGroups(tab);
-        // Hidden if the destination group is collapsed.
-        if (desIndex == TabModel.INVALID_TAB_INDEX) {
-            mModelList.removeAt(srcIndex);
-        } else if (srcIndex != desIndex) {
-            mModelList.move(srcIndex, desIndex);
-        }
-
-        if (newTabGroupId != null) {
-            updateTabGroupTitle(newTabGroupId);
-        }
-        if (oldTabGroupId != null && !oldTabGroupId.equals(newTabGroupId)) {
-            updateTabGroupTitle(oldTabGroupId);
-        }
-    }
-
-    private void moveTabOutOfGroupInGroupedLayout(
-            Tab movedTab, Tab previousGroupTab, int prevFilterIndex) {
-        TabModel tabModel = getCurrentTabModelChecked();
-        Token movedTabGroupId = movedTab.getTabGroupId();
-        if (tabModel.getTabCountForGroup(movedTabGroupId) <= 1 && movedTab != previousGroupTab) {
-            // Add a tab to the model if it represents a new card. This happens if
-            // the tab is either not in a group or in a group by itself. We do this
-            // first so that the indices for the filter and the model match when
-            // doing the update afterwards. When moving a tab between groups, the
-            // new tab being added to an existing group is handled in
-            // didMergeTabToGroup().
-            int filterIndex = tabModel.representativeIndexOf(movedTab);
-            addTabCardToModel(movedTab, mModelList.indexOfNthTabCard(filterIndex));
-        } else if (movedTabGroupId != null
-                && movedTabGroupId.equals(previousGroupTab.getTabGroupId())) {
-            // Despite being ungrouped we are still in a tab group this could mean
-            // the previous tab card this tab was associated with no longer contains
-            // tabs. If we have the same tab group id as the previous group tab then
-            // this was possibly the last tab in its group. Remove the tab card if
-            // it exists.
-            int previousIndex = mModelList.indexFromTabId(movedTab.getId());
-            if (previousIndex != TabModel.INVALID_TAB_INDEX) {
-                mModelList.removeAt(previousIndex);
-                return;
-            }
-        }
-        // Always update the previous group to clean up old state e.g. thumbnail,
-        // title, etc.
-        updateTab(mModelList.indexOfNthTabCard(prevFilterIndex), previousGroupTab, true, false);
-    }
-
-    private void moveTabOutOfGroupInFlatLayout(Tab movedTab, Tab previousGroupTab) {
-        int previousGroupTabId = previousGroupTab.getId();
-        int movedTabId = movedTab.getId();
-        int previousTabListModelIndex = mModelList.indexFromTabId(previousGroupTabId);
-        // Invalid means the previous group tab isn't visible. Either:
-        // 1. The moved tab isn't in this model list.
-        // 2. The moved tab is meant to stay in the model list as this is the
-        //    destination group.
-        // In either case no-op.
-        if (previousTabListModelIndex == TabList.INVALID_TAB_INDEX) {
-            return;
-        }
-
-        // The moved tab isn't here, or it is out-of-bounds no-op.
-        int curTabListModelIndex = mModelList.indexFromTabId(movedTabId);
-        if (!isValidMovePosition(curTabListModelIndex)) return;
-
-        mModelList.removeAt(curTabListModelIndex);
-        if (mTabGridDialogHandler != null) {
-            boolean isUngroupingLastTabInGroup = previousGroupTabId == movedTabId;
-            mTabGridDialogHandler.updateDialogContent(
-                    isUngroupingLastTabInGroup ? Tab.INVALID_TAB_ID : previousGroupTabId);
-        }
-    }
-
-    private int onTabAdded(Tab tab) {
+    int onTabAdded(Tab tab) {
         int existingIndex = mModelList.indexFromTabId(tab.getId());
         if (existingIndex != TabModel.INVALID_TAB_INDEX) return existingIndex;
 
-        int newIndex = getInsertionIndexOfTab(tab);
+        int newIndex = mTabListLayoutDelegate.getInsertionIndexOfTab(tab);
 
         // Tabs should be inserted only after the archived message card.
         if (newIndex == 0 && isOnlyArchivedMsg(mModelList)) newIndex++;
+
+        if (mLayoutType == TabListLayoutType.NESTED && isTabInTabGroup(tab)) {
+            Token groupId = tab.getTabGroupId();
+            if (groupId != null) {
+                if (ensureGroupHeaderExistsInNestedLayout(tab, groupId, newIndex)) {
+                    newIndex++;
+                }
+                updateTabGroupTitle(groupId);
+
+                if (newIndex == TabList.INVALID_TAB_INDEX
+                        || getCurrentTabModelChecked().getTabGroupCollapsed(groupId)) {
+                    return newIndex;
+                }
+
+                TabModel tabModel = getCurrentTabModelChecked();
+                addTabInfoToModelForTab(
+                        tab, newIndex, TabModelUtils.getCurrentTabId(tabModel) == tab.getId());
+                return newIndex;
+            }
+        }
 
         if (newIndex == TabList.INVALID_TAB_INDEX) return newIndex;
 
@@ -1934,14 +1602,10 @@ public class TabListMediator implements TabListNotificationHandler {
         return newIndex;
     }
 
-    private boolean isValidMovePosition(int position) {
-        return position != TabModel.INVALID_TAB_INDEX && position < mModelList.size();
-    }
-
     private boolean areTabsUnchanged(@Nullable List<Tab> tabs) {
         int tabsCount = 0;
         for (int i = 0; i < mModelList.size(); i++) {
-            if (mModelList.get(i).model.get(CARD_TYPE) == TAB) {
+            if (TabProperties.isTabOrTabGroup(mModelList.get(i).model)) {
                 tabsCount += 1;
             }
         }
@@ -1952,9 +1616,9 @@ public class TabListMediator implements TabListNotificationHandler {
         int tabsIndex = 0;
         for (int i = 0; i < mModelList.size(); i++) {
             PropertyModel model = mModelList.get(i).model;
-            if (model.get(CARD_TYPE) == TAB) {
+            if (TabProperties.isTabOrTabGroup(model)) {
                 Tab tab = tabs.get(tabsIndex++);
-                int modelTabId = model.get(TabProperties.TAB_ID);
+                int modelTabId = TabProperties.getTabId(model);
 
                 if (modelTabId != tab.getId()) {
                     Tab previousTab = getCurrentTabModelChecked().getTabById(modelTabId);
@@ -2026,12 +1690,14 @@ public class TabListMediator implements TabListNotificationHandler {
                 // the switcher layout is configured to represent the tab as a group header.
                 addTabCardToModel(tab, insertionIndex);
 
-                if (mLayoutType == TabListLayoutType.NESTED && isTabInTabGroup(tab)) {
+                // Flatten nested child tabs immediately below the group header if the group is
+                // expanded.
+                PropertyModel model = mModelList.get(insertionIndex).model;
+                if (TabProperties.isTabGroupHeader(model)
+                        && !TabProperties.isTabGroupCollapsed(model)) {
                     Token tabGroupId = tab.getTabGroupId();
                     assumeNonNull(tabGroupId);
-                    if (!tabModel.getTabGroupCollapsed(tabGroupId)) {
-                        insertionIndex += insertChildTabs(tabGroupId, insertionIndex);
-                    }
+                    insertionIndex += insertChildTabs(tabGroupId, insertionIndex);
                 }
                 insertionIndex++;
             }
@@ -2043,7 +1709,7 @@ public class TabListMediator implements TabListNotificationHandler {
             for (int i = 0; i < tabGroupSyncIds.size(); i++) {
                 SavedTabGroup savedTabGroup = mTabGroupSyncService.getGroup(tabGroupSyncIds.get(i));
                 assumeNonNull(savedTabGroup);
-                addTabGroupInfoToModel(savedTabGroup, i);
+                addSavedTabGroupInfoToModel(savedTabGroup, i);
             }
         }
 
@@ -2098,24 +1764,28 @@ public class TabListMediator implements TabListNotificationHandler {
         assert !mShowingTabs;
         for (int i = 0; i < mModelList.size(); i++) {
             PropertyModel model = mModelList.get(i).model;
-            if (model.get(CARD_TYPE) == TAB || model.get(CARD_TYPE) == TAB_GROUP) {
+            if (TabProperties.isTabOrTabGroup(model)) {
                 updateThumbnailFetcher(model, Tab.INVALID_TAB_ID);
                 model.set(TabProperties.FAVICON_FETCHER, null);
             }
         }
     }
 
-    private void updateTab(int index, Tab tab, boolean isUpdatingId, boolean quickMode) {
+    void updateTab(int index, Tab tab, boolean isUpdatingId, boolean quickMode) {
         if (index < 0 || index >= mModelList.size()) return;
 
-        PropertyModel model = mModelList.get(index).model;
+        updateTab(mModelList.get(index).model, index, tab, isUpdatingId, quickMode);
+    }
+
+    private void updateTab(
+            PropertyModel model, int index, Tab tab, boolean isUpdatingId, boolean quickMode) {
         if (isUpdatingId) {
             model.set(TabProperties.TAB_ID, tab.getId());
         } else {
             // Group Header's TAB_ID is not required to match the active child's ID when nesting is
             // supported.
             assert mLayoutType == TabListLayoutType.NESTED
-                    || model.get(TabProperties.TAB_ID) == tab.getId();
+                    || TabProperties.getTabId(model) == tab.getId();
         }
 
         boolean isTabSelected = isTabSelected(tab, model, mTabActionState);
@@ -2134,15 +1804,17 @@ public class TabListMediator implements TabListNotificationHandler {
         model.set(TabProperties.TAB_CLICK_LISTENER, getTabActionListener(tab, isInTabGroup));
         model.set(TabProperties.IS_SELECTED, isTabSelected);
         model.set(TabProperties.SHOULD_SHOW_PRICE_DROP_TOOLTIP, false);
-        model.set(TabProperties.TITLE, getLatestTitleForTab(tab, model, /* useDefault= */ true));
-        model.set(TabProperties.MEDIA_INDICATOR, getTabGridMediaIndicator(tab));
+        model.set(
+                TabProperties.TITLE,
+                getLatestTitleForTabOrGroup(tab, model, /* useDefault= */ true));
         model.set(TabProperties.IS_PINNED, tab.getIsPinned());
+        model.set(TabProperties.MEDIA_INDICATOR, getTabGridMediaIndicator(tab, model));
 
         bindTabActionStateProperties(model.get(TabProperties.TAB_ACTION_STATE), tab, model);
 
         model.set(TabProperties.URL_DOMAIN, getDomainForTab(tab, model));
 
-        setupPersistedTabDataFetcherForTab(tab, index);
+        setupPersistedTabDataFetcherForTab(tab, model);
 
         updateFaviconForTab(model, tab, null, null);
 
@@ -2168,7 +1840,7 @@ public class TabListMediator implements TabListNotificationHandler {
     }
 
     private void updateActorUiState(PropertyModel model, @Nullable UiTabState state) {
-        boolean isTabGroupCard = isTabGroupHeader(model);
+        boolean isTabGroupCard = TabProperties.isTabGroupHeader(model);
         model.set(
                 TabProperties.ACTOR_UI_STATE,
                 (isTabGroupCard || state == null || state.tabIndicator == TabIndicatorStatus.NONE)
@@ -2184,7 +1856,17 @@ public class TabListMediator implements TabListNotificationHandler {
         return tabModel.isTabInTabGroup(tab);
     }
 
-    private @MediaState int getTabGridMediaIndicator(Tab representativeTab) {
+    // TODO(crbug.com/509226293): Delegate media state resolution to TabListLayoutDelegate.
+    private @MediaState int getTabGridMediaIndicator(Tab representativeTab, PropertyModel model) {
+        if (mLayoutType == TabListLayoutType.NESTED) {
+            if (TabProperties.isTabGroupHeader(model)) {
+                return MediaState.NONE;
+            }
+            // For nested layout child tabs, we do not aggregate the media state of the entire
+            // group.
+            return representativeTab.getMediaState();
+        }
+
         @MediaState int stateToReturn = representativeTab.getMediaState();
         // If the tab is not in a group, or the  state has the highest priority, then return
         // the state of the representative tab.
@@ -2313,8 +1995,8 @@ public class TabListMediator implements TabListNotificationHandler {
                                 helper.getPositionsOfReorderAction(host, action);
                         int currentPosition = positions.first;
                         int targetPosition = positions.second;
-                        if (!isValidMovePosition(currentPosition)
-                                || !isValidMovePosition(targetPosition)) {
+                        if (!mModelList.isValidIndex(currentPosition)
+                                || !mModelList.isValidIndex(targetPosition)) {
                             return false;
                         }
                         mModelList.move(currentPosition, targetPosition);
@@ -2355,11 +2037,14 @@ public class TabListMediator implements TabListNotificationHandler {
                 assumeNonNull(tab);
                 bindTabActionStateProperties(tabActionState, tab, model);
             } else if (item.type == UiType.TAB_GROUP) {
-                assumeNonNull(mTabGroupSyncService);
-                SavedTabGroup savedTabGroup =
-                        mTabGroupSyncService.getGroup(model.get(TabProperties.TAB_GROUP_SYNC_ID));
-                if (savedTabGroup != null) {
-                    bindTabGroupActionStateProperties(savedTabGroup, model);
+                if (model.get(CARD_TYPE) == ModelType.ARCHIVED_TAB_GROUP) {
+                    assumeNonNull(mTabGroupSyncService);
+                    SavedTabGroup savedTabGroup =
+                            mTabGroupSyncService.getGroup(
+                                    model.get(TabProperties.TAB_GROUP_SYNC_ID));
+                    if (savedTabGroup != null) {
+                        bindTabGroupActionStateProperties(savedTabGroup, model);
+                    }
                 }
             } else {
                 assert false : "Unexpected itemId type.";
@@ -2381,7 +2066,7 @@ public class TabListMediator implements TabListNotificationHandler {
             return new TabActionButtonData(
                     TabActionButtonType.SELECT, mSelectableTabOnClickListener);
         }
-        if (isTabGroupHeader(model)) {
+        if (TabProperties.isTabGroupHeader(model)) {
             if (mTabListItemOnClickListenerProvider != null) {
                 return mTabListItemOnClickListenerProvider.getTabGroupActionButtonData(
                         tab, model, this::getTabGroupOverflowMenuClickListener);
@@ -2424,7 +2109,8 @@ public class TabListMediator implements TabListNotificationHandler {
         if (tabActionState == TabActionState.SELECTABLE) {
             return mSelectableTabOnClickListener;
         } else {
-            if (isTabGroupHeader(model) && mTabListItemOnClickListenerProvider != null) {
+            if (TabProperties.isTabGroupHeader(model)
+                    && mTabListItemOnClickListenerProvider != null) {
                 return mTabListItemOnClickListenerProvider.onTabGroupClicked(tab);
             } else {
                 return mTabSelectedListener;
@@ -2449,7 +2135,12 @@ public class TabListMediator implements TabListNotificationHandler {
                 : null;
     }
 
-    private void bindTabActionStateProperties(
+    @TabActionState
+    int getTabActionState() {
+        return mTabActionState;
+    }
+
+    void bindTabActionStateProperties(
             @TabActionState int tabActionState, Tab tab, PropertyModel model) {
         model.set(TabProperties.IS_SELECTED, isTabSelected(tab, model, tabActionState));
 
@@ -2462,7 +2153,6 @@ public class TabListMediator implements TabListNotificationHandler {
         model.set(
                 TabProperties.TAB_CONTEXT_CLICK_LISTENER,
                 getTabContextClickListener(tabActionState));
-        model.set(TabProperties.TAB_CARD_LABEL_DATA, model.get(TabProperties.TAB_CARD_LABEL_DATA));
 
         if (mTabActionState != TabActionState.SELECTABLE) {
             updateDescriptionString(tab, model);
@@ -2525,7 +2215,7 @@ public class TabListMediator implements TabListNotificationHandler {
             TabModel tabModel = getCurrentTabModelChecked();
             // Check if the tab group card should show as selected. The click listener provider
             // can override this behavior.
-            if (isTabGroupHeader(model) && tab.getTabGroupId() != null) {
+            if (TabProperties.isTabGroupHeader(model) && tab.getTabGroupId() != null) {
                 if (mTabListItemOnClickListenerProvider != null) {
                     @Nullable Boolean selectedOverride =
                             mTabListItemOnClickListenerProvider.isTabGroupSelected(tab, model);
@@ -2546,7 +2236,7 @@ public class TabListMediator implements TabListNotificationHandler {
         }
     }
 
-    private void addTabCardToModel(Tab tab, int index) {
+    void addTabCardToModel(Tab tab, int index) {
         boolean isTabGroup = isTabInTabGroup(tab) && mLayoutType != TabListLayoutType.FLAT;
         if (isTabGroup) {
             Token tabGroupId = tab.getTabGroupId();
@@ -2559,7 +2249,8 @@ public class TabListMediator implements TabListNotificationHandler {
         }
     }
 
-    private PropertyModel addTabInfoToModel(Tab tab, int index, boolean isSelected) {
+    private PropertyModel addTabInfoToModel(
+            Tab tab, int index, boolean isSelected, @CardProperties.ModelType int cardType) {
         PropertyModel tabInfo =
                 new PropertyModel.Builder(TabProperties.ALL_KEYS_TAB_GRID)
                         .with(TabProperties.TAB_ACTION_STATE, mTabActionState)
@@ -2572,10 +2263,10 @@ public class TabListMediator implements TabListNotificationHandler {
                         .with(CardProperties.CARD_ANIMATION_STATUS, AnimationStatus.CARD_RESTORE)
                         .with(TabProperties.TAB_SELECTION_DELEGATE, getTabSelectionDelegate())
                         .with(TabProperties.ACCESSIBILITY_DELEGATE, mAccessibilityDelegate)
-                        .with(CARD_TYPE, TAB)
+                        .with(CARD_TYPE, cardType)
                         .with(TabProperties.VISIBILITY, View.VISIBLE)
                         .with(TabProperties.ACTOR_UI_STATE, null)
-                        .with(TabProperties.TAB_CARD_LABEL_DATA, getTabCardLabelData(tab))
+                        .with(TabProperties.IS_PINNED, tab.getIsPinned())
                         .build();
 
         ActorUiTabController controller = ActorUiTabController.from(tab);
@@ -2589,9 +2280,7 @@ public class TabListMediator implements TabListNotificationHandler {
             tabInfo.set(TabProperties.IS_COLLAPSED, true);
         }
 
-        @UiType
-        int tabUiType =
-                mMode == TabListMode.STRIP ? TabProperties.UiType.STRIP : TabProperties.UiType.TAB;
+        @UiType int tabUiType = mMode == TabListMode.BOTTOM_STRIP ? UiType.STRIP : UiType.TAB;
         if (index >= mModelList.size()) {
             mModelList.add(new ListItem(tabUiType, tabInfo));
         } else {
@@ -2606,28 +2295,21 @@ public class TabListMediator implements TabListNotificationHandler {
                                 mDefaultGridCardSize.getWidth(), mDefaultGridCardSize.getHeight()));
             }
         }
-        if (mThumbnailProvider != null && mShowingTabs) {
-            updateThumbnailFetcher(tabInfo, tab.getId());
-        }
 
         return tabInfo;
     }
 
-    private void addTabInfoToModelForTab(Tab tab, int index, boolean isSelected) {
+    void addTabInfoToModelForTab(Tab tab, int index, boolean isSelected) {
         assert index != TabModel.INVALID_TAB_INDEX;
-        boolean shouldShowAsNestedChild =
-                mLayoutType != TabListLayoutType.FLAT && isTabInTabGroup(tab);
 
-        PropertyModel tabInfo = addTabInfoToModel(tab, index, isSelected);
+        PropertyModel tabInfo = addTabInfoToModel(tab, index, isSelected, ModelType.TAB);
 
-        // Page Tab Specific properties
+        mTabListLayoutDelegate.setupGroupPropertiesForChildTab(tab, tabInfo);
         tabInfo.set(
-                TabProperties.TAB_GROUP_ID, shouldShowAsNestedChild ? tab.getTabGroupId() : null);
-        tabInfo.set(
-                TabProperties.TITLE, getLatestTitleForTab(tab, tabInfo, /* useDefault= */ false));
+                TabProperties.TITLE,
+                getLatestTitleForTabOrGroup(tab, tabInfo, /* useDefault= */ false));
         tabInfo.set(TabProperties.URL_DOMAIN, getDomainForTab(tab, tabInfo));
-        tabInfo.set(TabProperties.IS_PINNED, tab.getIsPinned());
-        tabInfo.set(TabProperties.MEDIA_INDICATOR, getTabGridMediaIndicator(tab));
+        tabInfo.set(TabProperties.MEDIA_INDICATOR, getTabGridMediaIndicator(tab, tabInfo));
         tabInfo.set(TabProperties.SHOULD_SHOW_PRICE_DROP_TOOLTIP, false);
         tabInfo.set(TabProperties.USE_SHRINK_CLOSE_ANIMATION, false);
         tabInfo.set(
@@ -2636,12 +2318,17 @@ public class TabListMediator implements TabListNotificationHandler {
         tabInfo.set(
                 TabProperties.FAVICON_FETCHER,
                 mTabListFaviconProvider.getDefaultFaviconFetcher(tab.isIncognito()));
+        tabInfo.set(TabProperties.IS_LOADING, false);
 
-        setupPersistedTabDataFetcherForTab(tab, index);
+        setupPersistedTabDataFetcherForTab(tab, tabInfo);
 
         updateFaviconForTab(tabInfo, tab, null, null);
 
         bindTabActionStateProperties(mTabActionState, tab, tabInfo);
+
+        if (mThumbnailProvider != null && mShowingTabs) {
+            updateThumbnailFetcher(tabInfo, tab.getId());
+        }
     }
 
     private void addTabInfoToModelForGroup(Tab tab, Token tabGroupId, int index) {
@@ -2651,52 +2338,35 @@ public class TabListMediator implements TabListNotificationHandler {
         @TabGroupColorId int colorId = tabModel.getTabGroupColorWithFallback(tabGroupId);
         int currentTabId = TabModelUtils.getCurrentTabId(tabModel);
 
-        boolean isCollapsed = tabModel.getTabGroupCollapsed(tabGroupId);
+        boolean isCollapsed =
+                mLayoutType != TabListLayoutType.NESTED
+                        || tabModel.getTabGroupCollapsed(tabGroupId);
         // If the group is collapsed, the group representation card displays the selection.
         // If expanded, the group card is a header and should remain unhighlighted (child rows show
         // selection).
         boolean isSelected = isCollapsed && isSelectedTab(tab, currentTabId);
 
-        PropertyModel groupInfo = addTabInfoToModel(tab, index, isSelected);
+        int cardType =
+                mLayoutType == TabListLayoutType.NESTED ? ModelType.TAB_GROUP : ModelType.TAB;
+        PropertyModel groupInfo = addTabInfoToModel(tab, index, isSelected, cardType);
 
         // Group Header Specific properties
         groupInfo.set(TabProperties.TAB_GROUP_ID, null);
         updateTabGroupProperties(tab, groupInfo, colorId);
         groupInfo.set(
-                TabProperties.TITLE, getLatestTitleForTab(tab, groupInfo, /* useDefault= */ true));
+                TabProperties.TITLE,
+                getLatestTitleForTabOrGroup(tab, groupInfo, /* useDefault= */ true));
         groupInfo.set(TabProperties.IS_COLLAPSED, isCollapsed);
         groupInfo.set(TabProperties.FAVICON_FETCHER, null);
 
         bindTabActionStateProperties(mTabActionState, tab, groupInfo);
-    }
 
-    private int insertChildTabs(Token tabGroupId, int headerIndex) {
-        TabModel tabModel = getCurrentTabModelChecked();
-        List<Tab> children = tabModel.getTabsInGroup(tabGroupId);
-        int currentTabId = TabModelUtils.getCurrentTabId(tabModel);
-        for (int i = 0; i < children.size(); i++) {
-            Tab childTab = children.get(i);
-            int childIndex = headerIndex + 1 + i;
-            addTabInfoToModelForTab(childTab, childIndex, isSelectedTab(childTab, currentTabId));
-        }
-        return children.size();
-    }
-
-    private void removeChildTabs(Token tabGroupId) {
-        @Nullable Pair<Integer, Tab> indexAndTab = getIndexAndTabForTabGroupId(tabGroupId);
-        if (indexAndTab == null) return;
-        int headerIndex = indexAndTab.first;
-        TabModel tabModel = getCurrentTabModelChecked();
-        int childCount = tabModel.getTabsInGroup(tabGroupId).size();
-
-        for (int i = 0; i < childCount; i++) {
-            if (headerIndex + 1 < mModelList.size()) {
-                mModelList.removeAt(headerIndex + 1);
-            }
+        if (mThumbnailProvider != null && mShowingTabs) {
+            updateThumbnailFetcher(groupInfo, tab.getId());
         }
     }
 
-    private void addTabGroupInfoToModel(SavedTabGroup savedTabGroup, int index) {
+    private void addSavedTabGroupInfoToModel(SavedTabGroup savedTabGroup, int index) {
         assert savedTabGroup != null;
         String title =
                 TextUtils.isEmpty(savedTabGroup.title)
@@ -2704,6 +2374,10 @@ public class TabListMediator implements TabListNotificationHandler {
                                 mActivity, savedTabGroup.savedTabs.size())
                         : savedTabGroup.title;
 
+        int cardType =
+                savedTabGroup.archivalTimeMs != null
+                        ? ModelType.ARCHIVED_TAB_GROUP
+                        : ModelType.TAB_GROUP;
         PropertyModel tabGroupInfo =
                 new PropertyModel.Builder(TabProperties.ALL_KEYS_TAB_GROUP_GRID)
                         .with(TabProperties.TAB_ACTION_STATE, mTabActionState)
@@ -2716,7 +2390,7 @@ public class TabListMediator implements TabListNotificationHandler {
                         .with(CardProperties.CARD_ANIMATION_STATUS, AnimationStatus.CARD_RESTORE)
                         .with(TabProperties.TAB_SELECTION_DELEGATE, getTabSelectionDelegate())
                         .with(TabProperties.ACCESSIBILITY_DELEGATE, mAccessibilityDelegate)
-                        .with(CARD_TYPE, TAB_GROUP)
+                        .with(CARD_TYPE, cardType)
                         .with(
                                 TabProperties.QUICK_DELETE_ANIMATION_STATUS,
                                 QuickDeleteAnimationStatus.TAB_RESTORE)
@@ -2726,7 +2400,7 @@ public class TabListMediator implements TabListNotificationHandler {
 
         bindTabGroupActionStateProperties(savedTabGroup, tabGroupInfo);
 
-        mModelList.add(index, new ListItem(TabProperties.UiType.TAB_GROUP, tabGroupInfo));
+        mModelList.add(index, new ListItem(UiType.TAB_GROUP, tabGroupInfo));
 
         String syncId = savedTabGroup.syncId;
         assumeNonNull(syncId);
@@ -2742,19 +2416,27 @@ public class TabListMediator implements TabListNotificationHandler {
         }
     }
 
-    private @Nullable TabCardLabelData getTabCardLabelData(Tab tab) {
-        SendTabToSelfTabCardLabelData data = SendTabToSelfTabCardLabelData.get(tab);
-        if (data == null) return null;
-
-        return new TabCardLabelData(
-                TabCardLabelType.ACTIVITY_UPDATE,
-                data::getLabelText,
-                /* asyncImageFactory= */ null,
-                /* contentDescriptionResolver= */ null);
+    /**
+     * Inserts the child tabs of a group into the list model.
+     *
+     * @param tabGroupId The ID of the tab group.
+     * @param headerIndex The index of the group header card.
+     * @return The number of child tabs added to the list.
+     */
+    int insertChildTabs(Token tabGroupId, int headerIndex) {
+        TabModel tabModel = getCurrentTabModelChecked();
+        List<Tab> children = tabModel.getTabsInGroup(tabGroupId);
+        int currentTabId = TabModelUtils.getCurrentTabId(tabModel);
+        for (int i = 0; i < children.size(); i++) {
+            Tab childTab = children.get(i);
+            int childIndex = headerIndex + 1 + i;
+            addTabInfoToModelForTab(childTab, childIndex, isSelectedTab(childTab, currentTabId));
+        }
+        return children.size();
     }
 
     private String getDomainForTab(Tab tab, PropertyModel model) {
-        if (!isTabGroupHeader(model)) return getDomain(tab);
+        if (!TabProperties.isTabGroupHeader(model)) return getDomain(tab);
         List<Tab> relatedTabs = getRelatedTabsForId(tab.getId());
 
         List<String> domainNames = new ArrayList<>();
@@ -2767,20 +2449,20 @@ public class TabListMediator implements TabListNotificationHandler {
         return TextUtils.join(", ", domainNames);
     }
 
-    private void updateDescriptionString(Tab tab, PropertyModel model) {
+    void updateDescriptionString(Tab tab, PropertyModel model) {
         if (mLayoutType == TabListLayoutType.FLAT) return;
-        boolean isInTabGroup = isTabInTabGroup(tab);
+        boolean isTabGroup = TabProperties.isTabGroupHeader(model);
         int numOfRelatedTabs = getRelatedTabsForId(tab.getId()).size();
         TextResolver contentDescriptionResolver =
                 (context) -> {
-                    if (!isInTabGroup) {
+                    if (!isTabGroup) {
                         if (mComponentId == TabComponentId.ARCHIVED_TABS_DIALOG) {
                             return context.getString(
-                                    R.string.accessibility_restore_tab, tab.getTitle());
+                                    R.string.accessibility_restore_tab, getTabTitleOrUrl(tab));
                         }
                         return "";
                     }
-                    String title = getLatestTitleForTab(tab, model, /* useDefault= */ false);
+                    String title = getLatestTitleForTabOrGroup(tab, model, /* useDefault= */ false);
                     Resources res = context.getResources();
                     TabModel tabModel = getCurrentTabModelChecked();
                     @TabGroupColorId
@@ -2792,7 +2474,21 @@ public class TabListMediator implements TabListNotificationHandler {
                                     .getTabGroupColorPickerItemColorAccessibilityString(colorId);
                     String colorDesc = res.getString(colorDescRes);
                     String description;
-                    if (TabUiUtils.isDataSharingFunctionalityEnabled() && hasCollaboration(tab)) {
+                    if (!TabProperties.isTabGroupCollapsed(model)) {
+                        description =
+                                TextUtils.isEmpty(title)
+                                        ? res.getQuantityString(
+                                                R.plurals.accessibility_dialog_back_button,
+                                                numOfRelatedTabs,
+                                                numOfRelatedTabs)
+                                        : res.getQuantityString(
+                                                R.plurals
+                                                        .accessibility_dialog_back_button_with_group_name,
+                                                numOfRelatedTabs,
+                                                title,
+                                                numOfRelatedTabs);
+                    } else if (TabUiUtils.isDataSharingFunctionalityEnabled()
+                            && hasCollaboration(tab)) {
                         TabCardLabelData tabCardLabelData =
                                 model.get(TabProperties.TAB_CARD_LABEL_DATA);
                         CharSequence tabCardLabelDesc = "";
@@ -2852,7 +2548,7 @@ public class TabListMediator implements TabListNotificationHandler {
                                                 numOfRelatedTabs,
                                                 colorDesc);
                     }
-                    String mediaStateString = getMediaStateAccessibilityString(tab, res);
+                    String mediaStateString = getMediaStateAccessibilityString(tab, model, res);
                     if (!TextUtils.isEmpty(mediaStateString)) {
                         description += " " + mediaStateString;
                     }
@@ -2891,13 +2587,13 @@ public class TabListMediator implements TabListNotificationHandler {
         model.set(TabProperties.CONTENT_DESCRIPTION_TEXT_RESOLVER, contentDescriptionResolver);
     }
 
-    private void updateActionButtonDescriptionString(Tab tab, PropertyModel model) {
+    void updateActionButtonDescriptionString(Tab tab, PropertyModel model) {
         TextResolver descriptionTextResolver;
         if (mLayoutType != TabListLayoutType.FLAT) {
-            boolean isInTabGroup = isTabInTabGroup(tab);
+            boolean isTabGroup = TabProperties.isTabGroupHeader(model);
             int numOfRelatedTabs = getRelatedTabsForId(tab.getId()).size();
-            if (isInTabGroup) {
-                String title = getLatestTitleForTab(tab, model, /* useDefault= */ false);
+            if (isTabGroup) {
+                String title = getLatestTitleForTabOrGroup(tab, model, /* useDefault= */ false);
 
                 descriptionTextResolver =
                         getActionButtonDescriptionTextResolver(numOfRelatedTabs, title, tab);
@@ -2911,7 +2607,7 @@ public class TabListMediator implements TabListNotificationHandler {
         descriptionTextResolver =
                 (context) -> {
                     return context.getString(
-                            R.string.accessibility_tabstrip_btn_close_tab, tab.getTitle());
+                            R.string.accessibility_tabstrip_btn_close_tab, getTabTitleOrUrl(tab));
                 };
         model.set(TabProperties.ACTION_BUTTON_DESCRIPTION_TEXT_RESOLVER, descriptionTextResolver);
     }
@@ -2978,46 +2674,34 @@ public class TabListMediator implements TabListNotificationHandler {
         return selectionDelegate == null ? 0 : selectionDelegate.getSelectedItems().size();
     }
 
-    private boolean hasHigherBackendIndex(int modelIndex, int targetModelIndex) {
-        return modelIndex != TabModel.INVALID_TAB_INDEX && modelIndex > targetModelIndex;
+    private String getTabTitleOrUrl(Tab tab) {
+        String title = tab.getTitle();
+        if (TextUtils.isEmpty(title)) {
+            String url = tab.getUrl().getSpec();
+            return TextUtils.isEmpty(url) ? "" : url;
+        }
+        return title;
     }
 
     /**
-     * Adjusts the proposed insertion UI index if the tab is being moved from an earlier position.
+     * Returns the latest title for the given tab or its tab group. If the tab is in a group (and
+     * the layout supports groups), this returns the title of the tab group. If the tab is a single
+     * tab and its title is empty, it falls back to the tab's URL.
      *
-     * <p>If a tab is already present in the UI list (meaning it is being moved rather than newly
-     * inserted) and its current UI index is less than the proposed insertion index, removing the
-     * tab from its old position will shift all subsequent UI indices down by one. We must decrement
-     * the insertion index by one to account for this shift.
-     *
-     * @param currentIndex The proposed insertion UI index.
-     * @param targetTabCurrentIndex The current UI index of the tab being moved, or
-     *     TabModel.INVALID_TAB_INDEX if the tab is not currently in the UI list.
-     * @return The adjusted insertion UI index.
+     * @param tab The tab to get the title for.
+     * @param model The {@link PropertyModel} associated with the tab or tab group. If null, group
+     *     status is determined from the tab and layout type.
+     * @param useDefault Whether to use a default displayable title (e.g. "2 tabs") if the group
+     *     title is empty.
+     * @return The latest title for the tab or its group, or the URL fallback.
      */
-    private int adjustIndexForTabMovement(int currentIndex, int targetTabCurrentIndex) {
-        if (targetTabCurrentIndex != TabModel.INVALID_TAB_INDEX
-                && currentIndex > targetTabCurrentIndex) {
-            return currentIndex - 1;
-        }
-        return currentIndex;
-    }
-
-    private boolean isPinnedCard(PropertyModel model) {
-        return model.get(CARD_TYPE) == TAB && model.get(TabProperties.IS_PINNED);
-    }
-
-    private boolean isTabGroupHeader(PropertyModel model) {
-        return model.get(CARD_TYPE) == TAB && model.get(TabProperties.TAB_GROUP_HEADER_ID) != null;
-    }
-
     @VisibleForTesting
-    String getLatestTitleForTab(Tab tab, @Nullable PropertyModel model, boolean useDefault) {
+    String getLatestTitleForTabOrGroup(Tab tab, @Nullable PropertyModel model, boolean useDefault) {
         boolean isTabGroup;
         if (model == null) {
             isTabGroup = mLayoutType != TabListLayoutType.FLAT && isTabInTabGroup(tab);
         } else {
-            isTabGroup = isTabGroupHeader(model);
+            isTabGroup = TabProperties.isTabGroupHeader(model);
         }
 
         if (isTabGroup) {
@@ -3031,12 +2715,7 @@ public class TabListMediator implements TabListNotificationHandler {
             }
         }
 
-        String originalTitle = tab.getTitle();
-        if (TextUtils.isEmpty(originalTitle)) {
-            String url = tab.getUrl().getSpec();
-            return TextUtils.isEmpty(url) ? "" : url;
-        }
-        return originalTitle;
+        return getTabTitleOrUrl(tab);
     }
 
     int selectedTabId() {
@@ -3047,8 +2726,7 @@ public class TabListMediator implements TabListNotificationHandler {
         return TabModelUtils.getCurrentTabId(getCurrentTabModelChecked());
     }
 
-    private void setupPersistedTabDataFetcherForTab(Tab tab, int index) {
-        PropertyModel model = mModelList.get(index).model;
+    private void setupPersistedTabDataFetcherForTab(Tab tab, PropertyModel model) {
         if (mSupportsMessageCards && !tab.isIncognito()) {
             assert mOriginalProfile != null;
             if (PriceTrackingUtilities.isTrackPricesOnTabsEnabled(mOriginalProfile)
@@ -3065,9 +2743,20 @@ public class TabListMediator implements TabListNotificationHandler {
         }
     }
 
-    private void updateFaviconForTab(
+    private void updateLoadingState(Tab tab, boolean isLoading) {
+        if (mMode != TabListMode.VERTICAL || !mShowingTabs) return;
+        @Nullable PropertyModel model = mModelList.getModelFromTabId(tab.getId());
+        if (model == null) return;
+        // Suppress loading indicator for NTP. NTP loads instantly, but the brief load events can
+        // trigger visible flickers in Android Views, or get stuck if background tab loading is
+        // deferred.
+        boolean shouldShowLoadingIndicator = !UrlUtilities.isNtpUrl(tab.getUrl()) && isLoading;
+        model.set(TabProperties.IS_LOADING, shouldShowLoadingIndicator);
+    }
+
+    void updateFaviconForTab(
             PropertyModel model, Tab tab, @Nullable Bitmap icon, @Nullable GURL iconUrl) {
-        if (isTabGroupHeader(model)) {
+        if (TabProperties.isTabGroupHeader(model)) {
             model.set(TabProperties.FAVICON_FETCHER, null);
             return;
         }
@@ -3088,11 +2777,10 @@ public class TabListMediator implements TabListNotificationHandler {
     }
 
     /**
-     * Inserts a special {@link org.chromium.ui.modelutil.MVCListAdapter.ListItem} at given index of
-     * the current {@link TabListModel}.
+     * Inserts a special {@link ListItem} at given index of the current {@link TabListModel}.
      *
-     * @param index The index of the {@link org.chromium.ui.modelutil.MVCListAdapter.ListItem} to be
-     *     inserted, or TabList.INVALID_TAB_INDEX to ignore.
+     * @param index The index of the {@link ListItem} to be inserted, or TabList.INVALID_TAB_INDEX
+     *     to ignore.
      * @param uiType The view type the model will bind to.
      * @param model The model that will be bound to a view.
      */
@@ -3104,13 +2792,12 @@ public class TabListMediator implements TabListNotificationHandler {
     }
 
     /**
-     * Removes a special {@link org.chromium.ui.modelutil.MVCListAdapter.ListItem} that has the
-     * given {@code uiType} and/or its {@link PropertyModel} has the given {@code itemIdentifier}
-     * from the current {@link TabListModel}.
+     * Removes a special {@link ListItem} that has the given {@code uiType} and/or its {@link
+     * PropertyModel} has the given {@code itemIdentifier} from the current {@link TabListModel}.
      *
      * @param uiType The uiType to match.
      * @param itemIdentifier The itemIdentifier to match. This can be obsoleted if the {@link
-     *     org.chromium.ui.modelutil.MVCListAdapter.ListItem} does not need additional identifier.
+     *     ListItem} does not need additional identifier.
      */
     void removeSpecialItemFromModelList(@UiType int uiType, @MessageType int itemIdentifier) {
         int index = TabModel.INVALID_TAB_INDEX;
@@ -3132,8 +2819,8 @@ public class TabListMediator implements TabListNotificationHandler {
     }
 
     /**
-     * Removes a {@link org.chromium.ui.modelutil.MVCListAdapter.ListItem} that has the given {@code
-     * uiType} and the {@link PropertyModel} has the given {@link TabListEditorItemSelectionId}.
+     * Removes a {@link ListItem} that has the given {@code uiType} and the {@link PropertyModel}
+     * has the given {@link TabListEditorItemSelectionId}.
      *
      * @param uiType The uiType to match.
      * @param itemId The itemId to match.
@@ -3143,7 +2830,7 @@ public class TabListMediator implements TabListNotificationHandler {
         if (uiType == UiType.TAB_GROUP && itemId.isTabGroupSyncId()) {
             String syncId = itemId.getTabGroupSyncId();
             assumeNonNull(syncId);
-            index = mModelList.indexFromSyncId(syncId);
+            index = mModelList.indexFromArchivedTabGroupSyncId(syncId);
         }
 
         if (index == TabModel.INVALID_TAB_INDEX) return;
@@ -3273,7 +2960,7 @@ public class TabListMediator implements TabListNotificationHandler {
         if (!relatedTabIds.isEmpty()) {
             for (int i = 0; i < mModelList.size(); i++) {
                 PropertyModel model = mModelList.get(i).model;
-                if (model.get(CARD_TYPE) != TAB) continue;
+                if (!TabProperties.isTabOrTabGroup(model)) continue;
 
                 int modelTabId = model.get(TAB_ID);
                 if (relatedTabIds.contains(modelTabId)) {
@@ -3294,7 +2981,7 @@ public class TabListMediator implements TabListNotificationHandler {
      * Tab} representing the group. Will be null if the entry is not present, the tab cannot be
      * found, or the tab is not part of a tab group.
      */
-    private @Nullable Pair<Integer, Tab> getIndexAndTabForTabGroupId(@Nullable Token tabGroupId) {
+    @Nullable Pair<Integer, Tab> getIndexAndTabForTabGroupId(@Nullable Token tabGroupId) {
         if (tabGroupId == null) return null;
 
         TabModel tabModel = getCurrentTabModelChecked();
@@ -3314,6 +3001,38 @@ public class TabListMediator implements TabListNotificationHandler {
         return Pair.create(index, tab);
     }
 
+    /**
+     * If the specified tab is part of a tab group, returns the UI index of the corresponding group
+     * header.
+     *
+     * @param tabId The ID of the tab to look up.
+     * @return The UI index of the group header, or {@link TabModel#INVALID_TAB_INDEX} if not found.
+     */
+    public int getGroupHeaderIndexForTabId(int tabId) {
+        Tab tab = getCurrentTabModelChecked().getTabById(tabId);
+        if (tab != null && tab.getTabGroupId() != null) {
+            return mModelList.indexFromTabGroupId(tab.getTabGroupId());
+        }
+        return TabModel.INVALID_TAB_INDEX;
+    }
+
+    /**
+     * Ensures the GROUP_HEADER for the given group has a valid TAB_ID. If the previous
+     * representative tab was moved or closed, this updates the header to point to another valid tab
+     * currently in the group to prevent ID hijacking.
+     */
+    void updateTabGroupHeaderId(@Nullable Token tabGroupId) {
+        if (tabGroupId == null) return;
+        int headerIndex = mModelList.indexFromTabGroupId(tabGroupId);
+        if (headerIndex == TabModel.INVALID_TAB_INDEX) return;
+
+        List<Tab> tabs = getCurrentTabModelChecked().getTabsInGroup(tabGroupId);
+        if (tabs != null && !tabs.isEmpty()) {
+            PropertyModel headerModel = mModelList.get(headerIndex).model;
+            headerModel.set(TabProperties.TAB_ID, tabs.get(0).getId());
+        }
+    }
+
     private @Nullable Tab getTabForIndex(int index) {
         return getCurrentTabModelChecked()
                 .getTabById(mModelList.get(index).model.get(TabProperties.TAB_ID));
@@ -3328,7 +3047,7 @@ public class TabListMediator implements TabListNotificationHandler {
         // for the oldFilter which can result in invalid updates.
     }
 
-    private void addObserversForTab(Tab tab) {
+    void addObserversForTab(Tab tab) {
         tab.addObserver(mTabObserver);
 
         ActorUiTabController controller = ActorUiTabController.from(tab);
@@ -3381,9 +3100,8 @@ public class TabListMediator implements TabListNotificationHandler {
 
     /**
      * @param itemIdentifier The itemIdentifier to match.
-     * @return whether a special {@link org.chromium.ui.modelutil.MVCListAdapter.ListItem} with the
-     *     given {@code itemIdentifier} for its {@link PropertyModel} exists in the current {@link
-     *     TabListModel}.
+     * @return whether a special {@link ListItem} with the given {@code itemIdentifier} for its
+     *     {@link PropertyModel} exists in the current {@link TabListModel}.
      */
     boolean specialItemExistsInModel(@MessageType int itemIdentifier) {
         if (itemIdentifier == MessageType.ALL) {
@@ -3407,11 +3125,11 @@ public class TabListMediator implements TabListNotificationHandler {
         Drawable originalForeground = recyclerView.getForeground();
 
         // Prepare the tabs that will be hidden by the animation.
-        TreeMap<Integer, List<Integer>> bottomValuesToTabIndexes = new TreeMap<>();
-        getOrderOfTabsForQuickDeleteAnimation(recyclerView, tabs, bottomValuesToTabIndexes);
+        TreeMap<Integer, List<PropertyModel>> bottomValuesToPropertyModels = new TreeMap<>();
+        getOrderOfTabsForQuickDeleteAnimation(recyclerView, tabs, bottomValuesToPropertyModels);
 
-        setQuickDeleteAnimationStatusForTabIndexes(
-                CollectionUtil.flatten(bottomValuesToTabIndexes.values()),
+        setQuickDeleteAnimationStatusForPropertyModels(
+                CollectionUtil.flatten(bottomValuesToPropertyModels.values()),
                 QuickDeleteAnimationStatus.TAB_PREPARE);
 
         // Create the gradient drawable and prepare the animator.
@@ -3426,15 +3144,15 @@ public class TabListMediator implements TabListNotificationHandler {
 
         wipeAnimation.addUpdateListener(
                 valueAnimator -> {
-                    if (bottomValuesToTabIndexes.isEmpty()) return;
+                    if (bottomValuesToPropertyModels.isEmpty()) return;
 
                     float value = (float) valueAnimator.getAnimatedValue();
-                    int bottomVal = bottomValuesToTabIndexes.lastKey();
+                    int bottomVal = bottomValuesToPropertyModels.lastKey();
                     if (bottomVal >= Math.round(value) + intersectionHeight) {
-                        setQuickDeleteAnimationStatusForTabIndexes(
-                                assumeNonNull(bottomValuesToTabIndexes.get(bottomVal)),
+                        setQuickDeleteAnimationStatusForPropertyModels(
+                                assumeNonNull(bottomValuesToPropertyModels.get(bottomVal)),
                                 QuickDeleteAnimationStatus.TAB_HIDE);
-                        bottomValuesToTabIndexes.remove(bottomVal);
+                        bottomValuesToPropertyModels.remove(bottomVal);
                     }
                 });
 
@@ -3456,7 +3174,7 @@ public class TabListMediator implements TabListNotificationHandler {
     @Override
     public void updateTabStripNotificationBubble(
             Set<Integer> tabIdsToBeUpdated, boolean hasUpdate) {
-        assert mMode == TabListMode.STRIP;
+        assert mMode == TabListMode.BOTTOM_STRIP;
 
         Callback<PropertyModel> updateTabStripItemCallback =
                 (model) -> {
@@ -3472,7 +3190,7 @@ public class TabListMediator implements TabListNotificationHandler {
 
         Callback<PropertyModel> updateTabCardLabel =
                 (model) -> {
-                    int tabId = model.get(TabProperties.TAB_ID);
+                    int tabId = TabProperties.getTabId(model);
                     model.set(TabProperties.TAB_CARD_LABEL_DATA, labelData.get(tabId));
                 };
         forAllTabListItems(labelData.keySet(), updateTabCardLabel);
@@ -3482,9 +3200,9 @@ public class TabListMediator implements TabListNotificationHandler {
             Set<Integer> tabIdsToBeUpdated, Callback<PropertyModel> updateCallback) {
         for (int i = 0; i < mModelList.size(); i++) {
             PropertyModel model = mModelList.get(i).model;
-            if (model.get(CARD_TYPE) != TAB) continue;
+            if (!TabProperties.isTabOrTabGroup(model)) continue;
 
-            int tabId = model.get(TabProperties.TAB_ID);
+            int tabId = TabProperties.getTabId(model);
             if (tabIdsToBeUpdated.contains(tabId)) {
                 updateCallback.onResult(model);
                 Tab tab = getCurrentTabModelChecked().getTabById(tabId);
@@ -3506,23 +3224,27 @@ public class TabListMediator implements TabListNotificationHandler {
     void getOrderOfTabsForQuickDeleteAnimation(
             TabListRecyclerView recyclerView,
             List<Tab> tabs,
-            TreeMap<Integer, List<Integer>> bottomValuesToTabIndexes) {
+            TreeMap<Integer, List<PropertyModel>> bottomValuesToPropertyModels) {
         Set<Tab> filteredTabs = filterQuickDeleteTabsForAnimation(tabs);
 
         for (Tab tab : filteredTabs) {
             int id = tab.getId();
             int index = mModelList.indexFromTabId(id);
+            if (index == TabModel.INVALID_TAB_INDEX) {
+                continue;
+            }
             Rect tabRect = recyclerView.getRectOfCurrentThumbnail(index, id);
 
             // Ignore tabs that are outside the screen view.
             if (tabRect == null) continue;
 
             int bottom = tabRect.bottom;
+            PropertyModel model = mModelList.get(index).model;
 
-            if (bottomValuesToTabIndexes.containsKey(bottom)) {
-                bottomValuesToTabIndexes.get(bottom).add(index);
+            if (bottomValuesToPropertyModels.containsKey(bottom)) {
+                bottomValuesToPropertyModels.get(bottom).add(model);
             } else {
-                bottomValuesToTabIndexes.put(bottom, new ArrayList<>(List.of(index)));
+                bottomValuesToPropertyModels.put(bottom, new ArrayList<>(List.of(model)));
             }
         }
     }
@@ -3564,13 +3286,10 @@ public class TabListMediator implements TabListNotificationHandler {
         return filteredTabs;
     }
 
-    private void setQuickDeleteAnimationStatusForTabIndexes(
-            List<Integer> indexes, @QuickDeleteAnimationStatus int animationStatus) {
-        for (int index : indexes) {
-            mModelList
-                    .get(index)
-                    .model
-                    .set(TabProperties.QUICK_DELETE_ANIMATION_STATUS, animationStatus);
+    private void setQuickDeleteAnimationStatusForPropertyModels(
+            List<PropertyModel> models, @QuickDeleteAnimationStatus int animationStatus) {
+        for (PropertyModel model : models) {
+            model.set(TabProperties.QUICK_DELETE_ANIMATION_STATUS, animationStatus);
         }
     }
 
@@ -3595,12 +3314,18 @@ public class TabListMediator implements TabListNotificationHandler {
 
             boolean allowUndo = TabClosureParamsUtils.shouldAllowUndo(listViewTouchTracker);
 
+            @TabClosingSource
+            int tabClosingSource =
+                    mComponentId == TabComponentId.VERTICAL_TABS
+                            ? TabClosingSource.VERTICAL_TAB_STRIP
+                            : TabClosingSource.UNKNOWN;
+
             setUseShrinkCloseAnimation(tabId, /* useShrinkCloseAnimation= */ true);
             onGroupClosedFrom(tabId);
             TabUiUtils.closeTabGroup(
                     tabModel,
                     tabId,
-                    TabClosingSource.UNKNOWN,
+                    tabClosingSource,
                     allowUndo,
                     hideTabGroups,
                     getOnMaybeTabClosedCallback(tabId));
@@ -3821,7 +3546,7 @@ public class TabListMediator implements TabListNotificationHandler {
         }
     }
 
-    private void updateThumbnailFetcher(PropertyModel model, int tabId) {
+    void updateThumbnailFetcher(PropertyModel model, int tabId) {
         if (mThumbnailProvider == null) return;
 
         @Nullable ThumbnailFetcher oldFetcher = model.get(THUMBNAIL_FETCHER);
@@ -3841,7 +3566,7 @@ public class TabListMediator implements TabListNotificationHandler {
                             : null;
 
             List<Integer> actingTabIds = Collections.emptyList();
-            if (isTabGroupHeader(model) && isInTabGroup) {
+            if (TabProperties.isTabGroupHeader(model) && isInTabGroup) {
                 actingTabIds = new ArrayList<>();
                 for (Tab groupTab : tabModel.getRelatedTabList(tabId)) {
                     ActorUiTabController controller = ActorUiTabController.from(groupTab);
@@ -3891,19 +3616,19 @@ public class TabListMediator implements TabListNotificationHandler {
         model.set(THUMBNAIL_FETCHER, newFetcher);
     }
 
-    private void updateTabGroupTitle(Token tabGroupId) {
+    void updateTabGroupTitle(Token tabGroupId) {
         @Nullable Pair<Integer, Tab> headerIndexAndTab = getIndexAndTabForTabGroupId(tabGroupId);
         if (headerIndexAndTab == null) return;
         PropertyModel headerModel = mModelList.get(headerIndexAndTab.first).model;
         Tab tab = headerIndexAndTab.second;
         // Do not trust the `newTitle`, it may be necessary to apply a default/fallback.
-        String title = getLatestTitleForTab(tab, headerModel, /* useDefault= */ true);
+        String title = getLatestTitleForTabOrGroup(tab, headerModel, /* useDefault= */ true);
         headerModel.set(TabProperties.TITLE, title);
         updateDescriptionString(tab, headerModel);
         updateActionButtonDescriptionString(tab, headerModel);
     }
 
-    private void clearTabGroupProperties(PropertyModel model) {
+    void clearTabGroupProperties(PropertyModel model) {
         @Nullable TabGroupColorViewProvider provider = model.get(TAB_GROUP_COLOR_VIEW_PROVIDER);
         model.set(TabProperties.TAB_GROUP_ID, null);
         model.set(TabProperties.TAB_GROUP_CARD_COLOR, null);
@@ -3912,16 +3637,13 @@ public class TabListMediator implements TabListNotificationHandler {
         if (provider != null) provider.destroy();
     }
 
-    private void updateTabGroupProperties(
-            Tab tab, PropertyModel model, @TabGroupColorId int colorId) {
+    void updateTabGroupProperties(Tab tab, PropertyModel model, @TabGroupColorId int colorId) {
         @Nullable Token tabGroupId = tab.getTabGroupId();
         if (mLayoutType == TabListLayoutType.FLAT || tabGroupId == null || !isTabInTabGroup(tab)) {
             clearTabGroupProperties(model);
             return;
         }
 
-        // TODO(crbug.com/509226293): Evolve standard GTS to also use TAB_GROUP_HEADER_ID
-        // to find and remove/update group cards instead of relying on index translations.
         if (model.get(TabProperties.TAB_GROUP_ID) == null) {
             model.set(TabProperties.TAB_GROUP_HEADER_ID, tabGroupId);
         } else {
@@ -3932,7 +3654,7 @@ public class TabListMediator implements TabListNotificationHandler {
                 EitherGroupId.createLocalId(new LocalTabGroupId(tabGroupId)), model, colorId);
     }
 
-    private void updateTabGroupColorViewProvider(
+    void updateTabGroupColorViewProvider(
             EitherGroupId groupId, PropertyModel model, @TabGroupColorId int colorId) {
         // Dynamically created tab groups default to a collapsed state. Only initialize
         // this property if the card was not already representing a tab group.
@@ -3944,7 +3666,8 @@ public class TabListMediator implements TabListNotificationHandler {
         model.set(TabProperties.TAB_GROUP_CARD_COLOR, colorId);
         assert colorId != TabGroupColorUtils.INVALID_COLOR_ID
                 : "Tab in tab group should always have valid colors.";
-        assert mMode != TabListMode.STRIP : "Tab group colors are not applicable to strip mode.";
+        assert mMode != TabListMode.BOTTOM_STRIP
+                : "Tab group colors are not applicable to strip mode.";
 
         @Nullable TabGroupColorViewProvider provider = model.get(TAB_GROUP_COLOR_VIEW_PROVIDER);
         if (provider == null) {
@@ -3999,8 +3722,8 @@ public class TabListMediator implements TabListNotificationHandler {
         mSnackbarManager.dismissAllSnackbars();
     }
 
-    private String getMediaStateAccessibilityString(Tab tab, Resources res) {
-        @MediaState int mediaState = getTabGridMediaIndicator(tab);
+    private String getMediaStateAccessibilityString(Tab tab, PropertyModel model, Resources res) {
+        @MediaState int mediaState = getTabGridMediaIndicator(tab, model);
         switch (mediaState) {
             case MediaState.AUDIBLE:
                 return res.getString(R.string.accessibility_tab_group_audible);

@@ -22,6 +22,7 @@
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_constants.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_mode_holder.h"
+#import "ios/chrome/browser/composebox/menu/coordinator/composebox_menu_shared_tab.h"
 #import "ios/chrome/browser/composebox/public/features.h"
 #import "ios/chrome/browser/composebox/shared/metrics/composebox_metrics_recorder.h"
 #import "ios/chrome/browser/composebox/ui/composebox_input_item.h"
@@ -514,6 +515,22 @@ ComposeboxStrings* ServerStringsFromInputState(
 
   state.strings = _cachedStrings;
 
+  NSMutableArray<ComposeboxMenuSharedTab*>* sharedTabs =
+      [[NSMutableArray alloc] init];
+  if (_entrypoint == ComposeboxEntrypoint::kCobrowse) {
+    for (ComposeboxInputItem* item in self.items.containedItems) {
+      if (item.type == ComposeboxInputItemType::kComposeboxInputItemTypeTab) {
+        ComposeboxMenuSharedTab* tab =
+            [[ComposeboxMenuSharedTab alloc] initWithURL:item.tabURL
+                                                   title:item.title
+                                             serverToken:item.serverToken
+                                                 favicon:item.leadingIconImage];
+        [sharedTabs addObject:tab];
+      }
+    }
+  }
+  state.sharedTabs = sharedTabs;
+
   // Populate allowed/disabled attachments
   std::unordered_set<ComposeboxAttachmentOption> allowedAttachments;
   std::unordered_set<ComposeboxAttachmentOption> disabledAttachments;
@@ -816,6 +833,17 @@ ComposeboxStrings* ServerStringsFromInputState(
 - (BOOL)isAttachmentAllowed:(ComposeboxAttachmentOption)attachmentOption {
   if (![self attachmentsAvailable]) {
     return NO;
+  }
+
+  // Enforce signed-in status check for the Drive option before evaluating
+  // server-side or local rules.
+  if (attachmentOption == ComposeboxAttachmentOption::kDrive) {
+    BOOL hasPrimaryAccount =
+        _identityManager &&
+        _identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin);
+    if (!hasPrimaryAccount) {
+      return NO;
+    }
   }
 
   if (EnableComposeboxServerSideState()) {

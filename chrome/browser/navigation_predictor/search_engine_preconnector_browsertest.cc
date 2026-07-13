@@ -110,8 +110,13 @@ class SearchEnginePreconnectorBrowserTest
       return;
     }
 
-    // Only the test URL should successfully preconnect.
-    EXPECT_EQ(origin == GetTestURL("/").DeprecatedGetOriginAsURL(), success);
+    // Only assert the positive case: the test URL must preconnect. Don't
+    // assert the search host fails to resolve, because a leaked
+    // "*"->127.0.0.1 rule in the shared network service can't be cleared
+    // from the test, so the search host may resolve to 127.0.0.1 here too.
+    if (origin == GetTestURL("/").DeprecatedGetOriginAsURL()) {
+      EXPECT_TRUE(success);
+    }
 
     ++preresolve_counts_[origin];
     if (run_loops_[origin])
@@ -460,11 +465,11 @@ class SearchEnginePreconnectorKeepSocketBrowserTest
 };
 
 // TODO(https://crbug.com/507121988): Re-enable once the test is fixed.
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #define MAYBE_SocketWarmForSearch DISABLED_SocketWarmForSearch
 #else
 #define MAYBE_SocketWarmForSearch SocketWarmForSearch
-#endif  // BUILDFLAG(IS_LINUX)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(SearchEnginePreconnectorKeepSocketBrowserTest,
                        MAYBE_SocketWarmForSearch) {
   // Verifies that a navigation to search will use a warm socket.
@@ -1300,7 +1305,9 @@ class SearchEnginePreconnectorWithBindReceiversEverytimeFeatureBrowserTest
       return;
     }
 
-    EXPECT_EQ(origin == GetTestURL("/").DeprecatedGetOriginAsURL(), success);
+    if (origin == GetTestURL("/").DeprecatedGetOriginAsURL()) {
+      EXPECT_TRUE(success);
+    }
 
     ++preresolve_counts_[origin];
     if (run_loops_[origin]) {
@@ -1314,9 +1321,16 @@ INSTANTIATE_TEST_SUITE_P(
     SearchEnginePreconnectorWithBindReceiversEverytimeFeatureBrowserTest,
     ::testing::Bool());
 
+// TODO(crbug.com/506949513): Flaky on Linux.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_BindNewRemoteOnEachPreconnect \
+  DISABLED_BindNewRemoteOnEachPreconnect
+#else
+#define MAYBE_BindNewRemoteOnEachPreconnect BindNewRemoteOnEachPreconnect
+#endif
 IN_PROC_BROWSER_TEST_P(
     SearchEnginePreconnectorWithBindReceiversEverytimeFeatureBrowserTest,
-    BindNewRemoteOnEachPreconnect) {
+    MAYBE_BindNewRemoteOnEachPreconnect) {
   constexpr char16_t kShortName[] = u"test";
   TemplateURLService* model =
       TemplateURLServiceFactory::GetForProfile(browser()->profile());

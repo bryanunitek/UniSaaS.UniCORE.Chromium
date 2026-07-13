@@ -73,7 +73,7 @@ source_set("internal") {
       "//chrome/browser/prefs",
       "//chrome/browser/skills:public",
       "//chrome/browser/tab_group_sync:factories",
-      "//chrome/browser/ui:tab_search_feature",
+      "//chrome/browser/ui:browser_actions",
       "//chrome/browser/ui:ui_features",
       "//chrome/browser/ui/animation",
       "//chrome/browser/ui/bookmarks",
@@ -100,6 +100,7 @@ source_set("internal") {
       "//chrome/browser/ui/tabs/saved_tab_groups",
       "//chrome/browser/ui/tabs/tab_drag_api",
       "//chrome/browser/ui/tabs/tab_drag_api:impl",
+      "//chrome/browser/ui/tabs/tab_drag_api/desktop_tab_drag_impl",
       "//chrome/browser/ui/tabs/tab_strip_api",
       "//chrome/browser/ui/tabs/tab_strip_api:impl",
       "//chrome/browser/ui/tabs/tab_strip_api/controllers",
@@ -108,15 +109,18 @@ source_set("internal") {
       "//chrome/browser/ui/toolbar/chrome_labs",
       "//chrome/browser/ui/views/animations",
       "//chrome/browser/ui/views/contextual_tasks",
+      "//chrome/browser/ui/views/data_sharing",
       "//chrome/browser/ui/views/download",
       "//chrome/browser/ui/views/interaction:impl",
       "//chrome/browser/ui/views/location_bar:impl",
       "//chrome/browser/ui/views/location_bar/cookie_controls",
       "//chrome/browser/ui/views/new_tab_footer",
+      "//chrome/browser/ui/views/qrcode_generator",
       "//chrome/browser/ui/views/send_tab_to_self",
       "//chrome/browser/ui/views/side_panel",
       "//chrome/browser/ui/views/tabs/projects",
       "//chrome/browser/ui/views/toolbar",
+      "//chrome/browser/ui/views/translate",
       "//chrome/browser/ui/waap:manager",
       "//chrome/browser/ui/waap:window_metrics_manager",
       "//chrome/browser/ui/web_applications",
@@ -175,6 +179,15 @@ source_set("internal") {
 
   if (enable_extensions_core) {
     deps += [ "//chrome/browser/extensions" ]
+  }
+
+  if (!is_android) {
+    deps += [
+      "//chrome/browser/ui:breadcrumb_manager_browser_agent",
+      "//chrome/browser/ui:browser_instant_controller",
+      "//chrome/browser/ui:browser_location_bar_model_delegate",
+      "//chrome/browser/ui:browser_select_file_dialog_controller",
+    ]
   }
 }
 

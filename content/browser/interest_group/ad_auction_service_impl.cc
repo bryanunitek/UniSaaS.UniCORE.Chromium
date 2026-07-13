@@ -44,7 +44,6 @@
 #include "content/browser/interest_group/protected_audience_network_util.h"
 #include "content/browser/loader/reconnectable_url_loader_factory.h"
 #include "content/browser/loader/url_loader_factory_utils.h"
-#include "content/browser/private_aggregation/private_aggregation_manager.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/page_impl.h"
 #include "content/browser/renderer_host/policy_container_host.h"
@@ -54,7 +53,6 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_client.h"
-#include "content/services/auction_worklet/public/mojom/private_aggregation_request.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/network_anonymization_key.h"
@@ -62,6 +60,7 @@
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
 #include "services/network/public/mojom/connection_change_observer_client.mojom.h"
@@ -76,7 +75,6 @@
 #include "third_party/blink/public/common/permissions_policy/policy_helper_public.h"
 #include "third_party/blink/public/mojom/aggregation_service/aggregatable_report.mojom.h"
 #include "third_party/blink/public/mojom/interest_group/interest_group_types.mojom.h"
-#include "third_party/blink/public/mojom/private_aggregation/private_aggregation_host.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/scheme_host_port.h"
@@ -481,14 +479,9 @@ void AdAuctionServiceImpl::RunAdAuction(
       auction_metrics_recorder_manager_.CreateAuctionMetricsRecorder(),
       &dwa_auction_metrics_manager_, &auction_worklet_manager_,
       &auction_nonce_manager_, &GetInterestGroupManager(),
-      render_frame_host().GetBrowserContext(), private_aggregation_manager_,
-      std::move(ad_auction_page_data_callback),
-      // Unlike other callbacks, this needs to be safe to call after destruction
-      // of the AdAuctionServiceImpl, so that the reporter can outlive it.
-      base::BindRepeating(
-          &AdAuctionServiceImpl::MaybeLogPrivateAggregationFeatures,
-          weak_ptr_factory_.GetWeakPtr()),
-      config, main_frame_origin_, origin(),
+      render_frame_host().GetBrowserContext(),
+      std::move(ad_auction_page_data_callback), config, main_frame_origin_,
+      origin(),
       GetUserAgentOverrideForProtectedAudience(GetFrame()->frame_tree_node()),
       GetClientSecurityState(), GetRefCountedTrustedURLLoaderFactory(),
       base::BindRepeating(&AdAuctionServiceImpl::IsInterestGroupAPIAllowed,
@@ -721,14 +714,15 @@ void AdAuctionServiceImpl::PreconnectSocket(
     const GURL& url,
     const net::NetworkAnonymizationKey& network_anonymization_key) {
   // TODO(crbug.com/447954811): pass the `network_restrictions_id` from the
-  // caller.
+  // caller. Since Protected Audience API is deprecated, it's ok for this to be
+  // TODO until the code is removed.
   render_frame_host()
       .GetStoragePartition()
       ->GetNetworkContext()
       ->PreconnectSockets(
           /*num_streams=*/1, url, network::mojom::CredentialsMode::kOmit,
           network_anonymization_key,
-          /*network_restrictions_id=*/std::nullopt,
+          /*network_restrictions_id=*/network::GetTODONetworkRestrictionsId(),
           net::MutableNetworkTrafficAnnotationTag(),
           /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 }
@@ -792,9 +786,7 @@ AdAuctionServiceImpl::AdAuctionServiceImpl(
           GetTopWindowOrigin(),
           origin(),
           this),
-      auction_nonce_manager_(GetFrame()),
-      private_aggregation_manager_(PrivateAggregationManager::GetManager(
-          *render_frame_host.GetBrowserContext())) {
+      auction_nonce_manager_(GetFrame()) {
   // Construct `ref_counted_trusted_url_loader_factory_` here because
   // `weak_ptr_factory_` is not yet initialized during the member initializer
   // list above.
@@ -1059,85 +1051,6 @@ void AdAuctionServiceImpl::OnReporterComplete(
   }
 
   reporters_.erase(reporter_it);
-}
-
-void AdAuctionServiceImpl::MaybeLogPrivateAggregationFeatures(
-    const std::vector<auction_worklet::mojom::PrivateAggregationRequestPtr>&
-        private_aggregation_requests) {
-  // TODO(crbug.com/40236382): Improve coverage of these use counters, i.e.
-  // for API usage that does not result in a successful request.
-  if (private_aggregation_requests.empty()) {
-    return;
-  }
-
-  if (!has_logged_private_aggregation_filtering_id_web_feature_ &&
-      std::ranges::any_of(
-          private_aggregation_requests, [](const auto& request) {
-            auction_worklet::mojom::AggregatableReportContributionPtr&
-                contribution = request->contribution;
-            if (contribution->is_histogram_contribution()) {
-              return contribution->get_histogram_contribution()
-                  ->filtering_id.has_value();
-            }
-            CHECK(contribution->is_for_event_contribution());
-            return contribution->get_for_event_contribution()
-                ->filtering_id.has_value();
-          })) {
-    has_logged_private_aggregation_filtering_id_web_feature_ = true;
-    GetContentClient()->browser()->LogWebFeatureForCurrentPage(
-        &render_frame_host(),
-        blink::mojom::WebFeature::kPrivateAggregationApiFilteringIds);
-  }
-
-  if (!has_logged_private_aggregation_error_reporting_web_feature_ &&
-      std::ranges::any_of(
-          private_aggregation_requests, [](const auto& request) {
-            auction_worklet::mojom::AggregatableReportContributionPtr&
-                contribution = request->contribution;
-            if (contribution->is_histogram_contribution()) {
-              return false;
-            }
-            CHECK(contribution->is_for_event_contribution());
-            return contribution->get_for_event_contribution()
-                ->event_type->is_reserved_error();
-          })) {
-    has_logged_private_aggregation_error_reporting_web_feature_ = true;
-    GetContentClient()->browser()->LogWebFeatureForCurrentPage(
-        &render_frame_host(),
-        blink::mojom::WebFeature::kPrivateAggregationApiErrorReporting);
-  }
-
-  if (!has_logged_private_aggregation_enable_debug_mode_web_feature_ &&
-      std::ranges::any_of(private_aggregation_requests,
-                          [](const auto& request) {
-                            return request->debug_mode_details->is_enabled;
-                          })) {
-    has_logged_private_aggregation_enable_debug_mode_web_feature_ = true;
-    GetContentClient()->browser()->LogWebFeatureForCurrentPage(
-        &render_frame_host(),
-        blink::mojom::WebFeature::kPrivateAggregationApiEnableDebugMode);
-  }
-
-  if (!has_logged_extended_private_aggregation_web_feature_ &&
-      std::ranges::any_of(
-          private_aggregation_requests, [](const auto& request) {
-            return request->contribution->is_for_event_contribution();
-          })) {
-    has_logged_extended_private_aggregation_web_feature_ = true;
-    GetContentClient()->browser()->LogWebFeatureForCurrentPage(
-        &render_frame_host(),
-        blink::mojom::WebFeature::kPrivateAggregationApiFledgeExtensions);
-  }
-
-  if (!has_logged_private_aggregation_web_features_) {
-    has_logged_private_aggregation_web_features_ = true;
-    GetContentClient()->browser()->LogWebFeatureForCurrentPage(
-        &render_frame_host(),
-        blink::mojom::WebFeature::kPrivateAggregationApiAll);
-    GetContentClient()->browser()->LogWebFeatureForCurrentPage(
-        &render_frame_host(),
-        blink::mojom::WebFeature::kPrivateAggregationApiFledge);
-  }
 }
 
 void AdAuctionServiceImpl::AddEmptyGetInterestGroupAdAuctionDataRequest(

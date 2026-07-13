@@ -88,6 +88,10 @@ class ContextualTasksComposeboxHandler
   // provided by the ContextualTasksUI via the `take_input_model_callback_`.
   void InitializeInputStateModel() override;
 
+  // Overridden to return the eligibility value frozen at WebUI initialization
+  // to avoid mid-session layout shifts or jarring capability transitions.
+  bool IsContextualSearchTabSharingEligible() const override;
+
   void SetAimThreadRestoredTabs(
       std::vector<searchbox::mojom::TabInfoPtr> tabs) override;
 
@@ -135,9 +139,10 @@ class ContextualTasksComposeboxHandler
   void OnTabProcessedForQueryContextualization(
       contextual_tasks::QueryContextualizer::TabId id);
 
-  OmniboxController* GetOmniboxControllerForTesting() const {
-    return omnibox_controller();
+  AutocompleteController* GetAutocompleteControllerForTesting() const {
+    return autocomplete_controller();
   }
+  OmniboxClient* GetOmniboxClientForTesting() const { return client(); }
   // ui::SelectFileDialog::Listener:
   void FileSelected(const ui::SelectedFileInfo& file, int index) override;
   void MultiFilesSelected(
@@ -179,6 +184,10 @@ class ContextualTasksComposeboxHandler
       std::optional<base::Uuid> original_task_id,
       std::optional<base::UnguessableToken> overlay_token,
       bool is_voice_search);
+
+  // Called when side panel navigation is complete to trigger Lens overlay if
+  // it was configured to auto-trigger on navigation.
+  void MaybeTriggerLens();
 
 #if !BUILDFLAG(IS_ANDROID)
   void OnVisualSelectionAdded(

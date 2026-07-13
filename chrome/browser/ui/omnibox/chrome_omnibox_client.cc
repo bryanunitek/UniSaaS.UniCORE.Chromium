@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
@@ -51,6 +52,7 @@
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
 #include "chrome/browser/preloading/search_preload/search_preload_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search_engines/ai_mode_button_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ssl/typed_navigation_upgrade_throttle.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
@@ -90,6 +92,7 @@
 #include "components/omnibox/browser/zero_suggest_provider.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/page_load_metrics/browser/navigation_handle_user_data.h"
 #include "components/profile_metrics/browser_profile_type.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/search_engines/template_url_service.h"
@@ -109,6 +112,7 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/constants.h"
 #include "skia/ext/image_operations.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
@@ -310,6 +314,10 @@ ChromeOmniboxClient::GetAutocompleteControllerEmitter() {
 
 TemplateURLService* ChromeOmniboxClient::GetTemplateURLService() {
   return TemplateURLServiceFactory::GetForProfile(profile_);
+}
+
+AiModeButtonService* ChromeOmniboxClient::GetAiModeButtonService() {
+  return AiModeButtonServiceFactory::GetForProfile(profile_);
 }
 
 const AutocompleteSchemeClassifier& ChromeOmniboxClient::GetSchemeClassifier()
@@ -717,7 +725,8 @@ gfx::Image ChromeOmniboxClient::GetFaviconForDefaultSearchProvider(
   }
 
   return favicon_cache_.GetFaviconForIconUrl(default_provider->favicon_url(),
-                                             std::move(on_favicon_fetched));
+                                             std::move(on_favicon_fetched),
+                                             /*notify_on_empty=*/false);
 }
 
 gfx::Image ChromeOmniboxClient::GetFaviconForKeywordSearchProvider(
@@ -728,7 +737,16 @@ gfx::Image ChromeOmniboxClient::GetFaviconForKeywordSearchProvider(
   }
 
   return favicon_cache_.GetFaviconForIconUrl(template_url->favicon_url(),
-                                             std::move(on_favicon_fetched));
+                                             std::move(on_favicon_fetched),
+                                             /*notify_on_empty=*/false);
+}
+
+gfx::Image ChromeOmniboxClient::GetFaviconForIconUrl(
+    const GURL& icon_url,
+    FaviconFetchedCallback on_favicon_fetched,
+    bool notify_on_empty) {
+  return favicon_cache_.GetFaviconForIconUrl(
+      icon_url, std::move(on_favicon_fetched), notify_on_empty);
 }
 
 void ChromeOmniboxClient::OnTextChanged(const AutocompleteMatch& current_match,
@@ -883,6 +901,17 @@ void ChromeOmniboxClient::OnAutocompleteAccept(
 
   if (browser_) {
     auto navigation = chrome::OpenCurrentURL(browser_);
+    if (navigation) {
+      if (ui::PageTransitionCoreTypeIs(transition, ui::PAGE_TRANSITION_TYPED)) {
+        page_load_metrics::NavigationHandleUserData::
+            AttachOmniboxDirectUrlInputNavigationHandleUserData(*navigation);
+      } else if (ui::PageTransitionCoreTypeIs(transition,
+                                              ui::PAGE_TRANSITION_GENERATED)) {
+        page_load_metrics::NavigationHandleUserData::
+            AttachOmniboxDefaultSearchEngineNavigationHandleUserData(
+                *navigation);
+      }
+    }
     ChromeOmniboxNavigationObserver::Create(navigation.get(), profile_, text,
                                             match, alternative_nav_match);
     search_engines::MaybeShowSearchEngineResetNotification(browser_,
@@ -982,12 +1011,14 @@ ChromeOmniboxClient::GetLensOverlaySuggestInputs() const {
 
 void ChromeOmniboxClient::MaybePrewarmForDefaultSearchEngine(
     PrewarmTrigger trigger) {
+  CHECK(base::FeatureList::IsEnabled(features::kPrewarm));
   switch (trigger) {
     case PrewarmTrigger::kZeroSuggest:
-      CHECK(features::kPrewarmZeroSuggestTrigger.Get());
+      CHECK(base::FeatureList::IsEnabled(features::kPrewarmZeroSuggestTrigger));
       break;
     case PrewarmTrigger::kUserInteraction:
-      CHECK(features::kPrewarmUserInteractionTrigger.Get());
+      CHECK(
+          !base::FeatureList::IsEnabled(features::kPrewarmZeroSuggestTrigger));
       if (!location_bar_->GetWebContents()) {
         // There seems to be a subtle timing where the active tab does not have
         // a valid WebContents instance on an user interaction trigger.
@@ -1032,7 +1063,8 @@ void ChromeOmniboxClient::DoPreconnect(const AutocompleteMatch& match) {
         predictors::AutocompleteActionPredictor::IsPreconnectable(match);
     loading_predictor->PrepareForPageLoad(
         /*initiator_origin=*/std::nullopt, match.destination_url,
-        predictors::HintOrigin::OMNIBOX, is_preconnectable);
+        predictors::HintOrigin::OMNIBOX,
+        network::GetNoOpNetworkRestrictionsId(), is_preconnectable);
     base::UmaHistogramExactLinear(
         base::StrCat(
             {"Omnibox.LoadingPredictor.MatchType.",

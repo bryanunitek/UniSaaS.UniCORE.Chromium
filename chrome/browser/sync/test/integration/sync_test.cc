@@ -509,7 +509,7 @@ Browser* SyncTest::AddBrowser(int profile_index) {
   // Show the browser window. Otherwise, the rendering pipeline might not
   // initialize or produce frames (e.g., on Wayland headless bots), which
   // can cause tests relying on hit test data or visual state to time out.
-  browser->window()->Show();
+  browser->GetWindow()->Show();
   return browser;
 }
 
@@ -689,7 +689,7 @@ void SyncTest::InitializeProfile(int index, Profile* profile) {
   // Show the browser window. Otherwise, the rendering pipeline might not
   // initialize or produce frames (e.g., on Wayland headless bots), which
   // can cause tests relying on hit test data or visual state to time out.
-  browser->window()->Show();
+  browser->GetWindow()->Show();
 #endif
 
   if (server_type_ == IN_PROCESS_FAKE_SERVER) {
@@ -1284,7 +1284,7 @@ std::string SetupSyncModeAsString(SyncTest::SetupSyncMode sync_test_mode) {
 // enabled by default, e.g. HISTORY requires a dedicated opt-in via
 // SyncUserSettings::SetSelectedTypes().
 syncer::DataTypeSet AllowedTypesInStandaloneTransportMode() {
-  static_assert(63 == syncer::GetNumDataTypes(),
+  static_assert(64 == syncer::GetNumDataTypes(),
                 "Add new types below if they can run in transport mode");
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1338,6 +1338,10 @@ syncer::DataTypeSet AllowedTypesInStandaloneTransportMode() {
   if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     allowed_types.Put(syncer::AUTOFILL_WALLET_METADATA);
     allowed_types.Put(syncer::AUTOFILL_WALLET_OFFER);
+    if (base::FeatureList::IsEnabled(
+            syncer::kSyncEncryptedTabContextContainer)) {
+      allowed_types.Put(syncer::ENCRYPTED_TAB_CONTEXT_CONTAINER);
+    }
     allowed_types.Put(syncer::HISTORY);
     allowed_types.Put(syncer::HISTORY_DELETE_DIRECTIVES);
     allowed_types.Put(syncer::SAVED_TAB_GROUP);

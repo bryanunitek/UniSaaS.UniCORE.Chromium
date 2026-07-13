@@ -14,28 +14,27 @@
 #import "base/strings/stringprintf.h"
 #import "base/strings/utf_string_conversions.h"
 #import "base/time/time.h"
+#import "ios/chrome/browser/download/model/download_filename_util.h"
 #import "ios/chrome/browser/download/model/download_filter_util.h"
 #import "ios/web/public/download/download_task.h"
 #import "sql/error_delegate_util.h"
 #import "sql/meta_table.h"
 #import "sql/statement.h"
 #import "sql/transaction.h"
-#import "third_party/icu/source/common/unicode/normalizer2.h"
-#import "third_party/icu/source/common/unicode/uchar.h"
-#import "third_party/icu/source/common/unicode/unistr.h"
-#import "third_party/icu/source/common/unicode/utypes.h"
 
 namespace {
 
-// Database schema version.
+using ::download_model::NormalizeFileName;
+
+// Schema version.
 // v1: initial schema.
-// v2: add `idx_records_created_time` composite index, and
-//     `file_name_normalized` column (case-folded file_name) backfilled for
+// v2: add `idx_records_created_time` composite index and
+//     `file_name_normalized` column (case-folded `file_name`) backfilled for
 //     existing rows, to support keyset pagination + case-insensitive
 //     substring search.
 const int kCurrentVersionNumber = 2;
-// Lowest version that can still read v2 schema. v1 binaries cannot — the
-// insert/update statements assume the `file_name_normalized` column exists.
+// Lowest version that can still read v2. v1 binaries cannot — the
+// insert/update statements assume `file_name_normalized` exists.
 const int kCompatibleVersionNumber = 2;
 
 // Field name constants.
@@ -62,56 +61,6 @@ const char kFileNameNormalizedField[] = "file_name_normalized";
 
 const char kTableName[] = "download_records";
 const char kIndexName[] = "idx_records_created_time";
-
-// Page size for keyset pagination. Internal to the DB layer: callers paginate
-// by advancing the (created_time, download_id) cursor, not by choosing a size.
-// 50 balances index scan cost, peak memory, and per-frame UI rendering.
-constexpr int kPageSize = 50;
-
-// Returns the search-friendly normalized form of a UTF-8 file name. The
-// transform is a performance pre-filter only: a LIKE '%needle%' on the
-// normalized column returns a superset of what
-// base::i18n::FixedPatternStringSearchIgnoringCaseAndAccents would match,
-// and GetDownloadRecordsPage re-verifies each candidate with that ICU
-// search to guarantee semantic parity (no false negatives even if ICU
-// behavior shifts vs. this NFD+stripMn+FoldCase approximation).
-//   1. NFD-decompose so accented base letters split into (letter, combining
-//      mark) pairs.
-//   2. Drop characters in category Mn (Non-Spacing Mark), i.e. combining
-//      diacritics.
-//   3. FoldCase for locale-independent case-insensitive comparison.
-// Both the stored column and the user's query string are run through this
-// helper so they meet on the same normalized form.
-std::string NormalizeFileName(const std::string& file_name) {
-  if (file_name.empty()) {
-    return std::string();
-  }
-  icu::UnicodeString u16 = icu::UnicodeString::fromUTF8(file_name);
-  UErrorCode status = U_ZERO_ERROR;
-  const icu::Normalizer2* nfd = icu::Normalizer2::getNFDInstance(status);
-  if (U_SUCCESS(status) && nfd) {
-    icu::UnicodeString decomposed = nfd->normalize(u16, status);
-    if (U_SUCCESS(status)) {
-      u16 = decomposed;
-    }
-  }
-  // Strip Non-Spacing Marks (Mn) in place.
-  icu::UnicodeString stripped;
-  for (int32_t i = 0; i < u16.length();) {
-    UChar32 cp = u16.char32At(i);
-    int32_t cp_len = U16_LENGTH(cp);
-    if (u_charType(cp) != U_NON_SPACING_MARK) {
-      stripped.append(cp);
-    }
-    i += cp_len;
-  }
-  // Case-fold in place via ICU directly to avoid extra UTF-16/UTF-8 round-
-  // trips through base::i18n::FoldCase.
-  stripped.foldCase();
-  std::string utf8;
-  stripped.toUTF8String(utf8);
-  return utf8;
-}
 
 const std::string& CreateTableSql() {
   static const base::NoDestructor<std::string> sql(base::StringPrintf(
@@ -202,8 +151,8 @@ const std::string& CheckTableExistsSql() {
 }
 
 // Composite index supporting keyset pagination ordered by
-// (created_time DESC, download_id DESC). Both columns DESC ensures the
-// pagination ORDER BY can be satisfied without a separate sort step.
+// `(created_time DESC, download_id DESC)`. Both columns `DESC` lets the
+// pagination `ORDER BY` be satisfied without a separate sort.
 const std::string& CreateIndexSql() {
   static const base::NoDestructor<std::string> sql(base::StringPrintf(
       "CREATE INDEX IF NOT EXISTS %s ON %s (%s DESC, %s DESC)", kIndexName,
@@ -211,8 +160,8 @@ const std::string& CreateIndexSql() {
   return *sql;
 }
 
-// Returns the column list shared by row-returning SELECT statements. The
-// order matches CreateRecordFromStatement().
+// Column list shared by row-returning `SELECT` statements. Order matches
+// `CreateRecordFromStatement`.
 const std::string& SelectColumns() {
   static const base::NoDestructor<std::string> cols(base::StringPrintf(
       "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", kDownloadIdField,
@@ -225,8 +174,8 @@ const std::string& SelectColumns() {
   return *cols;
 }
 
-// Single SQL UPDATE that flips state from kNotStarted or kInProgress to
-// kFailed. Other states are untouched.
+// Single SQL `UPDATE` that flips state from `kNotStarted` or `kInProgress`
+// to `kFailed`. Other states are untouched.
 const std::string& MarkUnfinishedAsFailedSql() {
   static const base::NoDestructor<std::string> sql(
       base::StringPrintf("UPDATE %s SET %s=? WHERE %s IN (?, ?)", kTableName,
@@ -234,11 +183,10 @@ const std::string& MarkUnfinishedAsFailedSql() {
   return *sql;
 }
 
-// Returns a SQL predicate matching the given filter_type against the
-// `mime_type` column. Returns "1" for kAll or unset, so it composes cleanly
-// in a WHERE clause. The expressions mirror the categories defined in
-// download_filter_util.cc (PDF = application/pdf exact; Video/Audio/Image/
-// Document = prefix match; Other = none of the above).
+// SQL predicate matching `filter_type` against `mime_type`. Returns "1" for
+// `kAll`/unset so it composes cleanly inside a `WHERE` clause. Categories
+// mirror `download_filter_util.cc` (PDF = exact `application/pdf`;
+// Video/Audio/Image/Document = prefix match; Other = none of the above).
 std::string FilterClauseForType(
     const std::optional<DownloadFilterType>& filter_type) {
   if (!filter_type.has_value()) {
@@ -266,17 +214,17 @@ std::string FilterClauseForType(
                                 kMimeTypeField, kMimeTypeField, kMimeTypeField,
                                 kMimeTypeField, kMimeTypeField);
     case DownloadFilterType::kAll:
-      // Reached only when filter_type is explicitly kAll; the !has_value()
-      // path above handles the unset case. Kept here to satisfy the
-      // exhaustive switch requirement.
+      // Reached only when `filter_type` is explicitly `kAll`; the
+      // `!has_value()` path above handles the unset case. Kept here for
+      // the exhaustive switch.
       return "1";
   }
   NOTREACHED();
 }
 
-// Wraps `query` with leading/trailing '%' and escapes the LIKE wildcards
-// '%', '_' and '\' with a leading '\'. The corresponding SQL must use
-// `ESCAPE '\'`. `query` is expected to already be NormalizeFileName()-ed.
+// Wraps `query` with leading/trailing '%' and escapes `LIKE` wildcards
+// ('%', '_', '\\') with a leading '\\'. The corresponding SQL must use
+// `ESCAPE '\\'`. `query` must already be `NormalizeFileName`-ed.
 std::string BuildLikePattern(std::string_view query) {
   std::string escaped;
   escaped.reserve(query.size() + 2);
@@ -293,14 +241,6 @@ std::string BuildLikePattern(std::string_view query) {
 
 }  // namespace
 
-DownloadRecordDatabase::DownloadRecordQuery::DownloadRecordQuery() = default;
-DownloadRecordDatabase::DownloadRecordQuery::DownloadRecordQuery(
-    const DownloadRecordQuery& other) = default;
-DownloadRecordDatabase::DownloadRecordQuery&
-DownloadRecordDatabase::DownloadRecordQuery::operator=(
-    const DownloadRecordQuery& other) = default;
-DownloadRecordDatabase::DownloadRecordQuery::~DownloadRecordQuery() = default;
-
 DownloadRecordDatabase::DownloadRecordDatabase(const base::FilePath& db_path)
     : db_path_(db_path),
       db_(sql::Database::Tag("DownloadRecord")),
@@ -315,41 +255,34 @@ DownloadRecordDatabase::~DownloadRecordDatabase() {
 sql::InitStatus DownloadRecordDatabase::Init() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // If already open, nothing to do.
   if (db_.is_open()) {
-    return init_status_;  // Return the previous initialization status
+    return init_status_;
   }
 
-  // Set up error callback.
   db_.set_error_callback(base::BindRepeating(
       &DownloadRecordDatabase::DatabaseErrorCallback, base::Unretained(this)));
 
-  // Open the database.
   if (!db_.Open(db_path_)) {
     init_status_ = sql::INIT_FAILURE;
     return init_status_;
   }
 
-  // Initialize meta table.
   if (!meta_table_->Init(&db_, kCurrentVersionNumber,
                          kCompatibleVersionNumber)) {
     init_status_ = sql::INIT_FAILURE;
     return init_status_;
   }
 
-  // Check version compatibility.
   if (meta_table_->GetCompatibleVersionNumber() > kCurrentVersionNumber) {
     init_status_ = sql::INIT_TOO_NEW;
     return init_status_;
   }
 
-  // Upgrade database if necessary.
   if (!UpgradeDatabase()) {
     init_status_ = sql::INIT_FAILURE;
     return init_status_;
   }
 
-  // Create schema if needed.
   if (!CreateSchema()) {
     init_status_ = sql::INIT_FAILURE;
     return init_status_;
@@ -368,8 +301,8 @@ bool DownloadRecordDatabase::InsertDownloadRecord(
   }
 
   // Incognito records are in-memory only at the service layer and must never
-  // reach the DB layer. Defensive release-build guard against upstream bugs:
-  // a privacy leak is far worse than dropping a record.
+  // reach the DB. Release-build guard against upstream bugs: a privacy leak
+  // is worse than dropping a record.
   if (record.is_incognito) {
     return false;
   }
@@ -389,9 +322,7 @@ bool DownloadRecordDatabase::UpdateDownloadRecord(
     return false;
   }
 
-  // Incognito records are in-memory only at the service layer and must never
-  // reach the DB layer. Defensive release-build guard against upstream bugs:
-  // a privacy leak is far worse than dropping a record.
+  // See `InsertDownloadRecord` — incognito records must never reach the DB.
   if (record.is_incognito) {
     return false;
   }
@@ -499,21 +430,18 @@ std::vector<DownloadRecord> DownloadRecordDatabase::GetDownloadRecordsPage(
   const bool has_name_query =
       query.name_query.has_value() && !query.name_query.value().empty();
 
-  // When a name filter is active we use a two-phase strategy:
-  //  Phase 1 (this method, SQL): LIKE on the normalized column to cheaply
-  //          prune the candidate set using the composite index.
-  //  Phase 2 (this method, in C++): re-check every candidate with
-  //          base::i18n::FixedPatternStringSearchIgnoringCaseAndAccents on
-  //          the raw `file_name`. Whatever the canonical ICU search returns
-  //          is the source of truth, so the result set is always
-  //          semantically aligned with the in-memory search API even if the
-  //          NFD+stripMn+FoldCase approximation drifts in edge cases.
-  //  To make sure we still produce up to `query.limit` rows after the
-  //  re-check, we batch-read until either we've collected `limit` matches
-  //  or the underlying SQL stream is exhausted. The cursor advances using
-  //  the (created_time, download_id) of the last SQL row examined (not the
-  //  last kept row), so the next page continues strictly past the deepest
-  //  scanned position and never revisits candidates.
+  // Two-phase name filter:
+  //   Phase 1 (SQL): `LIKE` on the normalized column cheaply prunes the
+  //                  candidate set via the composite index.
+  //   Phase 2 (C++): re-check each candidate with the ICU-backed
+  //                  `FixedPatternStringSearchIgnoringCaseAndAccents`
+  //                  on raw `file_name`. ICU is the source of truth, so
+  //                  results stay aligned with the in-memory search API even
+  //                  if the NFD+stripMn+FoldCase approximation drifts.
+  // We batch-read until we collect `kPageSize` matches or the SQL stream is
+  // exhausted. The cursor advances to the last scanned row (not the last
+  // kept row), so the next page continues strictly past the deepest scanned
+  // position without revisiting candidates.
   std::unique_ptr<base::i18n::FixedPatternStringSearchIgnoringCaseAndAccents>
       icu_search;
   if (has_name_query) {
@@ -525,9 +453,9 @@ std::vector<DownloadRecord> DownloadRecordDatabase::GetDownloadRecordsPage(
   std::optional<base::Time> cursor_time = query.cursor_created_time;
   std::optional<std::string> cursor_id = query.cursor_download_id;
 
-  // Cap iterations to avoid pathological loops if every batch fails ICU
-  // re-check. The cap is generous; in practice phase-1 NFD+stripMn+FoldCase
-  // is a tight superset of phase-2 ICU primary collation.
+  // Cap iterations to avoid pathological loops if every batch fails the
+  // ICU re-check. Generous in practice: phase-1 NFD+stripMn+FoldCase is a
+  // tight superset of phase-2 ICU primary collation.
   const int kMaxBatches = 32;
   for (int batch = 0; batch < kMaxBatches; ++batch) {
     const bool has_cursor = cursor_time.has_value() && cursor_id.has_value();
@@ -541,11 +469,12 @@ std::vector<DownloadRecord> DownloadRecordDatabase::GetDownloadRecordsPage(
                                             kFileNameNormalizedField)
                        : std::string();
 
-    // Build the WHERE clause. Cursor predicate uses the expanded OR form
-    // (rather than SQLite tuple comparison `(a, b) < (?, ?)`) because
+    // Build the `WHERE` clause. Cursor predicate uses the expanded `OR`
+    // form (rather than SQLite tuple comparison `(a, b) < (?, ?)`) because
     // SQLite is more reliable about using the composite index that way.
-    // ORDER BY mirrors the index (created_time DESC, download_id DESC), so
-    // EXPLAIN QUERY PLAN reports "USING INDEX idx_records_created_time".
+    // `ORDER BY` mirrors the index (`created_time DESC, download_id DESC`),
+    // so `EXPLAIN QUERY PLAN` reports
+    // `USING INDEX idx_records_created_time`.
     std::string sql = base::StringPrintf(
         "SELECT %s FROM %s WHERE (%s) %s %s "
         "ORDER BY %s DESC, %s DESC LIMIT ?",
@@ -557,7 +486,7 @@ std::vector<DownloadRecord> DownloadRecordDatabase::GetDownloadRecordsPage(
 
     int param_index = 0;
     if (has_name_query) {
-      // Escape LIKE wildcards in user input so e.g. "100%" is literal.
+      // Escape `LIKE` wildcards in user input so e.g. "100%" is literal.
       statement.BindString(
           param_index++,
           BuildLikePattern(NormalizeFileName(query.name_query.value())));
@@ -569,14 +498,14 @@ std::vector<DownloadRecord> DownloadRecordDatabase::GetDownloadRecordsPage(
       statement.BindInt64(param_index++, cursor_micros);
       statement.BindString(param_index++, cursor_id.value());
     }
-    // Over-fetch when ICU re-check might prune rows. Otherwise grab exactly
+    // Over-fetch when ICU re-check might prune rows; otherwise grab exactly
     // what's needed.
     int batch_limit =
         has_name_query
-            ? std::max<int>(kPageSize * 2,
-                            static_cast<int>(kPageSize) -
+            ? std::max<int>(kDownloadRecordsPageSize * 2,
+                            kDownloadRecordsPageSize -
                                 static_cast<int>(records.size()) + 4)
-            : (static_cast<int>(kPageSize) - static_cast<int>(records.size()));
+            : (kDownloadRecordsPageSize - static_cast<int>(records.size()));
     if (batch_limit <= 0) {
       break;
     }
@@ -600,20 +529,20 @@ std::vector<DownloadRecord> DownloadRecordDatabase::GetDownloadRecordsPage(
       }
       if (keep) {
         records.push_back(std::move(record));
-        if (static_cast<int>(records.size()) >= kPageSize) {
+        if (static_cast<int>(records.size()) >= kDownloadRecordsPageSize) {
           break;
         }
       }
     }
 
-    if (static_cast<int>(records.size()) >= kPageSize) {
+    if (static_cast<int>(records.size()) >= kDownloadRecordsPageSize) {
       break;
     }
-    // Underlying SQL stream is exhausted for this filter; no more pages.
+    // SQL stream exhausted for this filter; no more pages.
     if (rows_seen_this_batch < batch_limit) {
       break;
     }
-    // Advance cursor and loop for another batch.
+    // Advance cursor and loop for the next batch.
     cursor_time = last_row_time;
     cursor_id = last_row_id;
   }
@@ -637,7 +566,7 @@ int DownloadRecordDatabase::GetDownloadRecordsCount(
                      : std::string();
 
   if (!has_name_query) {
-    // Fast path: pure SQL COUNT(*).
+    // Fast path: pure SQL `COUNT(*)`.
     std::string sql =
         base::StringPrintf("SELECT COUNT(*) FROM %s WHERE (%s)", kTableName,
                            FilterClauseForType(query.filter_type).c_str());
@@ -648,8 +577,8 @@ int DownloadRecordDatabase::GetDownloadRecordsCount(
     return statement.ColumnInt(0);
   }
 
-  // Two-phase count: SQL LIKE pre-filter, ICU re-check in C++. Same
-  // semantics guarantee as GetDownloadRecordsPage.
+  // Two-phase count: SQL `LIKE` pre-filter + ICU re-check in C++. Same
+  // semantics guarantee as `GetDownloadRecordsPage`.
   std::string sql = base::StringPrintf(
       "SELECT %s FROM %s WHERE (%s) %s", kFileNameField, kTableName,
       FilterClauseForType(query.filter_type).c_str(), name_clause.c_str());
@@ -704,8 +633,8 @@ bool DownloadRecordDatabase::CreateSchema() {
     return false;
   }
 
-  // Create the composite index used by GetDownloadRecordsPage() to satisfy
-  // the ORDER BY (created_time DESC, download_id DESC) without an extra sort.
+  // Composite index used by `GetDownloadRecordsPage` to satisfy the
+  // `ORDER BY (created_time DESC, download_id DESC)` without an extra sort.
   if (!db_.Execute(CreateIndexSql())) {
     return false;
   }
@@ -718,7 +647,6 @@ bool DownloadRecordDatabase::UpgradeDatabase() {
 
   int current_version = meta_table_->GetVersionNumber();
 
-  // No upgrade needed if already at current version.
   if (current_version == kCurrentVersionNumber) {
     return true;
   }
@@ -730,17 +658,17 @@ bool DownloadRecordDatabase::UpgradeDatabase() {
     if (!transaction.Begin()) {
       return false;
     }
-    // ALTER TABLE ADD COLUMN with a NULL default; backfill below.
+    // `ALTER TABLE ADD COLUMN` with a NULL default; backfill below.
     std::string add_col =
         base::StringPrintf("ALTER TABLE %s ADD COLUMN %s TEXT", kTableName,
                            kFileNameNormalizedField);
     if (!db_.Execute(add_col)) {
       return false;
     }
-    // Backfill: walk every row and compute normalized file_name in C++.
-    // Collect (id, normalized) first to avoid interleaving SELECT with UPDATE
-    // on the same connection, then push updates through a single reused
-    // statement.
+    // Backfill: walk every row and compute normalized `file_name` in C++.
+    // Collect `(id, normalized)` first to avoid interleaving `SELECT` with
+    // `UPDATE` on the same connection, then push updates through a single
+    // reused statement.
     std::string select_all = base::StringPrintf(
         "SELECT %s, %s FROM %s", kDownloadIdField, kFileNameField, kTableName);
     std::vector<std::pair<std::string, std::string>> updates;
@@ -769,7 +697,6 @@ bool DownloadRecordDatabase::UpgradeDatabase() {
     if (!transaction.Commit()) {
       return false;
     }
-    // Update meta table with new version.
     return meta_table_->SetVersionNumber(kCurrentVersionNumber) &&
            meta_table_->SetCompatibleVersionNumber(kCompatibleVersionNumber);
   }
@@ -791,7 +718,7 @@ void DownloadRecordDatabase::BindRecordToInsertStatement(
     const DownloadRecord& record) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // Parameter order matches InsertRecordSql().
+  // Parameter order matches `InsertRecordSql`.
   statement.BindString(0, record.download_id);
   statement.BindString(1, record.original_url);
   statement.BindString(2, record.redirected_url);
@@ -825,8 +752,8 @@ void DownloadRecordDatabase::BindRecordToUpdateStatement(
     const DownloadRecord& record) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // Parameter order matches UpdateRecordSql().
-  // Note: created_time is intentionally excluded - it should not be updated.
+  // Parameter order matches `UpdateRecordSql`. `created_time` is
+  // intentionally excluded — it must not change after insert.
   statement.BindString(0, record.original_url);
   statement.BindString(1, record.redirected_url);
   statement.BindString(2, record.file_name);
@@ -859,7 +786,7 @@ DownloadRecord DownloadRecordDatabase::CreateRecordFromStatement(
 
   DownloadRecord record;
 
-  // Column order matches SelectRecordSql() and SelectAllRecordsSql().
+  // Column order matches `SelectRecordSql` and `SelectAllRecordsSql`.
   record.download_id = statement.ColumnString(0);
   record.original_url = statement.ColumnString(1);
   record.redirected_url = statement.ColumnString(2);

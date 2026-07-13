@@ -12,7 +12,6 @@
 #include "chrome/browser/glic/suggestions/contextual_cueing_features.h"
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/glic/test_support/glic_test_util.h"
-#include "chrome/browser/private_ai/private_ai_service.h"
 #include "chrome/browser/private_ai/private_ai_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -28,6 +27,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
 #include "components/private_ai/features.h"
+#include "components/private_ai/private_ai_service.h"
 #include "components/private_ai/proto/private_ai.pb.h"
 #include "components/private_ai/testing/mock_private_ai_client.h"
 #include "content/public/test/browser_test.h"
@@ -56,7 +56,8 @@ class GlicButtonTest : public InProcessBrowserTest {
   }
 
   GlicKeyedService* glic_service() {
-    return GlicKeyedServiceFactory::GetGlicKeyedService(browser()->profile());
+    return GlicKeyedServiceFactory::GetGlicKeyedService(
+        browser()->GetProfile());
   }
 
   void WaitForGlicPanelShow() {
@@ -145,7 +146,7 @@ class GlicButtonPrewarmDelayedTest : public GlicButtonTest {
     mock_client_ptr_ = mock_client.get();
     private_ai::PrivateAiService* service =
         private_ai::PrivateAiServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     ASSERT_TRUE(service);
     service->SetClientForTesting(std::move(mock_client));
   }
@@ -154,7 +155,7 @@ class GlicButtonPrewarmDelayedTest : public GlicButtonTest {
     mock_client_ptr_ = nullptr;
     private_ai::PrivateAiService* service =
         private_ai::PrivateAiServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     if (service) {
       service->SetClientForTesting(nullptr);
     }
@@ -210,7 +211,7 @@ class GlicButtonPrewarmCancelledTest : public GlicButtonTest {
     mock_client_ptr_ = mock_client.get();
     private_ai::PrivateAiService* service =
         private_ai::PrivateAiServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     ASSERT_TRUE(service);
     service->SetClientForTesting(std::move(mock_client));
   }
@@ -219,7 +220,7 @@ class GlicButtonPrewarmCancelledTest : public GlicButtonTest {
     mock_client_ptr_ = nullptr;
     private_ai::PrivateAiService* service =
         private_ai::PrivateAiServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     if (service) {
       service->SetClientForTesting(nullptr);
     }

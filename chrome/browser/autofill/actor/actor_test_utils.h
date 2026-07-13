@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/types/expected.h"
 #include "chrome/browser/autofill/actor/actor_form_filling_service_impl.h"
@@ -86,7 +87,7 @@ class TestBrowserAutofillManagerWithTestCCAM
 
   void FillOrPreviewForm(
       mojom::ActionPersistence action_persistence,
-      const FormData& form,
+      const FormGlobalId& form_id,
       const FieldGlobalId& field_id,
       const FillingPayload& filling_payload,
       AutofillTriggerSource trigger_source,
@@ -135,6 +136,7 @@ class ActorTestBase : public ChromeRenderViewHostTestHarness {
   TestBrowserAutofillManagerWithTestCCAM& manager();
   ActorFormFillingServiceImpl& service() { return *service_; }
   tabs::TabInterface& tab() { return mock_tab; }
+  ::actor::AggregatedJournal& journal() { return journal_; }
 
  private:
   test::AutofillUnitTestEnvironment autofill_test_environment_;

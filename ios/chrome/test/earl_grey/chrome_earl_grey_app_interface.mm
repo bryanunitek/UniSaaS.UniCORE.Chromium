@@ -59,6 +59,7 @@
 #import "ios/chrome/browser/intents/model/intents_constants.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
+#import "ios/chrome/browser/popup_menu/overflow_menu/public/features.h"
 #import "ios/chrome/browser/search_engines/model/search_engines_util.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/sessions/model/session_restoration_service.h"
@@ -79,6 +80,7 @@
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/omnibox_util.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/sync/model/send_tab_to_self_sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/tips_notifications/model/utils.h"
@@ -217,12 +219,12 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
 
 @implementation ChromeEarlGreyAppInterface
 
-+ (BOOL)isTabGridSetUp {
-  return chrome_test_util::IsTabGridSetUp();
-}
-
 + (BOOL)isRTL {
   return UseRTLLayout();
+}
+
++ (BOOL)isWindowedMode {
+  return IsWindowedMode([self keyWindow]);
 }
 
 + (NSError*)clearBrowsingHistory {
@@ -276,13 +278,14 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
 
   SessionRestorationService* otrService = nullptr;
   if (profile->HasOffTheRecordProfile()) {
-    SessionRestorationServiceFactory::GetForProfile(
+    otrService = SessionRestorationServiceFactory::GetForProfile(
         profile->GetOffTheRecordProfile());
   }
 
+  const size_t expected_calls = 3u + (otrService ? 1u : 0u);
   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
   base::RepeatingClosure closure =
-      base::BarrierClosure(otrService ? 2u : 1u, base::BindRepeating(^{
+      base::BarrierClosure(expected_calls, base::BindRepeating(^{
                              dispatch_semaphore_signal(semaphore);
                            }));
 
@@ -292,6 +295,10 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
     otrService->SaveSessions();
     otrService->InvokeClosureWhenBackgroundProcessingDone(closure);
   }
+
+  GetApplicationContext()->GetLocalState()->CommitPendingWrite(
+      base::OnceClosure(), closure);
+  profile->GetPrefs()->CommitPendingWrite(base::OnceClosure(), closure);
 
   dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
 }
@@ -625,7 +632,15 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   if (@available(iOS 26.0, *)) {
     // For iOS26 windowing, ensure the new window doesn't fully overlap the
     // prior window.
-    options.placement = [UIWindowSceneProminentPlacement prominentPlacement];
+    BOOL should_skip_prominent_placement = NO;
+#if TARGET_OS_SIMULATOR
+    // Workaround Metal compositor crash on iOS 27.0 beta simulator.
+    should_skip_prominent_placement = base::ios::IsRunningOnOrLater(27, 0, 0) &&
+                                      !base::ios::IsRunningOnOrLater(27, 0, 1);
+#endif
+    if (!should_skip_prominent_placement) {
+      options.placement = [UIWindowSceneProminentPlacement prominentPlacement];
+    }
   }
 
   [UIApplication.sharedApplication
@@ -781,47 +796,9 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   return nil;
 }
 
-+ (NSError*)waitForWebStateContainingElement:(ElementSelector*)selector {
-  bool success = WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^bool {
-    return web::test::IsWebViewContainingElement(
-        chrome_test_util::GetCurrentWebState(), selector);
-  });
-  if (!success) {
-    NSString* NSErrorDescription = [NSString
-        stringWithFormat:@"Failed waiting for web state containing element %@",
-                         selector.selectorDescription];
-    return testing::NSErrorWithLocalizedDescription(NSErrorDescription);
-  }
-  return nil;
-}
-
-+ (NSError*)waitForWebStateNotContainingElement:(ElementSelector*)selector {
-  bool success = WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^bool {
-    return !web::test::IsWebViewContainingElement(
-        chrome_test_util::GetCurrentWebState(), selector);
-  });
-  if (!success) {
-    NSString* NSErrorDescription = [NSString
-        stringWithFormat:@"Failed waiting for web state without element %@",
-                         selector.selectorDescription];
-    return testing::NSErrorWithLocalizedDescription(NSErrorDescription);
-  }
-  return nil;
-}
-
-+ (NSError*)waitForWebStateContainingTextInIFrame:(NSString*)text {
-  std::string stringText = base::SysNSStringToUTF8(text);
-  bool success = WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^bool {
-    return web::test::IsWebViewContainingTextInFrame(
-        chrome_test_util::GetCurrentWebState(), stringText);
-  });
-  if (!success) {
-    NSString* NSErrorDescription = [NSString
-        stringWithFormat:
-            @"Failed waiting for web state's iframes containing text %@", text];
-    return testing::NSErrorWithLocalizedDescription(NSErrorDescription);
-  }
-  return nil;
++ (BOOL)webStateContainsTextInIFrame:(NSString*)text {
+  return web::test::IsWebViewContainingTextInFrame(
+      chrome_test_util::GetCurrentWebState(), base::SysNSStringToUTF8(text));
 }
 
 + (NSError*)submitWebStateFormWithID:(NSString*)formID {
@@ -849,55 +826,29 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
                           web_state, base::SysNSStringToUTF8(text));
 }
 
-+ (NSError*)waitForWebStateContainingLoadedImage:(NSString*)imageID {
++ (BOOL)webStateContainsLoadedImage:(NSString*)imageID {
   web::WebState* web_state = chrome_test_util::GetCurrentWebState();
-  bool success = web_state && web::test::WaitForWebViewContainingImage(
-                                  base::SysNSStringToUTF8(imageID), web_state,
-                                  web::test::IMAGE_STATE_LOADED);
-
-  if (!success) {
-    NSString* errorString = [NSString
-        stringWithFormat:@"Failed waiting for web view loaded image %@",
-                         imageID];
-    return testing::NSErrorWithLocalizedDescription(errorString);
-  }
-
-  return nil;
+  return web_state && web::test::IsWebViewContainingImage(
+                          base::SysNSStringToUTF8(imageID), web_state,
+                          web::test::IMAGE_STATE_LOADED);
 }
 
-+ (NSError*)waitForWebStateContainingBlockedImage:(NSString*)imageID {
++ (BOOL)webStateContainsBlockedImage:(NSString*)imageID {
   web::WebState* web_state = chrome_test_util::GetCurrentWebState();
-  bool success = web::test::WaitForWebViewContainingImage(
-      base::SysNSStringToUTF8(imageID), web_state,
-      web::test::IMAGE_STATE_BLOCKED);
-
-  if (!success) {
-    NSString* errorString = [NSString
-        stringWithFormat:@"Failed waiting for web view blocked image %@",
-                         imageID];
-    return testing::NSErrorWithLocalizedDescription(errorString);
-  }
-
-  return nil;
+  return web_state && web::test::IsWebViewContainingImage(
+                          base::SysNSStringToUTF8(imageID), web_state,
+                          web::test::IMAGE_STATE_BLOCKED);
 }
 
-+ (NSError*)waitForWebStateZoomScale:(CGFloat)scale {
-  bool success = WaitUntilConditionOrTimeout(kWaitForPageLoadTimeout, ^bool {
-    web::WebState* web_state = chrome_test_util::GetCurrentWebState();
-    if (!web_state) {
-      return false;
-    }
-
-    CGFloat current_scale =
-        [[web_state->GetWebViewProxy() scrollViewProxy] zoomScale];
-    return (current_scale > (scale - 0.05)) && (current_scale < (scale + 0.05));
-  });
-  if (!success) {
-    NSString* NSErrorDescription = [NSString
-        stringWithFormat:@"Failed waiting for web state zoom scale %f", scale];
-    return testing::NSErrorWithLocalizedDescription(NSErrorDescription);
++ (BOOL)webStateZoomScaleCloseTo:(CGFloat)scale {
+  web::WebState* web_state = chrome_test_util::GetCurrentWebState();
+  if (!web_state) {
+    return NO;
   }
-  return nil;
+
+  CGFloat current_scale =
+      [[web_state->GetWebViewProxy() scrollViewProxy] zoomScale];
+  return (current_scale > (scale - 0.05)) && (current_scale < (scale + 0.05));
 }
 
 + (void)signOutAndClearIdentitiesWithCompletion:(ProceduralBlock)completion {
@@ -1406,10 +1357,6 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
   return base::FeatureList::IsEnabled(metrics::kDemographicMetricsReporting);
 }
 
-+ (BOOL)isAskGeminiChipEnabled {
-  return IsAskGeminiChipEnabled();
-}
-
 + (BOOL)isProactiveSuggestionsFrameworkEnabled {
   return IsProactiveSuggestionsFrameworkEnabled();
 }
@@ -1443,6 +1390,10 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
          search_engines::SupportsSearchImageWithLens(service);
 }
 
++ (BOOL)isYourSavedInfoSettingsPageIosEnabled {
+  return IsYourSavedInfoSettingsPageIosEnabled();
+}
+
 + (BOOL)isCurrentLayoutBottomOmnibox {
   return IsCurrentLayoutBottomOmnibox(chrome_test_util::GetCurrentBrowser());
 }
@@ -1453,6 +1404,14 @@ UIViewController* FindBrowserViewController(UIViewController* root) {
 
 + (BOOL)isChromeNextEnabled {
   return IsChromeNextIaEnabled();
+}
+
++ (BOOL)isOverflowMenuNTPRefactorEnabled {
+  return IsOverflowMenuNTPRefactorEnabled();
+}
+
++ (BOOL)isChromeNextShareIconVisible {
+  return IsChromeNextIaShareIconVisible();
 }
 
 #pragma mark - ContentSettings

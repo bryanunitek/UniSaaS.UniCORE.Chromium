@@ -27,7 +27,6 @@ BASE_DECLARE_FEATURE(kCustomizeChromeWallpaperSearchButton);
 BASE_DECLARE_FEATURE(kCustomizeChromeWallpaperSearchInspirationCard);
 BASE_DECLARE_FEATURE(kEnergyEffect);
 BASE_DECLARE_FEATURE(kEnergyEffectAnimation);
-BASE_DECLARE_FEATURE(kRealboxContextMenuAnimationCapping);
 BASE_DECLARE_FEATURE(kRealboxCr23Theming);
 BASE_DECLARE_FEATURE(kRealboxMatchOmniboxTheme);
 BASE_DECLARE_FEATURE(kNtpAlphaBackgroundCollections);
@@ -36,8 +35,10 @@ BASE_DECLARE_FEATURE(kNtpBackgroundImageErrorDetection);
 BASE_DECLARE_FEATURE(kNtpCalendarModule);
 BASE_DECLARE_FEATURE(kNtpChromeCartModule);
 BASE_DECLARE_FEATURE(kNtpCustomizeChromeAutoOpen);
+BASE_DECLARE_FEATURE(kNtpDisableBrowserInitiatedLinks);
 BASE_DECLARE_FEATURE(kNtpDriveModule);
 BASE_DECLARE_FEATURE(kNtpDriveModuleHistorySyncRequirement);
+BASE_DECLARE_FEATURE(kNtpDriveModuleLink);
 BASE_DECLARE_FEATURE(kNtpDriveModuleSegmentation);
 #if !defined(OFFICIAL_BUILD)
 BASE_DECLARE_FEATURE(kNtpDummyModules);
@@ -74,6 +75,7 @@ BASE_DECLARE_FEATURE(kNtpWallpaperSearchButtonAnimationShownThreshold);
 BASE_DECLARE_FEATURE(kNtpMicrosoftAuthenticationModule);
 BASE_DECLARE_FEATURE(kNtpNextFeatures);
 BASE_DECLARE_FEATURE(kNtpNextCanvasChip);
+BASE_DECLARE_FEATURE(kNtpStarterChip);
 BASE_DECLARE_FEATURE(kNtpOneGoogleBarAsyncBarParts);
 BASE_DECLARE_FEATURE(kNtpFooter);
 BASE_DECLARE_FEATURE(kNtpTabGroupsModule);
@@ -86,6 +88,7 @@ BASE_DECLARE_FEATURE(kNtpDoodleMurals);
 BASE_DECLARE_FEATURE(kLightningTakeoverEdition);
 BASE_DECLARE_FEATURE(kNtpShortcutsRedesign);
 BASE_DECLARE_FEATURE(kNtpSimplificationBookmarkBar);
+BASE_DECLARE_FEATURE(kBookmarkBarUpdatesForTesting);
 
 // Parameter for controlling the luminosity difference for NTP elements on light
 // backgrounds.
@@ -278,6 +281,15 @@ extern const base::FeatureParam<int> kStaleShortcutsCountThreshold;
 // and eligible for auto-removal.
 extern const base::FeatureParam<int> kStaleModulesCountThreshold;
 
+// Parameter determining the count at which the bookmark bar will be eligible
+// for auto-removal.
+extern const base::FeatureParam<int> kBookmarkBarCountThreshold;
+
+// Parameter determining the minimum amount of time before auto-removal prefs
+// are updated.
+extern const base::FeatureParam<base::TimeDelta>
+    kBookmarkBarMinStalenessTimeInterval;
+
 // Returns the timeout after which the load of a module should be aborted.
 base::TimeDelta GetModulesLoadTimeout();
 
@@ -325,6 +337,10 @@ int GetMaxMostVisitedTilesInExpandedState();
 
 // Returns the max number of enterprise shortcuts allowed.
 int GetMaxEnterpriseShortcuts();
+
+base::TimeDelta GetBookmarkBarMinStalenessTimeInterval();
+
+int GetBookmarkBarCountThreshold();
 
 }  // namespace ntp_features
 

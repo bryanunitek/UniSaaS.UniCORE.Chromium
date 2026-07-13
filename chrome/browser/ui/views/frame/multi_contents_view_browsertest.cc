@@ -384,9 +384,13 @@ class MultiContentsViewWebContentsReLayoutBrowserTest
 
   void CheckNoResizeHappened() {
     auto* tab_strip_model = browser()->tab_strip_model();
+    const GURL test_url = embedded_test_server()->GetURL(kReLayoutTestURL);
     for (int i = 0; i < tab_strip_model->count(); i++) {
       auto* web_contents = tab_strip_model->GetWebContentsAt(i);
       EXPECT_TRUE(content::WaitForLoadStop(web_contents));
+      if (web_contents->GetLastCommittedURL() != test_url) {
+        continue;
+      }
       EXPECT_EQ(false, content::EvalJs(web_contents, "window.has_resized"));
     }
   }
@@ -431,17 +435,9 @@ class MultiContentsViewWebContentsReLayoutBrowserTest
   }
 };
 
-// TODO(https://crbug.com/430525043): Flaky on Linux.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#define MAYBE_SwitchingTabsShouldNotTriggerWebContentsReLayout_SplitNoSplit \
-  DISABLED_SwitchingTabsShouldNotTriggerWebContentsReLayout_SplitNoSplit
-#else
-#define MAYBE_SwitchingTabsShouldNotTriggerWebContentsReLayout_SplitNoSplit \
-  SwitchingTabsShouldNotTriggerWebContentsReLayout_SplitNoSplit
-#endif
 IN_PROC_BROWSER_TEST_F(
     MultiContentsViewWebContentsReLayoutBrowserTest,
-    MAYBE_SwitchingTabsShouldNotTriggerWebContentsReLayout_SplitNoSplit) {
+    SwitchingTabsShouldNotTriggerWebContentsReLayout_SplitNoSplit) {
   auto* tab_strip_model = browser()->tab_strip_model();
 
   const GURL test_url = embedded_test_server()->GetURL(kReLayoutTestURL);
@@ -488,9 +484,14 @@ IN_PROC_BROWSER_TEST_F(
   // Focus on the split tab.
   tab_strip_model->GetWebContentsAt(1)->Focus();
 
-  // Add a new tab and open split view.
+  // Add a dummy non-split tab to prevent NTP redirection.
   EXPECT_TRUE(
       AddTabAtIndex(2, GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_TYPED));
+  tab_strip_model->GetWebContentsAt(1)->Focus();
+
+  // Add a new tab and open split view.
+  EXPECT_TRUE(
+      AddTabAtIndex(3, GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_TYPED));
   CreateSplitView();
 
   // Change the size.
@@ -507,7 +508,7 @@ IN_PROC_BROWSER_TEST_F(
              TabStripUserGestureDetails::GestureType::kOther));
   RunScheduledLayouts();
   tab_strip_model->ActivateTabAt(
-      2, TabStripUserGestureDetails(
+      3, TabStripUserGestureDetails(
              TabStripUserGestureDetails::GestureType::kOther));
   RunScheduledLayouts();
 
@@ -515,16 +516,8 @@ IN_PROC_BROWSER_TEST_F(
   CheckNoResizeHappened();
 }
 
-// TODO(crbug.com/429495554): Flaky on most bots across all platforms.
-IN_PROC_BROWSER_TEST_F(
-    MultiContentsViewWebContentsReLayoutBrowserTest,
-    DISABLED_EnterAndExitFullscreenInSplitTabShouldResizeThreeTimes) {
-#if BUILDFLAG(IS_OZONE)
-  // TODO(crbug.com/429495554): Investigate why this test failed on wayland.
-  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
-    GTEST_SKIP();
-  }
-#endif
+IN_PROC_BROWSER_TEST_F(MultiContentsViewWebContentsReLayoutBrowserTest,
+                       EnterAndExitFullscreenInSplitTabShouldResizeTwoTimes) {
   auto* tab_strip_model = browser()->tab_strip_model();
 
   const GURL test_url = embedded_test_server()->GetURL(kReLayoutTestURL);
@@ -560,21 +553,24 @@ IN_PROC_BROWSER_TEST_F(
       .Wait();
   RunScheduledLayouts();
 
-  EXPECT_TRUE(base::test::RunUntil(
-      [this, split_tab]() { return GetResizeCount(split_tab) >= 2; }));
+  int expected_resize = 2;
+#if BUILDFLAG(IS_OZONE)
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
+    // On Wayland, entering and exiting fullscreen each trigger 2 resizes. There
+    // is an immediate synchronous layout followed by an async layout after the
+    // Wayland compositor responds.
+    expected_resize = 4;
+  }
+#endif
+
+  EXPECT_TRUE(base::test::RunUntil([this, split_tab, expected_resize]() {
+    return GetResizeCount(split_tab) >= expected_resize;
+  }));
   RunScheduledLayouts();
 
-  // The WebContents is resized three times when entering and exiting fullscreen
-  // due to the layout process involving the new `main_container_`:
-  // 1. `BrowserViewLayout` sets the bounds of `main_container_`. The default
-  //    layout manager for `main_container_` immediately resizes its child,
-  //    `contents_container_`, to fit.
-  // 2. `BrowserViewLayout` then explicitly sets the bounds of
-  //    `contents_container_` itself, triggering a second layout.
-  // 3. `BrowserViewLayout` also updates separators in `MultiContentsView`,
-  //    which calls `InvalidateLayout()`, scheduling a final, asynchronous
-  //    layout pass.
-  EXPECT_EQ(GetResizeCount(split_tab), 3);
+  // The WebContents is resized two times, one each when entering and exiting
+  // fullscreen.
+  EXPECT_EQ(GetResizeCount(split_tab), expected_resize);
 }
 
 IN_PROC_BROWSER_TEST_F(MultiContentsViewBrowserTest, OnlyFocusTabsInSplitView) {
@@ -655,7 +651,7 @@ IN_PROC_BROWSER_TEST_F(MultiContentsViewBrowserTest, LeadingSeparatorLayout) {
 
   CompareLayouts(expected_separator_layouts, actual_child_layouts);
   EXPECT_EQ(
-      CustomFloatingCorner::CornerOrientation::kTopLeading,
+      CornerOrientation::kTopLeading,
       view->contents_separators_.corner_separator->orientation_for_testing());
 }
 
@@ -704,7 +700,7 @@ IN_PROC_BROWSER_TEST_F(MultiContentsViewBrowserTest, TrailingSeparatorLayout) {
 
   CompareLayouts(expected_separator_layouts, actual_child_layouts);
   EXPECT_EQ(
-      CustomFloatingCorner::CornerOrientation::kTopTrailing,
+      CornerOrientation::kTopTrailing,
       view->contents_separators_.corner_separator->orientation_for_testing());
 }
 

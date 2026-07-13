@@ -23,6 +23,7 @@ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+import org.chromium.chrome.browser.translate.TranslateBridge;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.ui.text.SpanApplier;
@@ -30,6 +31,7 @@ import org.chromium.ui.text.SpanApplier.SpanInfo;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.Locale;
 
 /** List of all predefined Context Menu Items available in Chrome. */
 @NullMarked
@@ -58,7 +60,7 @@ class ChromeContextMenuItem {
         Item.OPEN_IMAGE_IN_EPHEMERAL_TAB,
         Item.COPY_IMAGE,
         Item.SEARCH_BY_IMAGE,
-        Item.SEARCH_WITH_GOOGLE_LENS,
+        Item.SEARCH_IMAGE_WITH_GOOGLE_LENS,
         Item.SHOP_IMAGE_WITH_GOOGLE_LENS,
         Item.SHARE_IMAGE,
         Item.DIRECT_SHARE_IMAGE,
@@ -76,12 +78,18 @@ class ChromeContextMenuItem {
         Item.SAVE_PAGE,
         Item.SHARE_PAGE,
         Item.PRINT_PAGE,
+        Item.SEARCH_TAB_WITH_GOOGLE_LENS,
         Item.VIEW_PAGE_SOURCE,
+        Item.BACK,
+        Item.FORWARD,
         Item.RELOAD,
         Item.INSPECT_ELEMENT,
         Item.COPY_VIDEO_FRAME,
         Item.DOWNLOAD_VIDEO_FRAME,
-        Item.LENS_OVERLAY
+        Item.READING_MODE,
+        Item.SEND_TAB_TO_SELF,
+        Item.TRANSLATE,
+        Item.CREATE_QR_CODE
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface Item {
@@ -114,7 +122,7 @@ class ChromeContextMenuItem {
         int OPEN_IMAGE_IN_EPHEMERAL_TAB = 21;
         int COPY_IMAGE = 22;
         int SEARCH_BY_IMAGE = 23;
-        int SEARCH_WITH_GOOGLE_LENS = 24;
+        int SEARCH_IMAGE_WITH_GOOGLE_LENS = 24;
         int SHOP_IMAGE_WITH_GOOGLE_LENS = 25;
         int SHARE_IMAGE = 26;
         int DIRECT_SHARE_IMAGE = 27;
@@ -136,15 +144,21 @@ class ChromeContextMenuItem {
         int SAVE_PAGE = 38;
         int SHARE_PAGE = 39;
         int PRINT_PAGE = 40;
-        int RELOAD = 41;
+        int SEARCH_TAB_WITH_GOOGLE_LENS = 41;
+        int BACK = 42;
+        int FORWARD = 43;
+        int RELOAD = 44;
         // Developer Group
-        int VIEW_PAGE_SOURCE = 42;
-        int INSPECT_ELEMENT = 43;
-        int COPY_VIDEO_FRAME = 44;
-        int DOWNLOAD_VIDEO_FRAME = 45;
-        int LENS_OVERLAY = 46;
+        int VIEW_PAGE_SOURCE = 45;
+        int INSPECT_ELEMENT = 46;
+        int COPY_VIDEO_FRAME = 47;
+        int DOWNLOAD_VIDEO_FRAME = 48;
+        int READING_MODE = 49;
+        int SEND_TAB_TO_SELF = 50;
+        int TRANSLATE = 51;
+        int CREATE_QR_CODE = 52;
         // ALWAYS UPDATE!
-        int NUM_ENTRIES = 47;
+        int NUM_ENTRIES = 53;
     }
 
     /** Mapping from {@link Item} to the ID found in the ids.xml. */
@@ -173,7 +187,7 @@ class ChromeContextMenuItem {
         R.id.contextmenu_open_image_in_ephemeral_tab, // Item.OPEN_IMAGE_IN_EPHEMERAL_TAB
         R.id.contextmenu_copy_image, // Item.COPY_IMAGE
         R.id.contextmenu_search_by_image, // Item.SEARCH_BY_IMAGE
-        R.id.contextmenu_search_with_google_lens, // Item.SEARCH_WITH_GOOGLE_LENS
+        R.id.contextmenu_search_image_with_google_lens, // Item.SEARCH_IMAGE_WITH_GOOGLE_LENS
         R.id.contextmenu_shop_image_with_google_lens, // Item.SHOP_IMAGE_WITH_GOOGLE_LENS
         R.id.contextmenu_share_image, // Item.SHARE_IMAGE
         R.id.contextmenu_direct_share_image, // Item.DIRECT_SHARE_IMAGE
@@ -190,12 +204,18 @@ class ChromeContextMenuItem {
         R.id.contextmenu_save_page, // Item.SAVE_PAGE
         R.id.contextmenu_share_page, // Item.SHARE_PAGE
         R.id.contextmenu_print_page, // Item.PRINT_PAGE
+        R.id.contextmenu_search_tab_with_google_lens, // Item.SEARCH_TAB_WITH_GOOGLE_LENS
+        R.id.contextmenu_back, // Item.BACK
+        R.id.contextmenu_forward, // Item.FORWARD
         R.id.contextmenu_reload, // Item.RELOAD
         R.id.contextmenu_view_page_source, // Item.VIEW_PAGE_SOURCE
         R.id.contextmenu_inspect_element, // Item.INSPECT_ELEMENT
         R.id.contextmenu_copy_video_frame, // Item.COPY_VIDEO_FRAME
         R.id.contextmenu_download_video_frame, // Item.DOWNLOAD_VIDEO_FRAME
-        R.id.contextmenu_lens_overlay, // Item.LENS_OVERLAY
+        R.id.contextmenu_open_in_reading_mode, // Item.READING_MODE
+        R.id.contextmenu_send_tab_to_self, // Item.SEND_TAB_TO_SELF
+        R.id.contextmenu_translate, // Item.TRANSLATE
+        R.id.contextmenu_create_qr_code, // Item.CREATE_QR_CODE
     };
 
     /** Mapping from {@link Item} to the ID of the string that describes the action of the item. */
@@ -224,7 +244,7 @@ class ChromeContextMenuItem {
         R.string.contextmenu_open_image_in_ephemeral_tab, // Item.OPEN_IMAGE_IN_EPHEMERAL_TAB:
         R.string.contextmenu_copy_image, // Item.COPY_IMAGE:
         R.string.contextmenu_search_web_for_image, // Item.SEARCH_BY_IMAGE:
-        R.string.contextmenu_search_image_with_google_lens, // Item.SEARCH_WITH_GOOGLE_LENS:
+        R.string.contextmenu_search_image_with_google_lens, // Item.SEARCH_IMAGE_WITH_GOOGLE_LENS:
         R.string.contextmenu_shop_image_with_google_lens, // Item.SHOP_IMAGE_WITH_GOOGLE_LENS:
         R.string.contextmenu_share_image, // Item.SHARE_IMAGE
         0, // Item.DIRECT_SHARE_IMAGE is not handled by this mapping.
@@ -241,12 +261,18 @@ class ChromeContextMenuItem {
         R.string.contextmenu_save_page, // Item.SAVE_PAGE
         R.string.contextmenu_share_page, // Item.SHARE_PAGE
         R.string.contextmenu_print_page, // Item.PRINT_PAGE
+        R.string.contextmenu_search_tab_with_google_lens, // Item.SEARCH_TAB_WITH_GOOGLE_LENS
+        R.string.contextmenu_back, // Item.BACK
+        R.string.contextmenu_forward, // Item.FORWARD
         R.string.contextmenu_reload, // Item.RELOAD
         R.string.contextmenu_view_page_source, // Item.VIEW_PAGE_SOURCE
         R.string.contextmenu_inspect_element, // Item.INSPECT_ELEMENT
         R.string.contextmenu_copy_video_frame, // Item.COPY_VIDEO_FRAME
         R.string.contextmenu_download_video_frame, // Item.DOWNLOAD_VIDEO_FRAME
-        R.string.contextmenu_search_tab_with_google_lens, // Item.LENS_OVERLAY
+        R.string.contextmenu_open_in_reading_mode, // Item.READING_MODE
+        R.string.menu_send_to_devices, // Item.SEND_TAB_TO_SELF
+        R.string.contextmenu_translate, // Item.TRANSLATE
+        R.string.contextmenu_create_qr_code, // Item.CREATE_QR_CODE
     };
 
     /**
@@ -306,11 +332,17 @@ class ChromeContextMenuItem {
                         item,
                         ChromePreferenceKeys.CONTEXT_MENU_OPEN_IMAGE_IN_EPHEMERAL_TAB_CLICKED,
                         showInProductHelp);
-            case Item.SEARCH_WITH_GOOGLE_LENS:
+            case Item.SEARCH_TAB_WITH_GOOGLE_LENS:
                 return addOrRemoveNewLabel(
                         context,
                         item,
-                        ChromePreferenceKeys.CONTEXT_MENU_SEARCH_WITH_GOOGLE_LENS_CLICKED,
+                        ChromePreferenceKeys.CONTEXT_MENU_SEARCH_TAB_WITH_GOOGLE_LENS_CLICKED,
+                        showInProductHelp);
+            case Item.SEARCH_IMAGE_WITH_GOOGLE_LENS:
+                return addOrRemoveNewLabel(
+                        context,
+                        item,
+                        ChromePreferenceKeys.CONTEXT_MENU_SEARCH_IMAGE_WITH_GOOGLE_LENS_CLICKED,
                         showInProductHelp);
             case Item.SHOP_IMAGE_WITH_GOOGLE_LENS:
                 return addOrRemoveNewLabel(
@@ -330,6 +362,13 @@ class ChromeContextMenuItem {
                 break;
             case Item.DOWNLOAD_VIDEO_FRAME:
                 return context.getString(R.string.contextmenu_download_video_frame);
+            case Item.TRANSLATE:
+                // Language of the user's translate preference
+                String targetLanguage = TranslateBridge.getTargetLanguageForChromium(profile);
+                Locale uiLocale = context.getResources().getConfiguration().getLocales().get(0);
+                String languageName =
+                        Locale.forLanguageTag(targetLanguage).getDisplayName(uiLocale);
+                return context.getString(getStringId(item), languageName);
             default:
                 return context.getString(getStringId(item));
         }

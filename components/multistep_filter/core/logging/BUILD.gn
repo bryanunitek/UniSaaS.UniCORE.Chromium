@@ -11,7 +11,11 @@ source_set("logging") {
     "multistep_filter_log_router_impl.h",
     "multistep_filter_logger.cc",
     "multistep_filter_logger.h",
+    "multistep_filter_metrics.h",
+    "multistep_filter_metrics_tracker.cc",
+    "multistep_filter_metrics_tracker.h",
   ]
+  public_deps = [ "//components/multistep_filter/core/data_models" ]
   deps = [
     "//base",
     "//components/keyed_service/core",
@@ -24,11 +28,14 @@ source_set("unit_tests") {
     "log_entry_unittest.cc",
     "multistep_filter_log_router_impl_unittest.cc",
     "multistep_filter_logger_unittest.cc",
+    "multistep_filter_metrics_tracker_unittest.cc",
   ]
   deps = [
     ":logging",
     "//base",
     "//base/test:test_support",
+    "//components/multistep_filter/core/data_models",
+    "//testing/gmock",
     "//testing/gtest",
   ]
 }

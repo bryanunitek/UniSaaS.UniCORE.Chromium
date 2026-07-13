@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 import {assert, assertNotReached} from '//resources/js/assert.js';
+import {EventTracker} from '//resources/js/event_tracker.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {isMac} from '//resources/js/platform.js';
 import {hasKeyModifiers} from '//resources/js/util.js';
 import type {CrLitElement, PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import {NavigationPredictor} from '//resources/mojo/components/omnibox/browser/omnibox.mojom-webui.js';
-import {SideType} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 import type {AutocompleteMatch, AutocompleteResult, PageHandlerInterface} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 
 import type {SearchboxDropdownElement} from './searchbox_dropdown.js';
@@ -71,6 +71,12 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
         'Unknown';
     accessor searchboxAriaDescription: string = '';
     accessor dropdownIsVisible: boolean = false;
+    // Tracks the latest query sent for autocompletion. Used to filter out
+    // stale results. `activeQueryId` is reset to -1 when the last query needs
+    // to be abandoned. `nextQueryId_` is monotonically increasing to avoid
+    // reusing IDs.
+    activeQueryId: number = -1;
+    private nextQueryId_: number = 0;
     accessor lastQueriedInput: string|null = null;
     accessor multiLineEnabled: boolean = false;
     accessor result: AutocompleteResult|null = null;
@@ -83,6 +89,27 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
     initialInputScrollHeight: number = 0;
 
     private lastIgnoredEnterEvent_: KeyboardEvent|null = null;
+    private searchboxEventTracker_: EventTracker = new EventTracker();
+
+    override connectedCallback() {
+      super.connectedCallback();
+
+      // On user interaction, freeze the current results to avoid result updates
+      // potentially erasing user changes like cursor position.
+      this.searchboxEventTracker_.add(this, 'input-mousedown', () => {
+        this.activeQueryId = -1;
+      });
+      // When deleting a match, unfreeze `activeQueryId` so post-deletion
+      // results are accepted.
+      this.searchboxEventTracker_.add(this, 'match-remove', () => {
+        this.activeQueryId = this.nextQueryId_ - 1;
+      });
+    }
+
+    override disconnectedCallback() {
+      super.disconnectedCallback();
+      this.searchboxEventTracker_.removeAll();
+    }
 
     override willUpdate(changedProperties: PropertyValues<this>) {
       super.willUpdate(changedProperties);
@@ -137,12 +164,14 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       this.getDropdownElement().unselect();
       this.pageHandler().stopAutocomplete(/*clearResult=*/ true);
       // Autocomplete sends updates once it is stopped. Invalidate those results
-      // by setting the |this.lastQueriedInput| to its default value.
+      // by setting `activeQueryId` to -1.
+      this.activeQueryId = -1;
       this.lastQueriedInput = null;
     }
 
     queryAutocomplete(
         input: string, preventInlineAutocomplete: boolean = false) {
+      this.activeQueryId = this.nextQueryId_++;
       this.lastQueriedInput = input;
 
       preventInlineAutocomplete = preventInlineAutocomplete ||
@@ -157,7 +186,7 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
           this.getInputElement().inputElement.selectionStart || 0 :
           input.length;
       this.pageHandler().queryAutocomplete(
-          input, preventInlineAutocomplete, cursorPosition);
+          this.activeQueryId, input, preventInlineAutocomplete, cursorPosition);
 
       this.dispatchEvent(new CustomEvent('query-autocomplete', {
         bubbles: true,
@@ -173,7 +202,7 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       this.pageHandler().openAutocompleteMatch(
           matchIndex, match.destinationUrl, this.dropdownIsVisible,
           (e as MouseEvent).button || 0, e.altKey, e.ctrlKey, e.metaKey,
-          e.shiftKey);
+          e.shiftKey, e instanceof KeyboardEvent);
       this.getInputElement().setInput({
         text: match.fillIntoEdit,
         inline: '',
@@ -183,42 +212,29 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       e.preventDefault();
     }
 
-    // TODO(b/519266700): Remove/refactor from mixin if only used by one
-    // embedder.
+    isAutocompleteResultStale(result: AutocompleteResult): boolean {
+      return result.queryId !== this.activeQueryId;
+    }
+
+    updateDropdownVisibility(): void {
+      this.dropdownIsVisible = this.hasMatches();
+    }
+
     async onAutocompleteResultChanged(result: AutocompleteResult) {
-      if (this.lastQueriedInput === null ||
-          this.lastQueriedInput.trimStart() !== result.input) {
-        return;  // Stale result; ignore.
+      if (this.isAutocompleteResultStale(result)) {
+        return;
       }
 
       this.result = result;
       const hasMatches = this.hasMatches();
-      const hasPrimaryMatches = result.matches?.some(match => {
-        const sideType =
-            result.suggestionGroupsMap[match.suggestionGroupId]?.sideType ||
-            SideType.kDefaultPrimary;
-        return sideType === SideType.kDefaultPrimary;
-      });
-
-      this.dropdownIsVisible = hasPrimaryMatches;
-
-      // In multi-line mode, suppress the dropdown when text wraps or when the
-      // only match is the mirror query.
-      if (this.multiLineEnabled && this.dropdownIsVisible) {
-        const isUserTyping = result.input.trim().length > 0;
-        if (isUserTyping &&
-            this.shouldSuppressDropdownForMultiline_(
-                result.matches?.length || 0)) {
-          this.dropdownIsVisible = false;
-        }
-      }
+      this.updateDropdownVisibility();
 
       const firstMatch = hasMatches ? this.result.matches[0] : null;
       if (firstMatch && firstMatch.allowedToBeDefaultMatch) {
         // Select the default match and update the input.
         this.getDropdownElement().selectFirst();
         this.getInputElement().setInput({
-          text: this.lastQueriedInput,
+          text: this.lastQueriedInput ?? '',
           inline: firstMatch.inlineAutocompletion,
         });
 
@@ -248,12 +264,6 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
           inline: '',
         });
       }
-    }
-
-    private shouldSuppressDropdownForMultiline_(numMatches: number): boolean {
-      const inputHasWrapped = this.initialInputScrollHeight > 0 &&
-          this.getInputElement().scrollHeight > this.initialInputScrollHeight;
-      return inputHasWrapped || numMatches === 1;
     }
 
     onInputFocusChanged(e: CustomEvent<{value: string}>) {
@@ -295,13 +305,26 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
         // listening for key presses. These stale results should never be shown.
         // They correspond to the potentially stale suggestion left in the
         // searchbox when blurred. That stale result may be navigated to by
-        // focusing and pressing 'Enter'.
+        // focusing and pressing 'Enter'. Reset `activeQueryId` to prevent an
+        // in-flight result from re-opening the popup.
+        this.activeQueryId = -1;
         this.pageHandler().stopAutocomplete(/*clearResult=*/ false);
       }
       this.pageHandler().onFocusChanged(false);
     }
 
     async onInputWrapperKeydown(e: KeyboardEvent) {
+      // On user interaction, freeze the current results to avoid result updates
+      // potentially erasing user changes like cursor position. Freezing on
+      // 'enter' would break the fast-enter navigations via
+      // `lastIgnoredEnterEvent_`. It'd cause the searchbox to discard the
+      // pending results the navigation is waiting for, causing the navigation
+      // to never occur. But this is a hack; comparing `e.key !=== 'Enter'` is
+      // only a semi-accurate heuristic for whether a navigation is about to
+      // occur.
+      if (e.key !== 'Enter') {
+        this.activeQueryId = -1;
+      }
       const modifier =
           isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
       if (modifier && e.key === 'z') {
@@ -345,11 +368,6 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       // ArrowUp/ArrowDown query autocomplete when matches are not visible.
       if (!this.dropdownIsVisible) {
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-          if (this.multiLineEnabled &&
-              this.shouldSuppressDropdownForMultiline_(
-                  this.result?.matches?.length || 0)) {
-            return;
-          }
           const inputValue = this.getInputElement().inputElement.value;
           if (inputValue.trim() || !inputValue) {
             this.queryAutocomplete(inputValue);
@@ -374,6 +392,8 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       if (e.key === 'Delete') {
         if (e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
           if (this.selectedMatch && this.selectedMatch.supportsDeletion) {
+            // Unfreeze `activeQueryId` so post-deletion results are accepted.
+            this.activeQueryId = this.nextQueryId_ - 1;
             this.pageHandler().deleteAutocompleteMatch(
                 this.selectedMatchIndex, this.selectedMatch.destinationUrl);
             e.preventDefault();
@@ -397,10 +417,13 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
         if (!array.includes(e.target as HTMLElement)) {
           return;
         }
-        const currentInput = this.result?.input;
-        const lastQueriedInput = this.lastQueriedInput?.trimStart();
-        if (currentInput !== undefined && lastQueriedInput !== undefined &&
-            lastQueriedInput === currentInput) {
+        // If no new query's `results` are pending (though new async results for
+        // the current query may be pending), navigate. Otherwise, the user
+        // pressed enter after sending a new query that hasn't returned any
+        // results yet. Wait for the 1st results of the new query before
+        // navigating.
+        if (this.activeQueryId === -1 ||
+            this.result?.queryId === this.activeQueryId) {
           if (this.selectedMatch) {
             this.navigateToMatch(this.selectedMatchIndex, e);
           }
@@ -409,6 +432,8 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
           // because the matches are stale. Navigate to the default match (if
           // one exists) once the up-to-date matches arrive.
           this.lastIgnoredEnterEvent_ = e;
+          // Unfreeze `activeQueryId` so pending query results are accepted.
+          this.activeQueryId = this.nextQueryId_ - 1;
         }
         return;
       }
@@ -479,8 +504,7 @@ export const SearchboxMixin = <T extends Constructor<CrLitElement>>(
       await this.getDropdownElement().selectIndex(e.detail);
       // Input selection (if any) likely drops due to focus change. Simply fill
       // the input with the match and move the cursor to the end.
-      const input =
-        this.shadowRoot.querySelector<SearchboxInputElement>('#input');
+      const input = this.getInputElement();
       assert(input);
       input.setInput({
         text: this.selectedMatch!.fillIntoEdit,
@@ -509,6 +533,7 @@ export interface SearchboxMixinInterface {
   dropdownIsVisible: boolean;
   initialInputScrollHeight: number;
   inputAriaLive: string;
+  activeQueryId: number;
   lastQueriedInput: string|null;
   multiLineEnabled: boolean;
   result: AutocompleteResult|null;
@@ -523,6 +548,8 @@ export interface SearchboxMixinInterface {
   getWrapperElement(): HTMLElement;
   handleKeyNavigation(e: KeyboardEvent): void;
   hasMatches(): boolean;
+  isAutocompleteResultStale(result: AutocompleteResult): boolean;
+  updateDropdownVisibility(): void;
 
   navigateToMatch(matchIndex: number, e: KeyboardEvent|MouseEvent): void;
   onAutocompleteResultChanged(result: AutocompleteResult|null): void;

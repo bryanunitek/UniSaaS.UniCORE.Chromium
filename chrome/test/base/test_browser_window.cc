@@ -115,6 +115,10 @@ bool TestBrowserWindow::TestLocationBar::IsEditingOrEmpty() const {
   return false;
 }
 
+bool TestBrowserWindow::TestLocationBar::IsMouseHovered() const {
+  return false;
+}
+
 gfx::Rect TestBrowserWindow::TestLocationBar::Bounds() const {
   return gfx::Rect();
 }
@@ -371,15 +375,6 @@ void TestBrowserWindow::SetNativeWindow(gfx::NativeWindow window) {
 
 void TestBrowserWindow::SetCloseCallback(base::OnceClosure close_callback) {
   close_callback_ = std::move(close_callback);
-}
-
-bool TestBrowserWindow::IsTabModalPopupDeprecated() const {
-  return is_tab_modal_popup_deprecated_;
-}
-
-void TestBrowserWindow::SetIsTabModalPopupDeprecated(
-    bool is_tab_modal_popup_deprecated) {
-  is_tab_modal_popup_deprecated_ = is_tab_modal_popup_deprecated;
 }
 
 void TestBrowserWindow::OnBrowserCreated(BrowserWindowInterface* browser) {

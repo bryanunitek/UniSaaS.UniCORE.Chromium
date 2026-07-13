@@ -15,6 +15,7 @@
 #include "chrome/browser/tab_list/tab_list_interface_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "url/gurl.h"
@@ -90,6 +91,14 @@ class ContextualTasksWindowTrackerManager : public TabListInterfaceObserver,
   ContextualTasksWindowTracker* FindTrackerByMessageProxy(
       content::WebContents* proxy_contents);
 
+  // Finds the tracker that corresponds to the given window ID.
+  ContextualTasksWindowTracker* FindTrackerByWindowId(
+      ContextualWindowId window_id);
+
+  // Finds the tracker that corresponds to the given webview FrameTreeNodeId.
+  ContextualTasksWindowTracker* FindTrackerByWebViewFrameTreeNodeId(
+      content::FrameTreeNodeId id) const;
+
   // For testing.
   const std::vector<std::unique_ptr<ContextualTasksWindowTracker>>&
   window_trackers_for_testing() const {
@@ -101,7 +110,7 @@ class ContextualTasksWindowTrackerManager : public TabListInterfaceObserver,
   // on the first tracker that matches the navigation.
   std::vector<std::unique_ptr<ContextualTasksWindowTracker>> window_trackers_;
 
-  std::set<TabListInterface*> observed_tab_lists_;
+  std::set<raw_ptr<TabListInterface>> observed_tab_lists_;
 
   raw_ptr<Profile> profile_;
 

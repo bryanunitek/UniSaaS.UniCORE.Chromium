@@ -66,7 +66,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.AppSeedFreshness" units="minutes"
-    expires_after="2026-10-11">
+    expires_after="2026-12-13">
   <owner>ntfschr@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -196,7 +196,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.FirstRun.SeedFetchResult"
-    enum="VariationsSeedFetchResult" expires_after="2026-11-01">
+    enum="VariationsSeedFetchResult" expires_after="2027-01-03">
   <owner>asvitkine@chromium.org</owner>
   <owner>rkaplow@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
@@ -209,7 +209,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.FirstRun.SeedFetchTime" units="ms"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>asvitkine@chromium.org</owner>
   <owner>rkaplow@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
@@ -245,7 +245,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.Headers.DomainOwner" enum="VariationsHeadersOwner"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>caitlinfischer@google.com</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -282,7 +282,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.Headers.TimeSource" enum="VariationsTimeSource"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>rogerm@google.com</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -323,7 +323,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.Limits.VariationKeySize.{Size}" units="KiB"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>caitlinfischer@google.com</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -344,7 +344,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Variations.LoadPermanentConsistencyCountryResult"
     enum="VariationsPermanentConsistencyCountryResult"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>asvitkine@chromium.org</owner>
   <owner>rkaplow@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
@@ -398,8 +398,29 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Variations.RuntimeMutability.Error.FeatureName"
+    enum="FeatureNameHash" expires_after="2027-06-30">
+  <owner>rogerm@google.com</owner>
+  <owner>src/base/metrics/OWNERS</owner>
+  <summary>
+    Captures the hashed name of a feature for which a runtime mutability
+    operation (registration, state query, state update, etc) failed.
+  </summary>
+</histogram>
+
+<histogram name="Variations.RuntimeMutability.Result"
+    enum="VariationsRuntimeMutabilityResult" expires_after="2027-06-30">
+  <owner>rogerm@google.com</owner>
+  <owner>src/base/metrics/OWNERS</owner>
+  <summary>
+    Captures the result of applying a runtime mutability update. Recored once
+    per runtime-mutable feature update received in each downloaded variations
+    seed.
+  </summary>
+</histogram>
+
 <histogram name="Variations.SafeMode.CrashStreakDiscrepancy" units="crashes"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>caitlinfischer@google.com</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -476,7 +497,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.SafeMode.Streak.FetchFailures" units="failures"
-    expires_after="2026-09-10">
+    expires_after="2027-01-03">
   <owner>asvitkine@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -566,7 +587,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.SeedFetchTimeOnFirstRun" units="ms"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>ginnyhuang@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -614,7 +635,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.SeedFileReadResult.{SeedFile}"
-    enum="VariationsSeedLoadResult" expires_after="2026-10-25">
+    enum="VariationsSeedLoadResult" expires_after="2027-01-03">
   <owner>rcanoaparicio@google.com</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -665,7 +686,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.SeedFreshnessDiff" units="minutes"
-    expires_after="2026-10-04">
+    expires_after="2026-12-06">
   <owner>ntfschr@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -721,7 +742,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.SeedSource.{SeedFile}" enum="SeedSource"
-    expires_after="2026-10-25">
+    expires_after="2027-01-03">
   <owner>rcanoaparicio@google.com</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -756,7 +777,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.StickyAfterQuery.Activation"
-    enum="FieldTrialNameHash" expires_after="2026-11-01">
+    enum="FieldTrialNameHash" expires_after="2027-01-03">
   <owner>asvitkine@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -767,7 +788,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.StickyAfterQuery.PrefParse"
-    enum="FieldTrialNameHash" expires_after="2026-11-01">
+    enum="FieldTrialNameHash" expires_after="2027-01-03">
   <owner>asvitkine@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
   <summary>
@@ -799,7 +820,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.StoreSeedSignature" enum="VariationSeedSignature"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>asvitkine@chromium.org</owner>
   <owner>rkaplow@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
@@ -811,7 +832,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.TimeSinceLastFetchAttempt" units="minutes"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>asvitkine@chromium.org</owner>
   <owner>rkaplow@chromium.org</owner>
   <owner>src/base/metrics/OWNERS</owner>
@@ -843,7 +864,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.WebViewDownloadJobInterval" units="minutes"
-    expires_after="2026-10-11">
+    expires_after="2026-12-13">
   <owner>ntfschr@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>
@@ -854,7 +875,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Variations.WebViewDownloadJobQueueTime" units="minutes"
-    expires_after="2026-10-11">
+    expires_after="2026-12-13">
   <owner>ntfschr@chromium.org</owner>
   <owner>src/android_webview/OWNERS</owner>
   <summary>

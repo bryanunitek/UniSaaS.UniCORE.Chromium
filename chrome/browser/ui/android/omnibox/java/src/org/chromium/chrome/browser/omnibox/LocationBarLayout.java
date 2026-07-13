@@ -18,6 +18,7 @@ import android.widget.ImageButton;
 import androidx.annotation.CallSuper;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.VisibleForTesting;
+import androidx.appcompat.widget.TooltipCompat;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.widget.ImageViewCompat;
 
@@ -48,7 +49,7 @@ public class LocationBarLayout extends ConstraintLayout {
     protected ImageButton mLensButton;
     protected ImageButton mZoomButton;
     protected ImageButton mInstallButton;
-    protected final @Nullable View mNavigateButton;
+    protected final View mNavigateButton;
     protected UrlBar mUrlBar;
     protected final View mLocationBarStatusView;
 
@@ -64,7 +65,7 @@ public class LocationBarLayout extends ConstraintLayout {
     private final int mLocationBarIconStartingPadding;
 
     protected @Nullable CompositeTouchDelegate mCompositeTouchDelegate;
-    protected @Nullable SearchEngineUtils mSearchEngineUtils;
+    protected @Nullable SearchEngineService mSearchEngineService;
     protected boolean mUrlBarLaidOutAtFocusedWidth;
     protected boolean mIsCenteringApplied;
     private int mUrlActionContainerEndMargin;
@@ -281,6 +282,12 @@ public class LocationBarLayout extends ConstraintLayout {
         setButtonVisibility(mDeleteButton, shouldShow);
     }
 
+    /** Sets the tooltip text of the delete URL content button. */
+    /* package */ void setDeleteButtonTooltip(@Nullable String tooltipText) {
+        if (mDeleteButton == null) return;
+        TooltipCompat.setTooltipText(mDeleteButton, tooltipText);
+    }
+
     protected boolean isBackButtonVisible() {
         return false;
     }
@@ -444,8 +451,8 @@ public class LocationBarLayout extends ConstraintLayout {
 
         boolean isInSingleUrlBarMode =
                 isNtpOnPhone
-                        && mSearchEngineUtils != null
-                        && mSearchEngineUtils.doesDefaultSearchEngineHaveLogo();
+                        && mSearchEngineService != null
+                        && mSearchEngineService.doesDefaultSearchEngineHaveLogo();
         if (isInSingleUrlBarMode) {
             translationX +=
                     (getResources().getDimensionPixelSize(R.dimen.fake_search_box_start_padding)
@@ -461,9 +468,9 @@ public class LocationBarLayout extends ConstraintLayout {
         return translationX * (1.0f - percent);
     }
 
-    /** Applies the new SearchEngineUtils. */
-    void setSearchEngineUtils(SearchEngineUtils searchEngineUtils) {
-        mSearchEngineUtils = searchEngineUtils;
+    /** Applies the new SearchEngineService. */
+    void setSearchEngineService(SearchEngineService searchEngineService) {
+        mSearchEngineService = searchEngineService;
     }
 
     /** Returns the source of Voice Recognition interactions. */
@@ -515,6 +522,9 @@ public class LocationBarLayout extends ConstraintLayout {
      */
     /* package */ void onFuseboxStateChanged(@FuseboxState int state) {}
 
+    /** Notify the layout that it has been reparented to a popover container. */
+    /* package */ void setReparentedToPopover(boolean isReparented) {}
+
     /**
      * Returns the view to which the omnibox suggestions list should be aligned to horizontally and
      * vertically.
@@ -561,4 +571,33 @@ public class LocationBarLayout extends ConstraintLayout {
      * suggestions list. See {@link FuseboxLayoutMode}.
      */
     void setFuseboxLayoutMode(@FuseboxLayoutMode int layoutMode) {}
+
+    /** Sets the visibility of the UrlBar and StatusView group. */
+    /* package */ void setUrlAndStatusGroupVisibility(boolean visible) {
+        int visibility = visible ? View.VISIBLE : View.INVISIBLE;
+        mUrlBar.setVisibility(visibility);
+        mLocationBarStatusView.setVisibility(visibility);
+    }
+
+    /**
+     * Informs the location bar whether the autocomplete system is in "standby" i.e. accepting input
+     * but not showing suggestions until input is received.
+     */
+    void setShowStandbyRing(boolean showStandbyRing) {}
+
+    View getUrlBar() {
+        return mUrlBar;
+    }
+
+    View getMicButton() {
+        return mMicButton;
+    }
+
+    View getNavigateButton() {
+        return mNavigateButton;
+    }
+
+    View getDeleteButton() {
+        return mDeleteButton;
+    }
 }

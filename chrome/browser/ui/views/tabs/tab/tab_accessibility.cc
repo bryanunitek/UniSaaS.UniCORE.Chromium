@@ -20,7 +20,6 @@
 #include "components/tabs/public/split_tab_data.h"
 #include "components/tabs/public/tab_group.h"
 #include "components/tabs/public/tab_interface.h"
-#include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/bytes_formatting.h"
 
@@ -202,15 +201,13 @@ std::u16string GetAccessibleTabLabel(const TabInterface* tab, bool is_for_tab) {
     switch (tab_data.collaboration_messaging->collaboration_event()) {
       case collaboration::messaging::CollaborationEvent::TAB_ADDED:
         title = l10n_util::GetStringFUTF16(
-                    IDS_DATA_SHARING_RECENT_ACTIVITY_MEMBER_ADDED_THIS_TAB,
-                    given_name) +
-                u", " + title;
+            IDS_TAB_AX_DATA_SHARING_RECENT_ACTIVITY_MEMBER_ADDED_THIS_TAB,
+            given_name, title);
         break;
       case collaboration::messaging::CollaborationEvent::TAB_UPDATED:
         title = l10n_util::GetStringFUTF16(
-                    IDS_DATA_SHARING_RECENT_ACTIVITY_MEMBER_CHANGED_THIS_TAB,
-                    given_name) +
-                u", " + title;
+            IDS_TAB_AX_DATA_SHARING_RECENT_ACTIVITY_MEMBER_CHANGED_THIS_TAB,
+            given_name, title);
         break;
       default:
         NOTREACHED();

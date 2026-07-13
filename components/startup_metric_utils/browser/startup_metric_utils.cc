@@ -19,6 +19,7 @@
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/threading/scoped_thread_priority.h"
 #include "base/trace_event/trace_event.h"
@@ -29,8 +30,16 @@
 #include <windows.h>
 #include <winternl.h>
 
+#include "base/byte_size.h"
 #include "base/win/windows_handle_util.h"
+#elif BUILDFLAG(IS_MAC)
+#include <mach/mach.h>
+#include <mach/task.h>
+#elif BUILDFLAG(IS_LINUX)
+#include <sys/resource.h>
+#endif
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 namespace {
 
 // These values are taken from the
@@ -52,6 +61,12 @@ constexpr uint32_t kWarmStartHardFaultCountThreshold = 5;
 // and split from chrome_child.dll) and was made 3500 in M81 when chrome.dll
 // was 126MB).
 constexpr uint32_t kColdStartHardFaultCountThreshold = 3500;
+
+}  // namespace
+#endif
+
+#if BUILDFLAG(IS_WIN)
+namespace {
 
 // The struct used to return system process information via the NT internal
 // QuerySystemInformation call. This is partially documented at
@@ -193,10 +208,9 @@ BrowserStartupMetricRecorder::GetHardFaultCountForCurrentProcess() {
   // processes on the entire system, and this can change between calls. Retry
   // a small handful of times growing the buffer along the way.
   // NOTE: The actual required size depends entirely on the number of
-  // processes
-  //       and threads running on the system. The initial guess suffices for
-  //       ~100s of processes and ~1000s of threads.
-  std::vector<uint8_t> buffer(32 * 1024);
+  // processes and threads running on the system. The initial guess suffices for
+  // ~100s of processes and ~1000s of threads.
+  std::vector<uint8_t> buffer(base::KiBU(32).InBytes());
   constexpr int kMaxNumBufferResize = 2;
   int num_buffer_resize = 0;
   for (;;) {
@@ -215,16 +229,23 @@ BrowserStartupMetricRecorder::GetHardFaultCountForCurrentProcess() {
     if (return_length > buffer.size()) {
       // Abort if a large size is required for the buffer. It is undesirable
       // to fill a large buffer just to record histograms.
-      constexpr ULONG kMaxLength = 512 * 1024;
+#if defined(_WIN64)
+      constexpr ULONG kMaxLength =
+          base::MiBU(2).InBytes();  // 2 MB for 64-bit systems
+#else
+      constexpr ULONG kMaxLength =
+          base::KiBU(512).InBytes();  // 512 KB for 32-bit systems
+#endif
       if (return_length >= kMaxLength) {
         return std::nullopt;
       }
 
       // Resize the buffer and retry, if the buffer hasn't already been
-      // resized too many times.
+      // resized too many times. Use double the return length to have padding
+      // for new threads spawned in the meantime.
       if (num_buffer_resize < kMaxNumBufferResize) {
         ++num_buffer_resize;
-        buffer.resize(return_length);
+        buffer.resize(std::min(return_length * 2, kMaxLength));
         continue;
       }
     }
@@ -258,7 +279,32 @@ BrowserStartupMetricRecorder::GetHardFaultCountForCurrentProcess() {
 
   return std::nullopt;
 }
-#endif  // BUILDFLAG(IS_WIN)
+#elif BUILDFLAG(IS_MAC)
+std::optional<uint32_t>
+BrowserStartupMetricRecorder::GetHardFaultCountForCurrentProcess() {
+  task_events_info_data_t events_info;
+  mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
+  // TASK_EVENTS_INFO is passed to task_info() to retrieve event
+  // statistics for a task (such as page faults and pageins). See:
+  // https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/task_info.h
+  kern_return_t kr =
+      task_info(mach_task_self(), TASK_EVENTS_INFO,
+                reinterpret_cast<task_info_t>(&events_info), &count);
+  if (kr != KERN_SUCCESS) {
+    return std::nullopt;
+  }
+  return base::saturated_cast<uint32_t>(events_info.pageins);
+}
+#elif BUILDFLAG(IS_LINUX)
+std::optional<uint32_t>
+BrowserStartupMetricRecorder::GetHardFaultCountForCurrentProcess() {
+  struct rusage usage;
+  if (getrusage(RUSAGE_SELF, &usage) != 0) {
+    return std::nullopt;
+  }
+  return base::saturated_cast<uint32_t>(usage.ru_majflt);
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 void BrowserStartupMetricRecorder::ResetSessionForTesting() {
   GetCommon().ResetSessionForTesting();
@@ -555,7 +601,7 @@ void BrowserStartupMetricRecorder::RecordFirstRunSentinelCreation(
 }
 
 void BrowserStartupMetricRecorder::RecordHardFaultHistogram() {
-#if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   DCHECK_EQ(UNDETERMINED_STARTUP_TEMPERATURE, g_startup_temperature);
 
   const std::optional<uint32_t> hard_fault_count =
@@ -590,7 +636,7 @@ void BrowserStartupMetricRecorder::RecordHardFaultHistogram() {
   // Record the startup 'temperature'.
   base::UmaHistogramEnumeration("Startup.Temperature", g_startup_temperature,
                                 STARTUP_TEMPERATURE_COUNT);
-#endif  // BUILDFLAG(IS_WIN)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 }
 
 bool BrowserStartupMetricRecorder::ShouldLogStartupHistogram() const {

@@ -13,6 +13,7 @@
 #include "base/base_switches.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
@@ -92,7 +93,6 @@
 #include "chrome/common/profiler/core_unwinders.h"
 #include "chrome/common/profiler/thread_profiler_configuration.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "components/color/color_mixers.h"
 #include "components/device_event_log/device_event_log.h"
@@ -119,6 +119,7 @@
 #include "components/site_isolation/site_isolation_policy.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
 #include "components/startup_metric_utils/browser/startup_metric_utils.h"
+#include "components/startup_metric_utils/common/startup_metric_utils.h"
 #include "components/tracing/common/background_tracing_utils.h"
 #include "components/translate/core/browser/translate_metrics_logger_impl.h"
 #include "components/variations/service/variations_service.h"
@@ -134,7 +135,7 @@
 #include "media/audio/audio_manager.h"
 #include "media/base/localized_strings.h"
 #include "net/base/data_url.h"
-#include "net/base/net_module.h"
+#include "net/base/module/net_module.h"
 #include "pdf/buildflags.h"
 #include "rlz/buildflags/buildflags.h"
 #include "services/network/public/cpp/network_switches.h"
@@ -186,7 +187,6 @@
 #include "base/task/task_traits.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/hardware_data_usage_controller.h"
-#include "chrome/browser/ash/settings/metrics_reporting_level_controller.h"
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
 #include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/ui/ash/main_extra_parts/chrome_browser_main_extra_parts_ash.h"
@@ -293,9 +293,6 @@
 #include "chrome/browser/chrome_process_singleton.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 
-#if BUILDFLAG(IS_LINUX)
-#include "base/nix/xdg_util.h"
-#endif
 #endif  // BUILDFLAG(ENABLE_PROCESS_SINGLETON)
 
 #if BUILDFLAG(ENABLE_RLZ) && !BUILDFLAG(IS_CHROMEOS)
@@ -504,13 +501,6 @@ void ProcessSingletonNotificationCallbackImpl(
   if (command_line.HasSwitch(switches::kUninstall)) {
     return;
   }
-#endif
-
-#if BUILDFLAG(IS_LINUX)
-  // Set the global activation token sent as a command line switch by another
-  // browser process. This also removes the switch after use to prevent any side
-  // effects of leaving it in the command line after this point.
-  base::nix::ExtractXdgActivationTokenFromCmdLine(command_line);
 #endif
 
   StartupProfilePathInfo startup_profile_path_info =
@@ -914,6 +904,16 @@ void ChromeBrowserMainParts::StartMetricsRecording() {
   // due to a full system crash. Update the last live timestamp on a slow
   // schedule to get the bast possible accuracy for the assessment.
   g_browser_process->metrics_service()->StartUpdatingLastLiveTimestamp();
+
+  // This code runs in the browser process only and the only reason to skip the
+  // preread there is to be part of the ParallelPreReadFileMainDllWin synthetic
+  // trial. Enroll the client accordingly.
+  const bool synchronous_preread_was_skipped =
+      !startup_metric_utils::GetCommon().DidRecordPreRead();
+  ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
+      "ParallelPreReadFileMainDllWin",
+      synchronous_preread_was_skipped ? "Enabled" : "Control");
+
 #endif
 
   g_browser_process->GetMetricsServicesManager()->UpdateUploadPermissions();
@@ -1225,7 +1225,6 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
 #if BUILDFLAG(IS_CHROMEOS)
   browser_process_->platform_part()->InitializeCrosSettings();
   ash::StatsReportingController::Initialize(local_state);
-  ash::MetricsReportingLevelController::Initialize(local_state);
   arc::StabilityMetricsManager::Initialize(local_state);
   ash::HWDataUsageController::Initialize(local_state);
 #endif
@@ -1684,12 +1683,12 @@ void ChromeBrowserMainParts::PostBrowserStart() {
   webnn::SchedulePlatformRuntimeInstallationIfRequired();
 #endif
 
-  // At this point, StartupBrowserCreator::Start has run creating initial
-  // browser windows and tabs, but no progress has been made in loading
-  // content as the main message loop hasn't started processing tasks yet.
-  // We setup to observe to the initial page load here to defer running
-  // task posted via PostAfterStartupTask until its complete.
-  AfterStartupTaskUtils::StartMonitoringStartup();
+#if !BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(features::kImprovedStartupBestEffortDelay)) {
+    first_idle_ref_ = AfterStartupTaskUtils::RegisterStartupInProgressRef();
+  }
+#endif
+  AfterStartupTaskUtils::BeginMonitoringStartupCompletion();
 }
 
 int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
@@ -1836,6 +1835,14 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
   // Desktop construction occurs here, (required before profile creation).
   PreProfileInit();
 
+  // Register WebUI configs before profile creation, so that profile-level
+  // prewarming has access to registered WebUI data sources. Also login manager
+  // on CrOS is called inside `PostProfileInit()`.
+  content::WebUIControllerFactory::RegisterFactory(
+      ChromeWebUIControllerFactory::GetInstance());
+  RegisterChromeWebUIConfigs();
+  RegisterChromeUntrustedWebUIConfigs();
+
   // This step is costly and is already measured in Startup.CreateFirstProfile
   // and more directly Profile.CreateAndInitializeProfile.
   StartupProfileInfo profile_info = CreateInitialProfile(
@@ -1865,13 +1872,6 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
     language::GeoLanguageProvider::GetInstance()->StartUp(
         browser_process_->local_state());
   }
-
-  // Needs to be done before PostProfileInit, since login manager on CrOS is
-  // called inside PostProfileInit.
-  content::WebUIControllerFactory::RegisterFactory(
-      ChromeWebUIControllerFactory::GetInstance());
-  RegisterChromeWebUIConfigs();
-  RegisterChromeUntrustedWebUIConfigs();
 
 #if BUILDFLAG(IS_ANDROID)
   page_info::SetPageInfoClient(new ChromePageInfoClient());
@@ -2133,7 +2133,7 @@ void ChromeBrowserMainParts::WillRunMainMessageLoop(
   run_loop = std::move(GetMainRunLoopInstance());
 
   // Trace the entry and exit of this main message loop. We don't use the
-  // TRACE_EVENT_BEGIN0 macro because the tracing infrastructure doesn't expect
+  // TRACE_EVENT_BEGIN macro because the tracing infrastructure doesn't expect
   // a synchronous event around the main loop of a thread.
   TRACE_EVENT_BEGIN("toplevel", "ChromeBrowserMainParts::MainMessageLoopRun",
                     perfetto::Track::FromPointer(this));
@@ -2143,6 +2143,9 @@ void ChromeBrowserMainParts::WillRunMainMessageLoop(
 void ChromeBrowserMainParts::OnFirstIdle() {
   startup_metric_utils::GetBrowser().RecordBrowserMainLoopFirstIdle(
       base::TimeTicks::Now());
+#if !BUILDFLAG(IS_ANDROID)
+  first_idle_ref_.reset();
+#endif
 #if BUILDFLAG(IS_ANDROID)
   sharing::ShareHistory::CreateForProfile(
       ProfileManager::GetPrimaryUserProfile());
@@ -2249,7 +2252,6 @@ void ChromeBrowserMainParts::PostDestroyThreads() {
   // Shutting down in the reverse order of Initialize().
   ash::HWDataUsageController::Shutdown();
   arc::StabilityMetricsManager::Shutdown();
-  ash::MetricsReportingLevelController::Shutdown();
   ash::StatsReportingController::Shutdown();
   browser_process_->platform_part()->ShutdownCrosSettings();
 #endif

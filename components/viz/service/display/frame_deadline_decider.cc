@@ -15,73 +15,39 @@
 
 namespace viz {
 
-FrameDeadlineDecider::FrameDeadlineDecider() = default;
+FrameDeadlineDecider::FrameDeadlineDecider(
+    bool use_platform_preferred_deadlines)
+    : use_platform_preferred_deadlines_(use_platform_preferred_deadlines) {}
 
 FrameDeadlineDecider::~FrameDeadlineDecider() = default;
 
-size_t FrameDeadlineDecider::SelectDeadline(
+size_t FrameDeadlineDecider::QueryDeadline(
     const PossibleDeadlines& possible_deadlines,
     base::TimeDelta vsync_interval,
-    int max_pending_swaps,
+    int max_allowed_buffers,
     base::TimeTicks frame_time,
-    std::optional<base::TimeTicks> earliest_input_time) {
-  TRACE_EVENT_BEGIN("toplevel,graphics.pipeline,viz",
-                    "FrameDeadlineDecider::SelectDeadline");
-
-  // Initialize with an out-of-bounds index so that any future early return
-  // paths that fail to assign a valid index will immediately crash via hardened
-  // vector indexing in the cleanup block.
-  size_t result_index = possible_deadlines.deadlines.size();
-
+    std::optional<base::TimeTicks> earliest_input_time) const {
   CHECK(!possible_deadlines.deadlines.empty());
 
-  absl::Cleanup update_sequence_state_and_trace = [&] {
-    curr_sequence_deadline_index_ = result_index;
-    curr_sequence_present_delta_ =
-        possible_deadlines.deadlines[result_index].present_delta;
-
-    TRACE_EVENT_END(
-        "toplevel,graphics.pipeline,viz", [&](perfetto::EventContext ctx) {
-          auto* data = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>()
-                           ->set_android_choreographer_frame_callback_data();
-          auto frame_time_us = frame_time.since_origin().InMicroseconds();
-          data->set_frame_time_us(frame_time_us);
-          auto* timeline = data->set_chrome_preferred_frame_timeline();
-          const auto& selected_deadline =
-              possible_deadlines.deadlines[result_index];
-          selected_deadline.SetTraceTimelineData(*timeline);
-        });
-  };
-
-  bool use_platform_preferred_deadlines = true;
-#if BUILDFLAG(IS_ANDROID)
-  use_platform_preferred_deadlines =
-      !base::FeatureList::IsEnabled(features::kUseAndroidCustomFrameDeadlines);
-#endif  // BUILDFLAG(IS_ANDROID)
-
-  if (use_platform_preferred_deadlines) {
-    result_index = possible_deadlines.os_preferred_index;
-    return result_index;
+  if (use_platform_preferred_deadlines_) {
+    return possible_deadlines.os_preferred_index;
   }
 
   if (in_frame_sequence_) {
-    result_index = FindClosestDeadlineByPresentation(possible_deadlines);
-    return result_index;
+    return FindClosestDeadlineByPresentation(possible_deadlines);
   }
 
-  in_frame_sequence_ = true;
   int presentation_offset = 0;
 #if BUILDFLAG(IS_ANDROID)
   presentation_offset =
       features::kAndroidCustomFrameDeadlinePresentationOffset.Get();
 #endif  // BUILDFLAG(IS_ANDROID)
 
-  int num_buffers = max_pending_swaps + 1;
   // num_buffers * vsync_interval is the maximum presentation interval we would
   // want to target. Since going beyond this threshold means frames would now
   // start stalling for long time, waiting for buffers to be freed. Thus,
   // `presentation_offset` is expected to be non-positive (<= 0).
-  int target_present_multiplier = num_buffers + presentation_offset;
+  int target_present_multiplier = max_allowed_buffers + presentation_offset;
   CHECK_GT(target_present_multiplier, 0);
   base::TimeDelta target_present_delta =
       target_present_multiplier * vsync_interval;
@@ -120,19 +86,49 @@ size_t FrameDeadlineDecider::SelectDeadline(
   const PossibleDeadline& chrome_preferred_deadline = *it;
 
   if (chrome_preferred_deadline.present_delta > target_present_delta) {
-    result_index = possible_deadlines.os_preferred_index;
-    return result_index;
+    return possible_deadlines.os_preferred_index;
   }
 
   if (chrome_preferred_deadline.present_delta <
       possible_deadlines.GetOSPreferredDeadline().present_delta) {
     // Fallback to os preferred deadline instead of reducing the preferred
     // deadline. We are not sure if this would actually happen in field.
-    result_index = possible_deadlines.os_preferred_index;
-    return result_index;
+    return possible_deadlines.os_preferred_index;
   }
 
-  result_index = chrome_preferred_index;
+  return chrome_preferred_index;
+}
+
+size_t FrameDeadlineDecider::SelectDeadline(
+    const PossibleDeadlines& possible_deadlines,
+    base::TimeDelta vsync_interval,
+    int max_allowed_buffers,
+    base::TimeTicks frame_time,
+    std::optional<base::TimeTicks> earliest_input_time) {
+  TRACE_EVENT_BEGIN("toplevel,graphics.pipeline,viz",
+                    "FrameDeadlineDecider::SelectDeadline");
+
+  size_t result_index =
+      QueryDeadline(possible_deadlines, vsync_interval, max_allowed_buffers,
+                    frame_time, earliest_input_time);
+
+  in_frame_sequence_ = true;
+  curr_sequence_deadline_index_ = result_index;
+  curr_sequence_present_delta_ =
+      possible_deadlines.deadlines[result_index].present_delta;
+
+  TRACE_EVENT_END(
+      "toplevel,graphics.pipeline,viz", [&](perfetto::EventContext ctx) {
+        auto* data = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>()
+                         ->set_android_choreographer_frame_callback_data();
+        auto frame_time_us = frame_time.since_origin().InMicroseconds();
+        data->set_frame_time_us(frame_time_us);
+        auto* timeline = data->set_chrome_preferred_frame_timeline();
+        const auto& selected_deadline =
+            possible_deadlines.deadlines[result_index];
+        selected_deadline.SetTraceTimelineData(*timeline);
+      });
+
   return result_index;
 }
 

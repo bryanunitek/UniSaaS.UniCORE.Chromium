@@ -59,8 +59,6 @@ BASE_DECLARE_FEATURE(kAutofillEnableCardBenefitsForBmo);
 COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillEnableCardBenefitsSync);
 COMPONENT_EXPORT(AUTOFILL)
-BASE_DECLARE_FEATURE(kAutofillEnableCardInfoRuntimeRetrieval);
-COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(
     kAutofillEnableCvcStorageAndFillingStandaloneFormEnhancement);
 COMPONENT_EXPORT(AUTOFILL)
@@ -92,6 +90,8 @@ BASE_DECLARE_FEATURE(kAutofillEnablePayNowPayLaterTabs);
 COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillEnablePrefetchingRiskDataForRetrieval);
 COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableResurrectingPaymentsUsers);
+COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillEnableSaveAndFill);
 #if BUILDFLAG(IS_ANDROID)
 COMPONENT_EXPORT(AUTOFILL)
@@ -120,6 +120,12 @@ COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillPrioritizeSaveCardOverMandatoryReauth);
 COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillRetryImageFetchOnFailure);
+#if BUILDFLAG(IS_IOS)
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillSaveCardBottomSheetStrikeLimitIos);
+COMPONENT_EXPORT(AUTOFILL)
+extern const base::FeatureParam<int> kMaxStrikesForSaveCardBottomSheetIos;
+#endif
 COMPONENT_EXPORT(AUTOFILL)
 BASE_DECLARE_FEATURE(kAutofillSkipSaveCardForTabModalPopup);
 #if BUILDFLAG(IS_ANDROID)

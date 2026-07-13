@@ -14,24 +14,25 @@
 namespace blink {
 
 class CSSParserTokenStream;
-class Document;
 class NavigationQuery;
+class NavigationTestExpression;
 class RouteLocation;
 
 class NavigationParser : public ConditionalParser {
  public:
-  static NavigationQuery* ParseQuery(CSSParserTokenStream&, const Document&);
-  static RouteLocation* ParseLocation(CSSParserTokenStream&, const Document&);
+  // https://drafts.csswg.org/css-navigation-1/#typedef-navigation-test
+  //
+  // <navigation-test> = <navigation-location-test> | <navigation-type-test> |
+  // <navigation-phase-test>
+  static NavigationTestExpression* ParseNavigationTest(CSSParserTokenStream&);
+
+  static NavigationQuery* ParseQuery(CSSParserTokenStream&);
+  static RouteLocation* ParseLocation(CSSParserTokenStream&);
   static std::optional<NavigationPreposition> ParsePrepositionIdent(
       CSSParserToken);
 
-  explicit NavigationParser(const Document& document) : document_(document) {}
-
   const ConditionalExpNode* ConsumeLeaf(CSSParserTokenStream&) final;
   const ConditionalExpNode* ConsumeFunction(CSSParserTokenStream&) final;
-
- private:
-  const Document& document_;
 };
 
 }  // namespace blink

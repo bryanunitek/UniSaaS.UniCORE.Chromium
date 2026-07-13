@@ -2,15 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/command_line.h"
 #include "base/run_loop.h"
-#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
@@ -18,7 +16,6 @@
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -26,11 +23,8 @@
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "components/bookmarks/test/bookmark_test_helpers.h"
-#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/test_utils.h"
-#include "ui/base/ui_base_switches.h"
 #include "ui/events/event_utils.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/test/ink_drop_host_test_api.h"
@@ -66,7 +60,13 @@ class StarViewTest : public InProcessBrowserTest {
 };
 
 // Verifies clicking the star bookmarks the page.
-IN_PROC_BROWSER_TEST_F(StarViewTest, BookmarksUrlOnPress) {
+// TODO(https://crbug.com/530890337): Flaky on Win 10 builder.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_BookmarksUrlOnPress DISABLED_BookmarksUrlOnPress
+#else
+#define MAYBE_BookmarksUrlOnPress BookmarksUrlOnPress
+#endif
+IN_PROC_BROWSER_TEST_F(StarViewTest, MAYBE_BookmarksUrlOnPress) {
   bookmarks::BookmarkModel* bookmark_model =
       BookmarkModelFactory::GetForBrowserContext(browser()->profile());
   bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);
@@ -137,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(StarViewTest, InkDropHighlighted) {
     bookmarks::BookmarkModel* model =
         BookmarkModelFactory::GetForBrowserContext(browser()->profile());
     bookmarks::AddIfNotBookmarked(model, url, /*title=*/std::u16string());
-    browser()->window()->ShowBookmarkBubble(url, false);
+    BrowserWindow::FromBrowser(browser())->ShowBookmarkBubble(url, false);
     EXPECT_EQ(ink_drop_test_api.GetInkDrop()->GetTargetInkDropState(),
               views::InkDropState::ACTIVATED);
   }

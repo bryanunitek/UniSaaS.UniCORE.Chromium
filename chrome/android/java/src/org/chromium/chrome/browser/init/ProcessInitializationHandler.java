@@ -64,7 +64,6 @@ import org.chromium.chrome.browser.crash.LogcatExtractionRunnable;
 import org.chromium.chrome.browser.crash.MinidumpUploadServiceImpl;
 import org.chromium.chrome.browser.download.DownloadManagerService;
 import org.chromium.chrome.browser.download.OfflineContentAvailabilityStatusProvider;
-import org.chromium.chrome.browser.enterprise.util.EnterpriseInfo;
 import org.chromium.chrome.browser.feedback.FeedbackPolicyManager;
 import org.chromium.chrome.browser.firstrun.TosDialogBehaviorSharedPrefInvalidator;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -79,7 +78,6 @@ import org.chromium.chrome.browser.media.MediaViewerUtils;
 import org.chromium.chrome.browser.metrics.LaunchMetrics;
 import org.chromium.chrome.browser.metrics.PackageMetrics;
 import org.chromium.chrome.browser.metrics.StorageSystem;
-import org.chromium.chrome.browser.metrics.UmaSessionStats;
 import org.chromium.chrome.browser.metrics.UmaUtils;
 import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
 import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
@@ -128,12 +126,12 @@ import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.minidump_uploader.CrashFileManager;
 import org.chromium.components.optimization_guide.proto.HintsProto;
 import org.chromium.components.policy.CombinedPolicyProvider;
+import org.chromium.components.policy.EnterpriseInfo;
 import org.chromium.components.safe_browsing.SafeBrowsingApiBridge;
 import org.chromium.components.webapps.AppBannerManager;
 import org.chromium.components.webapps.AppDetailsDelegate;
 import org.chromium.content_public.browser.ChildProcessLauncherHelper;
 import org.chromium.content_public.browser.DeviceUtils;
-import org.chromium.content_public.browser.JavalessRenderersFeatureList;
 import org.chromium.content_public.browser.SpeechRecognition;
 import org.chromium.net.NetworkChangeNotifier;
 import org.chromium.net.RegistrationPolicyApplicationStatus;
@@ -490,9 +488,6 @@ public class ProcessInitializationHandler {
         AppHooks.get().registerPolicyProviders(CombinedPolicyProvider.get());
         SpeechRecognition.initialize();
         TrampolineActivityTracker.getInstance().onNativeInitialized();
-
-        JavalessRenderersFeatureList.setRegisterSyntheticFieldTrialCallback(
-                UmaSessionStats::registerSyntheticFieldTrial);
 
         if (GlicEnabling.isEnabledByFlags()) {
             ActorForegroundServiceManager.initialize();

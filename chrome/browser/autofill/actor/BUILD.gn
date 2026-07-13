@@ -13,6 +13,8 @@ static_library("actor") {
     "actor_form_section_splitter.h",
     "actor_key_metrics_recorder.cc",
     "actor_key_metrics_recorder.h",
+    "one_time_tokens/actor_login_context.cc",
+    "one_time_tokens/actor_login_context.h",
     "one_time_tokens/actor_one_time_token_filling_service.h",
     "one_time_tokens/actor_one_time_token_filling_service_impl.cc",
     "one_time_tokens/actor_one_time_token_filling_service_impl.h",
@@ -27,6 +29,7 @@ static_library("actor") {
     "//components/actor/core:journal",
     "//components/autofill/content/browser",
     "//components/one_time_tokens/core/browser",
+    "//components/security_state/content",
     "//components/tabs:public",
   ]
 
@@ -57,6 +60,7 @@ source_set("unit_tests") {
     "//chrome/test:test_support",
     "//components/autofill/content/browser:test_support",
     "//components/one_time_tokens/core/browser",
+    "//components/security_state/content",
     "//components/tabs:test_support",
     "//content/test:test_support",
     "//testing/gmock",

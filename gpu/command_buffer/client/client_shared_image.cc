@@ -182,15 +182,7 @@ base::span<uint8_t> ClientSharedImage::ScopedMapping::GetMemoryForPlane(
 
   CHECK(height_in_pixels);
   CHECK(row_size_in_bytes);
-
-  // Note that the stride might be larger than the row size due to padding.
-  // For all rows other than the last, this is legal data for the client to
-  // access as it's part of the buffer.  However, the final row is not
-  // guaranteed to have padding (it's a system-dependent internal detail).
-  // Thus, the data that is legal for the client to access should *not*
-  // include any bytes beyond the actual end of the final row.
-  size_t span_length =
-      Stride(plane_index) * (height_in_pixels - 1) + row_size_in_bytes;
+  base::span<uint8_t> memory = buffer_->memory(plane_index);
 #if BUILDFLAG(IS_OZONE)
   // We are currently prevented from doing this tightening for
   // NativePixmap-backed MappableBuffers by the fact that
@@ -200,19 +192,18 @@ base::span<uint8_t> ClientSharedImage::ScopedMapping::GetMemoryForPlane(
   // (https://source.chromium.org/chromium/chromium/src/+/main:media/base/video_frame.cc;drc=21e6d1583d1b5683f21556f6125b340d25a6b937;l=527).
   // TODO(crbug.com/404905709): Eliminate that VideoFrame override and do
   // tightening here for NativePixmap.
-  if (buffer_->GetType() == gfx::GpuMemoryBufferType::NATIVE_PIXMAP) {
-    span_length =
-        static_cast<MappableBufferNativePixmap*>(buffer_)->GetPlaneSize(
-            plane_index);
-  }
+  return memory;
+#else
+  // Note that the stride might be larger than the row size.
+  // For all rows other than the last, this is legal data for the client to
+  // access as it's part of the buffer.  However, the final row is not
+  // guaranteed to have padding (it's a system-dependent internal detail).
+  // Thus, the data that is legal for the client to access should *not*
+  // include any bytes beyond the actual end of the final row.
+  size_t span_length =
+      Stride(plane_index) * (height_in_pixels - 1) + row_size_in_bytes;
+  return memory.first(span_length);
 #endif
-
-  // SAFETY: The underlying platform-specific buffer generation mechanisms
-  // guarantee that the buffer contains at least `span_length` bytes following
-  // the start of the plane, as that region is by definition the memory
-  // storing the data of the plane.
-  return UNSAFE_BUFFERS(base::span<uint8_t>(
-      reinterpret_cast<uint8_t*>(buffer_->memory(plane_index)), span_length));
 }
 
 size_t ClientSharedImage::ScopedMapping::Stride(const uint32_t plane_index) {
@@ -677,6 +668,18 @@ gpu::SyncToken ClientSharedImage::BackingWasExternallyUpdated(
   return sii->GenUnverifiedSyncToken();
 }
 
+gpu::SyncToken ClientSharedImage::BackingWasExternallyUpdated(
+    std::unique_ptr<gfx::GpuFence> acquire_fence) {
+  CHECK(sii_holder_);
+  auto sii = GetSharedImageInterface();
+  if (!sii) {
+    return gpu::SyncToken();
+  }
+
+  sii->UpdateSharedImage(SyncToken(), std::move(acquire_fence), mailbox());
+  return sii->GenUnverifiedSyncToken();
+}
+
 void ClientSharedImage::OnMemoryDump(
     base::trace_event::ProcessMemoryDump* pmd,
     const base::trace_event::MemoryAllocatorDumpGuid& buffer_dump_guid,
@@ -923,11 +926,8 @@ ClientSharedImage::BeginWebGPUTextureAccess(
     const wgpu::dawn::wire::client::TextureDescriptor& desc,
     uint64_t usage,
     webgpu::MailboxFlags mailbox_flags) {
-  SCOPED_CRASH_KEY_STRING64("ClientSharedImage", "DebugLabel", debug_label_);
-  SCOPED_CRASH_KEY_STRING256("ClientSharedImage", "Usage",
-                             metadata_.usage.ToString());
-  DUMP_WILL_BE_CHECK(metadata_.usage.Has(SHARED_IMAGE_USAGE_WEBGPU_READ) ||
-                     metadata_.usage.Has(SHARED_IMAGE_USAGE_WEBGPU_WRITE));
+  CHECK(metadata_.usage.Has(SHARED_IMAGE_USAGE_WEBGPU_READ) ||
+        metadata_.usage.Has(SHARED_IMAGE_USAGE_WEBGPU_WRITE));
   return base::WrapUnique(new WebGPUTextureScopedAccess(
       webgpu, this, sync_token, device, desc, usage, mailbox_flags));
 }
@@ -1088,16 +1088,10 @@ WebGPUTextureScopedAccess::WebGPUTextureScopedAccess(
                                          wgpu::TextureUsage::RenderAttachment |
                                          wgpu::TextureUsage::StorageBinding;
   readonly_ = !((desc.usage | wgpu::TextureUsage{usage}) & write_flags);
-  SCOPED_CRASH_KEY_STRING64("ClientSharedImage", "DebugLabel",
-                            shared_image_->debug_label());
-  SCOPED_CRASH_KEY_STRING256("ClientSharedImage", "Usage",
-                             shared_image_->usage().ToString());
   if (readonly_) {
-    DUMP_WILL_BE_CHECK(
-        shared_image_->usage().Has(SHARED_IMAGE_USAGE_WEBGPU_READ));
+    CHECK(shared_image_->usage().Has(SHARED_IMAGE_USAGE_WEBGPU_READ));
   } else {
-    DUMP_WILL_BE_CHECK(
-        shared_image_->usage().Has(SHARED_IMAGE_USAGE_WEBGPU_WRITE));
+    CHECK(shared_image_->usage().Has(SHARED_IMAGE_USAGE_WEBGPU_WRITE));
   }
 
   shared_image_->BeginAccess(readonly_);
@@ -1158,11 +1152,7 @@ ClientSharedImage::BeginWebGPUBufferAccess(
     const wgpu::dawn::wire::client::BufferDescriptor& desc,
     uint64_t usage,
     webgpu::MailboxFlags mailbox_flags) {
-  SCOPED_CRASH_KEY_STRING64("ClientSharedImage", "DebugLabel", debug_label_);
-  SCOPED_CRASH_KEY_STRING256("ClientSharedImage", "Usage",
-                             metadata_.usage.ToString());
-  DUMP_WILL_BE_CHECK(
-      metadata_.usage.Has(SHARED_IMAGE_USAGE_WEBGPU_SHARED_BUFFER));
+  CHECK(metadata_.usage.Has(SHARED_IMAGE_USAGE_WEBGPU_SHARED_BUFFER));
   return base::WrapUnique(new WebGPUBufferScopedAccess(
       webgpu, this, sync_token, device, desc, usage, mailbox_flags));
 }

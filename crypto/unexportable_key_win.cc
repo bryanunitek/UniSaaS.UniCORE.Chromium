@@ -4,11 +4,13 @@
 
 #include "crypto/unexportable_key_win.h"
 
+#include <ncrypt.h>
 #include <tbs.h>
 
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "base/base64.h"
@@ -18,7 +20,8 @@
 #include "base/containers/to_vector.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/numerics/checked_math.h"
+#include "base/notimplemented.h"
+#include "base/numerics/safe_math.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_util_win.h"
@@ -31,21 +34,16 @@
 #include "base/types/expected_macros.h"
 #include "base/types/optional_util.h"
 #include "base/win/delayload_helpers.h"
+#include "crypto/ecdsa_utils.h"
 #include "crypto/hash.h"
 #include "crypto/keypair.h"
 #include "crypto/random.h"
 #include "crypto/sign.h"
 #include "crypto/tpm.rs.h"
+#include "crypto/tpm_parser.h"
 #include "crypto/unexportable_key.h"
 #include "crypto/unexportable_key_metrics.h"
-#include "third_party/boringssl/src/include/openssl/bn.h"
-#include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/ec.h"
-#include "third_party/boringssl/src/include/openssl/ec_key.h"
-#include "third_party/boringssl/src/include/openssl/ecdsa.h"
-#include "third_party/boringssl/src/include/openssl/evp.h"
-#include "third_party/boringssl/src/include/openssl/nid.h"
-#include "third_party/boringssl/src/include/openssl/rsa.h"
 
 namespace crypto {
 
@@ -136,8 +134,10 @@ std::u16string KeyIdToWindowsLabel(base::span<const uint8_t> key_id) {
 }
 
 template <typename T>
-base::expected<T, SECURITY_STATUS> GetNCryptProperty(NCRYPT_HANDLE handle,
-                                                     LPCWSTR property) {
+using SecurityStatusOr = base::expected<T, SECURITY_STATUS>;
+
+template <typename T>
+SecurityStatusOr<T> GetNCryptProperty(NCRYPT_HANDLE handle, LPCWSTR property) {
   T value{};
   DWORD cb_value = 0;
   SECURITY_STATUS status =
@@ -148,6 +148,16 @@ base::expected<T, SECURITY_STATUS> GetNCryptProperty(NCRYPT_HANDLE handle,
   }
   CHECK_EQ(cb_value, sizeof(value));
   return base::ok(value);
+}
+
+template <typename T>
+SecurityStatusOr<void> SetNCryptProperty(NCRYPT_HANDLE handle,
+                                         LPCWSTR property,
+                                         T value) {
+  SECURITY_STATUS status = NCryptSetProperty(
+      handle, property, reinterpret_cast<PBYTE>(&value), sizeof(value), 0);
+  return SUCCEEDED(status) ? SecurityStatusOr<void>()
+                           : base::unexpected(status);
 }
 
 // Logs `status` and `selected_algorithm` to an error histogram capturing that
@@ -165,7 +175,8 @@ void LogTPMOperationError(
   //    2- Errors during `kWrappedKeyCreation` TPM operation.
   if (!open_storage_provider_error) {
     CHECK_EQ(!selected_algorithm.has_value(),
-             operation == TPMOperation::kWrappedKeyCreation);
+             (operation == TPMOperation::kWrappedKeyCreation ||
+              operation == TPMOperation::kWrappedAttestationKeyCreation));
   }
 
   std::string algorithm_string =
@@ -175,11 +186,6 @@ void LogTPMOperationError(
                          OperationToString(operation).c_str(),
                          algorithm_string.c_str()),
       status);
-}
-
-std::vector<uint8_t> CBBToVector(const CBB* cbb) {
-  return std::vector<uint8_t>(CBB_data(cbb),
-                              UNSAFE_TODO(CBB_data(cbb) + CBB_len(cbb)));
 }
 
 // BCryptAlgorithmFor returns the BCrypt algorithm ID for the given Chromium
@@ -275,22 +281,9 @@ bool IsIdentityKey(NCRYPT_KEY_HANDLE key) {
          ((*usage_policy & NCRYPT_PCP_IDENTITY_KEY) != 0);
 }
 
-// Sets the NCRYPT_PCP_IDENTITY_KEY flag in the key's usage policy.
-// This marks the key as an Attestation Identity Key (AIK). This property
-// is specific to the Platform Crypto Provider (TPM) and restricts the key
-// from being used to sign arbitrary data.
-bool SetIdentityKeyPolicy(NCRYPT_KEY_HANDLE key) {
-  DWORD usage_policy = NCRYPT_PCP_IDENTITY_KEY;
-  SECURITY_STATUS status = NCryptSetProperty(
-      key, NCRYPT_PCP_KEY_USAGE_POLICY_PROPERTY,
-      reinterpret_cast<PBYTE>(&usage_policy), sizeof(usage_policy), 0);
-  return SUCCEEDED(status);
-}
-
 // ExportKey returns |key| exported in the given format or nullopt on error.
-base::expected<std::vector<uint8_t>, SECURITY_STATUS> ExportKey(
-    NCRYPT_KEY_HANDLE key,
-    LPCWSTR format) {
+SecurityStatusOr<std::vector<uint8_t>> ExportKey(NCRYPT_KEY_HANDLE key,
+                                                 LPCWSTR format) {
   SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
   DWORD output_size;
   SECURITY_STATUS status =
@@ -311,26 +304,26 @@ base::expected<std::vector<uint8_t>, SECURITY_STATUS> ExportKey(
 }
 
 std::optional<std::vector<uint8_t>> GetP256ECDSASPKI(NCRYPT_KEY_HANDLE key) {
-  const base::expected<std::vector<uint8_t>, SECURITY_STATUS> pub_key =
-      ExportKey(key, BCRYPT_ECCPUBLIC_BLOB);
-  if (!pub_key.has_value()) {
-    return std::nullopt;
-  }
+  ASSIGN_OR_RETURN(const std::vector<uint8_t> pub_key,
+                   ExportKey(key, BCRYPT_ECCPUBLIC_BLOB),
+                   [](auto) { return std::nullopt; });
 
-  // The exported key is a |BCRYPT_ECCKEY_BLOB| followed by the bytes of the
+  // The exported key is a `BCRYPT_ECCKEY_BLOB` followed by the bytes of the
   // public key itself.
   // https://docs.microsoft.com/en-us/windows/win32/api/bcrypt/ns-bcrypt-bcrypt_ecckey_blob
-  BCRYPT_ECCKEY_BLOB header;
-  if (pub_key->size() < sizeof(header)) {
+  base::span pub_key_span = pub_key;
+  if (pub_key_span.size() < sizeof(BCRYPT_ECCKEY_BLOB)) {
     return std::nullopt;
   }
-  UNSAFE_TODO(memcpy(&header, pub_key->data(), sizeof(header)));
+  auto [header_bytes, key_bytes] =
+      pub_key_span.split_at<sizeof(BCRYPT_ECCKEY_BLOB)>();
+  const BCRYPT_ECCKEY_BLOB& header =
+      base::subtle::reinterpret_span<const BCRYPT_ECCKEY_BLOB>(header_bytes)[0];
   // |cbKey| is documented[1] as "the length, in bytes, of the key". It is
   // not. For ECDSA public keys it is the length of a field element.
   if ((header.dwMagic != BCRYPT_ECDSA_PUBLIC_P256_MAGIC &&
        header.dwMagic != BCRYPT_ECDSA_PUBLIC_GENERIC_MAGIC) ||
-      header.cbKey != 256 / 8 ||
-      pub_key->size() - sizeof(BCRYPT_ECCKEY_BLOB) != 64) {
+      header.cbKey != 256 / 8 || key_bytes.size() != 64) {
     return std::nullopt;
   }
 
@@ -344,77 +337,46 @@ std::optional<std::vector<uint8_t>> GetP256ECDSASPKI(NCRYPT_KEY_HANDLE key) {
     }
   }
 
-  uint8_t x962[1 + 32 + 32];
-  UNSAFE_TODO(x962[0]) = POINT_CONVERSION_UNCOMPRESSED;
-  UNSAFE_TODO(
-      memcpy(&x962[1], pub_key->data() + sizeof(BCRYPT_ECCKEY_BLOB), 64));
+  std::array<uint8_t, 1 + 32 + 32> x962 = {POINT_CONVERSION_UNCOMPRESSED};
+  base::span(x962).last<64>().copy_from(key_bytes);
 
-  bssl::UniquePtr<EC_GROUP> p256(
-      EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1));
-  bssl::UniquePtr<EC_POINT> point(EC_POINT_new(p256.get()));
-  if (!EC_POINT_oct2point(p256.get(), point.get(), x962, sizeof(x962),
-                          /*ctx=*/nullptr)) {
-    return std::nullopt;
-  }
-  bssl::UniquePtr<EC_KEY> ec_key(
-      EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
-  CHECK(EC_KEY_set_public_key(ec_key.get(), point.get()));
-  bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
-  CHECK(EVP_PKEY_set1_EC_KEY(pkey.get(), ec_key.get()));
-
-  bssl::ScopedCBB cbb;
-  CHECK(CBB_init(cbb.get(), /*initial_capacity=*/128) &&
-        EVP_marshal_public_key(cbb.get(), pkey.get()));
-  return CBBToVector(cbb.get());
+  return keypair::PublicKey::FromEcP256Point(x962).transform(
+      [](const auto& key) { return key.ToSubjectPublicKeyInfo(); });
 }
 
 std::optional<std::vector<uint8_t>> GetRSASPKI(NCRYPT_KEY_HANDLE key) {
-  const base::expected<std::vector<uint8_t>, SECURITY_STATUS> pub_key =
-      ExportKey(key, BCRYPT_RSAPUBLIC_BLOB);
-  if (!pub_key.has_value()) {
-    return std::nullopt;
-  }
+  ASSIGN_OR_RETURN(const std::vector<uint8_t> pub_key,
+                   ExportKey(key, BCRYPT_RSAPUBLIC_BLOB),
+                   [](auto) { return std::nullopt; });
 
-  // The exported key is a |BCRYPT_RSAKEY_BLOB| followed by the bytes of the
+  base::span pub_key_span = pub_key;
+  // The exported key is a `BCRYPT_RSAKEY_BLOB` followed by the bytes of the
   // key itself.
   // https://docs.microsoft.com/en-us/windows/win32/api/bcrypt/ns-bcrypt-bcrypt_rsakey_blob
-  BCRYPT_RSAKEY_BLOB header;
-  if (pub_key->size() < sizeof(header)) {
+  if (pub_key_span.size() < sizeof(BCRYPT_RSAKEY_BLOB)) {
     return std::nullopt;
   }
-  UNSAFE_TODO(memcpy(&header, pub_key->data(), sizeof(header)));
+  auto [header_bytes, key_bytes] =
+      pub_key_span.split_at<sizeof(BCRYPT_RSAKEY_BLOB)>();
+  const BCRYPT_RSAKEY_BLOB& header =
+      base::subtle::reinterpret_span<const BCRYPT_RSAKEY_BLOB>(header_bytes)[0];
   if (header.Magic != static_cast<ULONG>(BCRYPT_RSAPUBLIC_MAGIC)) {
     return std::nullopt;
   }
 
-  size_t bytes_needed;
-  if (!base::CheckAdd(sizeof(BCRYPT_RSAKEY_BLOB),
-                      base::CheckAdd(header.cbPublicExp, header.cbModulus))
-           .AssignIfValid(&bytes_needed) ||
-      pub_key->size() < bytes_needed) {
+  if (key_bytes.size() <
+      base::ClampedNumeric<size_t>(header.cbPublicExp) + header.cbModulus) {
     return std::nullopt;
   }
 
-  bssl::UniquePtr<BIGNUM> e(
-      BN_bin2bn(UNSAFE_TODO(&pub_key->data()[sizeof(BCRYPT_RSAKEY_BLOB)]),
-                header.cbPublicExp, nullptr));
-  bssl::UniquePtr<BIGNUM> n(BN_bin2bn(
-      UNSAFE_TODO(
-          &pub_key->data()[sizeof(BCRYPT_RSAKEY_BLOB) + header.cbPublicExp]),
-      header.cbModulus, nullptr));
+  auto [e_bytes, rest_bytes] = key_bytes.split_at(header.cbPublicExp);
+  auto n_bytes = rest_bytes.first(header.cbModulus);
 
-  bssl::UniquePtr<RSA> rsa(RSA_new());
-  CHECK(RSA_set0_key(rsa.get(), n.release(), e.release(), nullptr));
-  bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
-  CHECK(EVP_PKEY_set1_RSA(pkey.get(), rsa.get()));
-
-  bssl::ScopedCBB cbb;
-  CHECK(CBB_init(cbb.get(), /*initial_capacity=*/384) &&
-        EVP_marshal_public_key(cbb.get(), pkey.get()));
-  return CBBToVector(cbb.get());
+  return keypair::PublicKey::FromRsaPublicKeyComponents(n_bytes, e_bytes)
+      .transform([](const auto& key) { return key.ToSubjectPublicKeyInfo(); });
 }
 
-base::expected<std::vector<uint8_t>, SECURITY_STATUS> SignECDSA(
+SecurityStatusOr<std::vector<uint8_t>> SignECDSA(
     NCRYPT_KEY_HANDLE key,
     base::span<const uint8_t> data) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
@@ -436,22 +398,13 @@ base::expected<std::vector<uint8_t>, SECURITY_STATUS> SignECDSA(
   }
   CHECK_EQ(sig.size(), sig_size);
 
-  bssl::UniquePtr<BIGNUM> r(BN_bin2bn(sig.data(), 32, nullptr));
-  bssl::UniquePtr<BIGNUM> s(
-      BN_bin2bn(UNSAFE_TODO(sig.data() + 32), 32, nullptr));
-  ECDSA_SIG sig_st;
-  sig_st.r = r.get();
-  sig_st.s = s.get();
-
-  bssl::ScopedCBB cbb;
-  CHECK(CBB_init(cbb.get(), /*initial_capacity=*/72) &&
-        ECDSA_SIG_marshal(cbb.get(), &sig_st));
-  return CBBToVector(cbb.get());
+  auto [r_bytes, s_bytes] = base::span(sig).split_at<32>();
+  return base::OptionalToExpected(
+      ConvertEcdsaRawComponentsToDer(r_bytes, s_bytes), NTE_FAIL);
 }
 
-base::expected<std::vector<uint8_t>, SECURITY_STATUS> SignRSA(
-    NCRYPT_KEY_HANDLE key,
-    base::span<const uint8_t> data) {
+SecurityStatusOr<std::vector<uint8_t>> SignRSA(NCRYPT_KEY_HANDLE key,
+                                               base::span<const uint8_t> data) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::WILL_BLOCK);
 
@@ -481,16 +434,20 @@ base::expected<std::vector<uint8_t>, SECURITY_STATUS> SignRSA(
 }
 
 ScopedNCryptKey LoadWrappedKey(base::span<const uint8_t> wrapped,
-                               ProviderType provider_type) {
+                               ProviderType provider_type,
+                               KeyUsage usage) {
   SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
   ScopedNCryptProvider provider;
   SECURITY_STATUS status =
       NCryptOpenStorageProvider(ScopedNCryptProvider::Receiver(provider).get(),
                                 GetWindowsIdentifierForProvider(provider_type),
                                 /*flags=*/0);
+  TPMOperation operation = usage == KeyUsage::kAttestation
+                               ? TPMOperation::kWrappedAttestationKeyCreation
+                               : TPMOperation::kWrappedKeyCreation;
   if (FAILED(status)) {
-    LogTPMOperationError(TPMOperation::kWrappedKeyCreation, status,
-                         std::nullopt, /*open_storage_provider_error=*/true);
+    LogTPMOperationError(operation, status, std::nullopt,
+                         /*open_storage_provider_error=*/true);
     return ScopedNCryptKey();
   }
 
@@ -514,11 +471,25 @@ ScopedNCryptKey LoadWrappedKey(base::span<const uint8_t> wrapped,
         /*dwFlags=*/NCRYPT_SILENT_FLAG);
   }
   if (FAILED(import_status)) {
-    LogTPMOperationError(TPMOperation::kWrappedKeyCreation, import_status,
-                         std::nullopt);
+    LogTPMOperationError(operation, import_status, std::nullopt);
     return ScopedNCryptKey();
   }
   return key;
+}
+
+tpm::SignatureErrorOr<void> VerifyAndLogTpmSignature(
+    base::span<const uint8_t> spki,
+    base::span<const uint8_t> statement,
+    base::span<const uint8_t> signature_blob) {
+  ASSIGN_OR_RETURN(tpm::SignatureAlgorithms algs,
+                   tpm::GetSignatureAlgorithms(signature_blob));
+  base::UmaHistogramSparse(
+      "Crypto.TPMOperation.Win.TpmCertifyVerify.SignatureAlgorithm",
+      algs.sig_alg);
+  base::UmaHistogramSparse(
+      "Crypto.TPMOperation.Win.TpmCertifyVerify.HashAlgorithm", algs.hash_alg);
+
+  return tpm::VerifySignature(spki, statement, signature_blob);
 }
 
 // ECDSASigningKey wraps a P-256 ECDSA key stored in the given provider.
@@ -613,6 +584,21 @@ class AttestationKeyWin : public WinKeyImpl<UnexportableAttestationKey> {
   AttestationKeyWin(ProviderType provider_type, KeyDetails details)
       : WinKeyImpl(provider_type, std::move(details)) {}
 
+  // UnexportableSigningKey:
+  std::optional<std::vector<uint8_t>> SignSlowly(
+      base::span<const uint8_t> data) override {
+    // TODO(crbug.com/530828835): Implement.
+    NOTIMPLEMENTED();
+    return std::nullopt;
+  }
+
+  bool SupportsTls13() override {
+    // TODO(crbug.com/530828835): Implement.
+    NOTIMPLEMENTED();
+    return false;
+  }
+
+  // UnexportableAttestationKey:
   std::optional<AttestationStatement> CertifySlowly(
       const UnexportableSigningKey& signing_key,
       base::span<const uint8_t> challenge) override {
@@ -671,8 +657,8 @@ class AttestationKeyWin : public WinKeyImpl<UnexportableAttestationKey> {
         log_extract_property_error);
 
     // 3. Construct Command
-    rust::Vec<uint8_t> cmd = crypto::tpm::build_certify_command(
-        object_handle, sign_handle, base::SpanToRustSlice(challenge));
+    std::vector<uint8_t> cmd =
+        tpm::BuildCertifyCommand(object_handle, sign_handle, challenge);
 
     // 4. Submit Command
     // A 4096-byte buffer handles the maximum theoretical TPM response
@@ -699,49 +685,33 @@ class AttestationKeyWin : public WinKeyImpl<UnexportableAttestationKey> {
       return std::nullopt;
     }
 
-    // 5. Parse and Verify via Rust
-    crypto::tpm::CertifyResponse parsed = crypto::tpm::parse_certify_response(
-        base::SpanToRustSlice(base::span(resp).first(resp_len)),
-        base::SpanToRustSlice(challenge));
+    // 5. Parse in Rust by going through the C++ shim.
+    const tpm::CertifyResponseErrorOr<tpm::CertifyResponse> parsed_or_error =
+        tpm::ParseCertifyResponse(base::span(resp).first(resp_len), challenge);
 
+    auto parse_error = parsed_or_error.error_or(
+        tpm::CertifyResponseError(tpm::kNoCertifyResponseErrorForMetrics));
+    base::UmaHistogramEnumeration(
+        "Crypto.TPMOperation.Win.TpmCertifyParse.Result", parse_error.type);
     base::UmaHistogramSparse(
         "Crypto.TPMOperation.Win.TpmCertifyResponse.TpmResponseCode",
-        parsed.tpm_response_code);
+        parse_error.tpm_error_code.value_or(0));
 
+    ASSIGN_OR_RETURN(tpm::CertifyResponse parsed, std::move(parsed_or_error),
+                     [](const auto&) { return std::nullopt; });
+
+    // 6. Verify in C++. C++ supports a wider range of signature algorithms than
+    // Rust.
     base::UmaHistogramEnumeration(
-        "Crypto.TPMOperation.Win.TpmCertifyParse.Result", parsed.result);
-
-    if (parsed.result != crypto::tpm::ParseResult::Ok) {
-      return std::nullopt;
-    }
-
-    crypto::tpm::VerificationResult verified = crypto::tpm::verify_signature(
-        base::SpanToRustSlice(parsed.statement),
-        base::SpanToRustSlice(parsed.signature),
-        base::SpanToRustSlice(GetSubjectPublicKeyInfo()));
-
-    // We log local signature verification failures for telemetry, but do not
-    // early-return (e.g. return std::nullopt). The browser simply forwards
-    // the payload; strict cryptographic enforcement happens on the server.
-    base::UmaHistogramEnumeration(
-        "Crypto.TPMOperation.Win.TpmCertifyVerify.Result", verified);
-
-    crypto::tpm::SignatureAlgorithmsResponse algs =
-        crypto::tpm::extract_signature_algorithms(
-            base::SpanToRustSlice(parsed.signature));
-    if (algs.has_algorithms) {
-      base::UmaHistogramSparse(
-          "Crypto.TPMOperation.Win.TpmCertifyVerify.SignatureAlgorithm",
-          algs.sig_alg);
-      base::UmaHistogramSparse(
-          "Crypto.TPMOperation.Win.TpmCertifyVerify.HashAlgorithm",
-          algs.hash_alg);
-    }
+        "Crypto.TPMOperation.Win.TpmCertifyVerify.Result",
+        VerifyAndLogTpmSignature(GetSubjectPublicKeyInfo(), parsed.statement,
+                                 parsed.signature)
+            .error_or(tpm::kNoSignatureErrorForMetrics));
 
     return AttestationStatement{
         .format = AttestationStatement::kTpm,
-        .statement = base::ToVector(parsed.statement),
-        .signature = base::ToVector(parsed.signature),
+        .statement = std::move(parsed.statement),
+        .signature = std::move(parsed.signature),
     };
   }
 };
@@ -781,6 +751,15 @@ class UnexportableKeyProviderWin : public UnexportableKeyProvider {
     base::ScopedBlockingCall scoped_blocking_call(
         FROM_HERE, base::BlockingType::WILL_BLOCK);
 
+    TPMOperation creation_operation =
+        usage == KeyUsage::kAttestation
+            ? TPMOperation::kNewAttestationKeyCreation
+            : TPMOperation::kNewKeyCreation;
+    TPMOperation export_operation =
+        usage == KeyUsage::kAttestation
+            ? TPMOperation::kWrappedAttestationKeyExport
+            : TPMOperation::kWrappedKeyExport;
+
     ScopedNCryptProvider provider;
     {
       SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
@@ -788,8 +767,7 @@ class UnexportableKeyProviderWin : public UnexportableKeyProvider {
           ScopedNCryptProvider::Receiver(provider).get(),
           GetWindowsIdentifierForProvider(provider_type_), /*flags=*/0);
       if (FAILED(status)) {
-        LogTPMOperationError(TPMOperation::kNewKeyCreation, status,
-                             std::nullopt,
+        LogTPMOperationError(creation_operation, status, std::nullopt,
                              /*open_storage_provider_error=*/true);
         return std::nullopt;
       }
@@ -824,13 +802,36 @@ class UnexportableKeyProviderWin : public UnexportableKeyProvider {
             /*dwLegacyKeySpec=*/0, /*dwFlags=*/0);
       }
       if (FAILED(creation_status)) {
-        LogTPMOperationError(TPMOperation::kNewKeyCreation, creation_status,
-                             algo);
+        LogTPMOperationError(creation_operation, creation_status, algo);
         return std::nullopt;
       }
 
-      if (usage == KeyUsage::kAttestation && !SetIdentityKeyPolicy(key.get())) {
-        return std::nullopt;
+      if (provider_type_ == ProviderType::kTPM &&
+          algo == SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256) {
+        // TPM 2.0 RSA keys created via the Platform Crypto Provider default to
+        // SHA-1 for signing if left unset. Restrict the key to SHA-256 instead.
+        RETURN_IF_ERROR(
+            SetNCryptProperty(
+                key.get(), NCRYPT_PCP_RSA_SCHEME_HASH_ALG_PROPERTY,
+                static_cast<DWORD>(crypto::tpm::TpmAlg::TPM_ALG_SHA256)),
+            [&](SECURITY_STATUS status) {
+              LogTPMOperationError(creation_operation, status, algo);
+              return std::nullopt;
+            });
+      }
+
+      if (usage == KeyUsage::kAttestation) {
+        // Sets the NCRYPT_PCP_IDENTITY_KEY flag in the key's usage policy.
+        // This marks the key as an Attestation Identity Key (AIK). This
+        // property is specific to the Platform Crypto Provider (TPM) and
+        // restricts the key from being used to sign arbitrary data.
+        RETURN_IF_ERROR(
+            SetNCryptProperty(key.get(), NCRYPT_PCP_KEY_USAGE_POLICY_PROPERTY,
+                              NCRYPT_PCP_IDENTITY_KEY),
+            [&](SECURITY_STATUS status) {
+              LogTPMOperationError(creation_operation, status, algo);
+              return std::nullopt;
+            });
       }
 
       if (FAILED(NCryptFinalizeKey(key.get(), NCRYPT_SILENT_FLAG))) {
@@ -840,8 +841,7 @@ class UnexportableKeyProviderWin : public UnexportableKeyProvider {
     if (provider_type_ == ProviderType::kTPM) {
       ASSIGN_OR_RETURN(key_id, ExportKey(key.get(), BCRYPT_OPAQUE_KEY_BLOB),
                        [&](SECURITY_STATUS status) {
-                         LogTPMOperationError(TPMOperation::kWrappedKeyExport,
-                                              status, algo);
+                         LogTPMOperationError(export_operation, status, algo);
                          return std::nullopt;
                        });
     }
@@ -868,7 +868,7 @@ class UnexportableKeyProviderWin : public UnexportableKeyProvider {
     base::ScopedBlockingCall scoped_blocking_call(
         FROM_HERE, base::BlockingType::WILL_BLOCK);
 
-    ScopedNCryptKey key = LoadWrappedKey(wrapped, provider_type_);
+    ScopedNCryptKey key = LoadWrappedKey(wrapped, provider_type_, usage);
     if (!key.is_valid()) {
       return std::nullopt;
     }
@@ -1207,10 +1207,12 @@ class VirtualUnexportableKeyProviderWin
 
 }  // namespace
 
-ScopedNCryptKey DuplicatePlatformKeyHandle(const UnexportableKey& key) {
-  return LoadWrappedKey(key.GetWrappedKey(), key.IsHardwareBacked()
-                                                 ? ProviderType::kTPM
-                                                 : ProviderType::kSoftware);
+ScopedNCryptKey DuplicatePlatformKeyHandle(const UnexportableSigningKey& key) {
+  return LoadWrappedKey(
+      key.GetWrappedKey(),
+      key.IsHardwareBacked() ? ProviderType::kTPM : ProviderType::kSoftware,
+      IsIdentityKey(key.GetNCryptKeyHandle()) ? KeyUsage::kAttestation
+                                              : KeyUsage::kSigning);
 }
 
 std::unique_ptr<UnexportableKeyProvider> GetUnexportableKeyProviderWin() {

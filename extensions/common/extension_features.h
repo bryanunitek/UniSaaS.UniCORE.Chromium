@@ -57,20 +57,11 @@ BASE_DECLARE_FEATURE(kApiMimeHandler);
 // TODO(crbug.com/376354347): Remove this when the experiment is finished.
 BASE_DECLARE_FEATURE(kApiRuntimeActionData);
 
-// Controls the availability of adding and removing site access requests with
-// the permissions API.
-BASE_DECLARE_FEATURE(kApiPermissionsHostAccessRequests);
-
-// Controls the availability of executing user scripts programmatically using
-// the userScripts API.
-BASE_DECLARE_FEATURE(kApiUserScriptsExecute);
-
-// Controls the availability of specifying different world IDs in the
-// userScripts API.
-BASE_DECLARE_FEATURE(kApiUserScriptsMultipleWorlds);
-
 // Controls the availability of the odfsConfigPrivate API.
 BASE_DECLARE_FEATURE(kApiOdfsConfigPrivate);
+
+// Controls the availability of the contextualTasksPrivate API.
+BASE_DECLARE_FEATURE(kApiContextualTasksPrivate);
 
 // Controls the availability of the glicPrivate API.
 BASE_DECLARE_FEATURE(kApiGlicPrivate);
@@ -157,13 +148,6 @@ BASE_DECLARE_FEATURE(kExtensionLocalizationGuid);
 // A replacement key for declaring icons, in addition to supporting dark mode.
 BASE_DECLARE_FEATURE(kExtensionIconVariants);
 
-// A feature to allow legacy MV2 extensions, even if they are not supported by
-// the browser or experiment configuration. This is important to allow
-// developers of MV2 extensions to continue loading, running, and testing their
-// extensions for as long as MV2 is supported in any variant.
-// TODO(https://crbug.com/431097630): Remove this feature.
-BASE_DECLARE_FEATURE(kAllowLegacyMV2Extensions);
-
 // If enabled, allows an extension to specify protocol_handlers keys in the
 // Manifest, registering a group of custom handlers so that the browser can
 // handle navigation requests to URLs with unknown schemes. This feature
@@ -212,17 +196,9 @@ BASE_DECLARE_FEATURE(kExperimentalOmniboxLabs);
 // out of the allowlist.
 BASE_DECLARE_FEATURE(kSafeBrowsingCrxAllowlistAutoDisable);
 
-// When enabled, cause extensions to use structured cloning (instead of JSON
-// serialization) for extension messaging, except when communicating with native
-// messaging hosts.
-BASE_DECLARE_FEATURE(kStructuredCloningForMessaging);
 
 // Controls whether the component webstore hosted app is loaded.
 BASE_DECLARE_FEATURE(kWebstoreHostedApp);
-
-// Used to control whether downloads initiated by `WebstoreInstaller` are marked
-// as having a corresponding user gesture or not.
-BASE_DECLARE_FEATURE(kWebstoreInstallerUserGestureKillSwitch);
 
 ///////////////////////////////////////////////////////////////////////////////
 // STOP!
@@ -273,15 +249,9 @@ BASE_DECLARE_FEATURE(kEnterpriseExtensionDOMActivityTelemetry);
 // capability, even when no other API/feature might be restricted by it.
 BASE_DECLARE_FEATURE(kDebuggerAPIRestrictedToDevMode);
 
-// Creates a `browser` object that can be used in place of `chrome` where
-// extension APIs are available. It does not include non-extension APIs like
-// `loadTimes`, `csi`, etc. or deprecated APIs (e.g. `app`).
-// Also aligns one-time message (e.g. runtime.sendMessage) behavior more closely
-// with the mozilla/webextension-polyfill. This includes supporting
-// chrome.runtime.onMessage() listeners returning a Promise. Also in more error
-// cases (like listeners sending unserializable responses or throwing errors
-// during execution) the error is passed back to the sender.
-BASE_DECLARE_FEATURE(kExtensionBrowserNamespaceAndPolyfillSupport);
+// When enabled, the `browser` namespace is made available on web pages
+// even if they are not externally connectable.
+BASE_DECLARE_FEATURE(kExtensionBrowserNamespaceOnWebPages);
 
 // When enabled, a call to base::ListValue::Clone is avoided when dispatching an
 // extension function. Behind a feature to assess impact
@@ -329,6 +299,14 @@ BASE_DECLARE_FEATURE(kWebRequestSecurityInfo);
 // avoids unnecessary performance overhead and restores navigation
 // optimizations like preconnect.
 BASE_DECLARE_FEATURE(kOptimizeWebRequestProxy);
+
+// When enabled, the browser dispatches blocking webRequest events once per
+// renderer context (using the parent event name) instead of once per listener
+// (using per-listener synthetic sub-event names). The renderer matches
+// listeners itself, reports each blocking listener's response via the
+// `webRequestInternal.eventHandled` function, and signals completion with a
+// single `webRequestInternal.eventHandlingDone` per context.
+BASE_DECLARE_FEATURE(kWebRequestPerContextEventDispatch);
 
 }  // namespace extensions_features
 

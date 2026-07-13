@@ -24,7 +24,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
-#include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/process/process_info.h"
 #include "base/strings/string_number_conversions.h"
@@ -157,7 +156,6 @@
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
 #include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
-#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/browser/ui/window_sizer/window_sizer.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -308,6 +306,7 @@
 #endif  // defined(USE_AURA)
 
 using base::UserMetricsAction;
+using content::GlobalRenderFrameHostId;
 using content::NavigationController;
 using content::NavigationEntry;
 using content::OpenURLParams;
@@ -351,32 +350,7 @@ const extensions::Extension* GetExtensionForOrigin(
 #endif
 }
 
-// Returns a pair [last_window, last_window_for_profile] indicating if `browser`
-// is the only browser in total and for this profile.
-// Ignores browsers that are in the process of closing.
-std::pair<bool, bool> IsLastWindow(const Browser& browser) {
-  bool last_window = true;
-  bool last_window_for_profile = true;
-  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-      [&](BrowserWindowInterface* other_browser) {
-        // Don't count this browser window or any other in the process of
-        // closing. Window closing may be delayed, and windows that are in the
-        // process of closing don't count against our totals.
-        if (other_browser == &browser ||
-            other_browser->capabilities()->IsAttemptingToCloseBrowser()) {
-          return true;
-        }
 
-        last_window = false;
-
-        if (other_browser->GetProfile() == browser.profile()) {
-          last_window_for_profile = false;
-        }
-        return last_window_for_profile;
-      });
-
-  return {last_window, last_window_for_profile};
-}
 
 
 
@@ -529,12 +503,9 @@ Browser::Browser(const CreateParams& params)
               ? nullptr
               : TabGroupModelFactory::GetInstance())),
       app_name_(params.app_name),
-      is_trusted_source_(params.trusted_source),
       session_id_(SessionID::NewUnique()),
       omit_from_session_restore_(params.omit_from_session_restore),
       should_trigger_session_restore_(params.should_trigger_session_restore),
-      cancel_download_confirmation_state_(
-          CancelDownloadConfirmationState::kNotPrompted),
       override_bounds_(params.initial_bounds),
       initial_show_state_(params.initial_show_state),
       initial_workspace_(params.initial_workspace),
@@ -564,12 +535,6 @@ Browser::Browser(const CreateParams& params)
                           base::Unretained(this)));
 
   ProfileMetrics::LogProfileLaunch(profile_);
-
-  if (params.skip_window_init_for_testing) {
-    // This is as initialized as the window will ever get.
-    is_initialized_ = true;
-    return;
-  }
 
   // BrowserWindowFeatures need to be initialized before browser window
   // creation, so that the features can be used in creating components
@@ -635,7 +600,7 @@ Browser::~Browser() {
     // Browser shutdown specifically in cases where clients directly reset
     // the Browser unique_ptr.
     UnloadController::From(this)->set_force_skip_warning_user_on_close(true);
-    OnWindowClosing();
+    UnloadController::From(this)->OnWindowClosing();
   }
 
   // Stop observing notifications and destroy the tab monitor before continuing
@@ -643,6 +608,19 @@ Browser::~Browser() {
   // calls to Browser:: should be avoided while it is being torn down.
 
   window_.reset();
+
+  // If closing the window is going to trigger a shutdown, then we need to
+  // schedule all active downloads to be cancelled. This needs to be after
+  // removing |this| from BrowserList so that OkToClose...() can determine
+  // whether there are any other windows open for the browser.
+  int num_downloads;
+  if (!browser_defaults::kBrowserAliveWithNoWindows &&
+      UnloadController::From(this)->OkToCloseWithInProgressDownloads(
+          &num_downloads) ==
+          UnloadController::DownloadCloseType::kBrowserShutdown) {
+    DownloadCoreService::CancelAllDownloads(
+        DownloadCoreService::CancelDownloadsTrigger::kShutdown);
+  }
 
   // Tear down `BrowserWindowFeatures` to avoid exposing it to Browser in a
   // partially-destroyed state.
@@ -653,18 +631,6 @@ Browser::~Browser() {
   // TODO(crbug.com/40887606): This DCHECK doesn't always pass.
   // TODO(crbug.com/40064092): convert this to CHECK.
   DCHECK(tab_strip_model_->empty());
-
-  // If closing the window is going to trigger a shutdown, then we need to
-  // schedule all active downloads to be cancelled. This needs to be after
-  // removing |this| from BrowserList so that OkToClose...() can determine
-  // whether there are any other windows open for the browser.
-  int num_downloads;
-  if (!browser_defaults::kBrowserAliveWithNoWindows &&
-      OkToCloseWithInProgressDownloads(&num_downloads) ==
-          DownloadCloseType::kBrowserShutdown) {
-    DownloadCoreService::CancelAllDownloads(
-        DownloadCoreService::CancelDownloadsTrigger::kShutdown);
-  }
 
   SessionServiceBase* service = GetAppropriateSessionServiceForProfile(this);
 
@@ -701,103 +667,12 @@ GURL Browser::GetNewTabURL() const {
   return chrome::ChromeUINewTabURLAsGURL();
 }
 
-const std::string& Browser::user_title() const {
-  // WindowMetadataController may not be registered in tests using
-  // skip_window_init_for_testing, which skips BrowserWindowFeatures::Init().
-  auto* controller = WindowMetadataController::From(this);
-  if (!controller) {
-    static const base::NoDestructor<std::string> empty;
-    return *empty;
-  }
-  return controller->user_title();
-}
-
-std::u16string Browser::GetWindowTitleForCurrentTab(
-    bool include_app_name) const {
-  return WindowMetadataController::From(this)->GetWindowTitleForCurrentTab(
-      include_app_name);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // Browser, OnBeforeUnload handling:
 
-Browser::WarnBeforeClosingResult Browser::MaybeWarnBeforeClosing(
-    Browser::WarnBeforeClosingCallback warn_callback) {
-  // If the browser can close right away (we've indicated that we want to skip
-  // before-unload handlers by setting `force_skip_warning_user_on_close_` to
-  // true or there are no pending downloads we need to prompt about) then
-  // there's no need to warn.
-  if (UnloadController::From(this)->force_skip_warning_user_on_close()) {
-    return WarnBeforeClosingResult::kOkToClose;
-  }
-
-  // `CanCloseWithInProgressDownloads()` may trigger a modal dialog.
-  bool can_close_with_downloads = CanCloseWithInProgressDownloads();
-  if (can_close_with_downloads) {
-    return WarnBeforeClosingResult::kOkToClose;
-  }
-
-  DCHECK(!warn_before_closing_callback_)
-      << "Tried to close window during close warning; dialog should be modal.";
-  warn_before_closing_callback_ = std::move(warn_callback);
-
-  return WarnBeforeClosingResult::kDoNotClose;
-}
-
-bool Browser::HandleBeforeClose() {
-  const auto get_closing_status =
-      [this]() -> BrowserWindowInterface::ClosingStatus {
-    // If `force_skip_warning_user_` is true, then we should immediately
-    // return true.
-    if (UnloadController::From(this)->force_skip_warning_user_on_close()) {
-      return BrowserWindowInterface::ClosingStatus::kPermitted;
-    }
-
-    // If the user needs to see one or more warnings, hold off closing the
-    // browser.
-    const WarnBeforeClosingResult result =
-        MaybeWarnBeforeClosing(base::BindOnce(&Browser::FinishWarnBeforeClosing,
-                                              weak_factory_.GetWeakPtr()));
-    if (result == WarnBeforeClosingResult::kDoNotClose) {
-      return BrowserWindowInterface::ClosingStatus::kDeniedByUser;
-    }
-
-    return UnloadController::From(this)->GetBrowserClosingStatus();
-  };
-
-  // Notify clients if close was cancelled.
-  const BrowserWindowInterface::ClosingStatus close_status =
-      get_closing_status();
-  const bool close_permitted =
-      close_status == BrowserWindowInterface::ClosingStatus::kPermitted;
-  if (!close_permitted) {
-    browser_close_cancelled_callback_list_.Notify(this, close_status);
-  }
-  return close_permitted;
-}
-
-bool Browser::TryToCloseWindow(
-    bool skip_beforeunload,
-    const base::RepeatingCallback<void(bool)>& on_close_confirmed) {
-  cancel_download_confirmation_state_ =
-      CancelDownloadConfirmationState::kResponseReceived;
-  return UnloadController::From(this)->TryToCloseWindow(skip_beforeunload,
-                                                        on_close_confirmed);
-}
-
-void Browser::ResetTryToCloseWindow() {
-  cancel_download_confirmation_state_ =
-      CancelDownloadConfirmationState::kNotPrompted;
-  UnloadController::From(this)->ResetTryToCloseWindow();
-}
-
-bool Browser::IsAttemptingToCloseBrowser() const {
-  return UnloadController::From(this)->is_attempting_to_close_browser();
-}
-
-
-void Browser::SetWindowUserTitle(const std::string& user_title) {
-  WindowMetadataController::From(this)->SetWindowUserTitle(user_title);
+void Browser::NotifyWindowCloseCancelled(
+    BrowserWindowInterface::ClosingStatus status) {
+  browser_close_cancelled_callback_list_.Notify(this, status);
 }
 
 BrowserWindowInterface* Browser::GetBrowserForOpeningWebUi() {
@@ -950,14 +825,6 @@ BrowserWindowInterface::Type Browser::GetType() const {
   return type_;
 }
 
-web_app::AppBrowserController* Browser::app_controller() {
-  return web_app::AppBrowserController::From(this);
-}
-
-const web_app::AppBrowserController* Browser::app_controller() const {
-  return web_app::AppBrowserController::From(this);
-}
-
 std::vector<tabs::TabInterface*> Browser::GetAllTabInterfaces() {
   std::vector<tabs::TabInterface*> results;
   results.reserve(tab_strip_model_->count());
@@ -975,8 +842,13 @@ const Browser* Browser::GetBrowserForMigrationOnly() const {
   return this;
 }
 
-bool Browser::IsTabModalPopupDeprecated() const {
-  return is_tab_modal_popup_deprecated_;
+bool Browser::IsTabModalPopup() const {
+  return is_tab_modal_popup_;
+}
+
+void Browser::SetIsTabModalPopup(bool is_tab_modal_popup,
+                                 base::PassKey<internal::ScopedBrowserShower>) {
+  is_tab_modal_popup_ = is_tab_modal_popup;
 }
 
 bool Browser::CreatedBySessionRestore() const {
@@ -1014,130 +886,47 @@ void Browser::DidBecomeInactive() {
   }
 }
 
-void Browser::OnWindowClosing() {
-  // There may be situations where async tasks, such as
-  // UnloadController::ProcessPendingTabs, may call into OnWindowClosing() after
-  // deletion has already been scheduled and closed notifications have been
-  // propagated. No-op in such cases to avoid duplicating browser-closed
-  // handling.
-  if (is_delete_scheduled_) {
-    return;
+void Browser::OnWindowCloseComplete() {
+  // If there are no tabs, then a task will be scheduled (by views) to delete
+  // this Browser.
+  is_delete_scheduled_ = true;
+
+  // At this point the browser has successfully closed and is scheduled for
+  // deletion.
+  browser_did_close_callback_list_.Notify(this);
+
+  // Application should shutdown on last window close if the user is
+  // explicitly trying to quit, or if there is nothing keeping the browser
+  // alive (such as AppController on the Mac, or BackgroundContentsService for
+  // background pages).
+  const bool should_quit_if_last_browser =
+      browser_shutdown::IsTryingToQuit() ||
+      KeepAliveRegistry::GetInstance()->IsKeepingAliveOnlyByBrowserOrigin();
+
+  // Below will not consider browsers for which delete has already been
+  // scheduled.
+  const bool is_last_browser =
+      !GetLastActiveBrowserWindowInterfaceWithAnyProfile();
+
+  if (should_quit_if_last_browser && is_last_browser) {
+    browser_shutdown::OnShutdownStarting(
+        browser_shutdown::ShutdownType::kWindowClose);
   }
 
-  if (!HandleBeforeClose()) {
-    return;
-  }
-
-  // Don't use GetForProfileIfExisting here, we want to force creation of the
-  // session service so that user can restore what was open.
-  SessionServiceBase* service = GetAppropriateSessionServiceForProfile(this);
-
-  if (service) {
-    service->WindowClosing(session_id());
-  }
-
-  sessions::TabRestoreService* tab_restore_service =
-      TabRestoreServiceFactory::GetForProfile(profile());
-
-  bool notify_restore_service = is_type_normal() && tab_strip_model_->count();
-#if defined(USE_AURA) || BUILDFLAG(IS_MAC)
-  notify_restore_service |= is_type_app() || is_type_app_popup();
-#endif
-
-  if (tab_restore_service && notify_restore_service) {
-    tab_restore_service->BrowserClosing(GetFeatures().live_tab_context());
-  }
-
-  if (!tab_strip_model_->empty()) {
-    // Closing all the tabs results in eventually calling back to
-    // OnWindowClosing() again.
-    tab_strip_model_->CloseAllTabs();
-  } else {
-    // If there are no tabs, then a task will be scheduled (by views) to delete
-    // this Browser.
-    is_delete_scheduled_ = true;
-
-    // At this point the browser has successfully closed and is scheduled for
-    // deletion.
-    browser_did_close_callback_list_.Notify(this);
-
-    // Application should shutdown on last window close if the user is
-    // explicitly trying to quit, or if there is nothing keeping the browser
-    // alive (such as AppController on the Mac, or BackgroundContentsService for
-    // background pages).
-    const bool should_quit_if_last_browser =
-        browser_shutdown::IsTryingToQuit() ||
-        KeepAliveRegistry::GetInstance()->IsKeepingAliveOnlyByBrowserOrigin();
-
-    // Below will not consider browsers for which delete has already been
-    // scheduled.
-    const bool is_last_browser =
-        !GetLastActiveBrowserWindowInterfaceWithAnyProfile();
-
-    if (should_quit_if_last_browser && is_last_browser) {
-      browser_shutdown::OnShutdownStarting(
-          browser_shutdown::ShutdownType::kWindowClose);
-    }
-
-    // Once a Browser has successfully closed, client code expects control to
-    // return to the run loop before the instance is finally deleted. To
-    // maintain existing expectations schedule the delete asynchronously here.
-    // TODO(crbug.com/413168662): Explore synchronously destroying the browser
-    // instead.
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(&Browser::SynchronouslyDestroyBrowser,
-                                  weak_factory_.GetWeakPtr()));
-  }
+  // Once a Browser has successfully closed, client code expects control to
+  // return to the run loop before the instance is finally deleted. To
+  // maintain existing expectations schedule the delete asynchronously here.
+  // TODO(crbug.com/413168662): Explore synchronously destroying the browser
+  // instead.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Browser::SynchronouslyDestroyBrowser,
+                                weak_factory_.GetWeakPtr()));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // In-progress download termination handling:
 
-Browser::DownloadCloseType Browser::OkToCloseWithInProgressDownloads(
-    int* num_downloads_blocking) const {
-  DCHECK(num_downloads_blocking);
-  *num_downloads_blocking = 0;
 
-  // If we're not running a full browser process with a profile manager
-  // (testing), it's ok to close the browser.
-  if (!g_browser_process->profile_manager()) {
-    return DownloadCloseType::kOk;
-  }
-
-  int total_download_count =
-      DownloadCoreService::BlockingShutdownCountAllProfiles();
-  if (total_download_count == 0) {
-    return DownloadCloseType::kOk;  // No downloads; can definitely close.
-  }
-
-  // Figure out how many windows are open total, and associated with this
-  // profile, that are relevant for the ok-to-close decision.
-  auto [last_window, last_window_for_profile] = IsLastWindow(*this);
-
-  // If there aren't any other windows, we're at browser shutdown,
-  // which would cancel all current downloads.
-  if (last_window) {
-    *num_downloads_blocking = total_download_count;
-    return DownloadCloseType::kBrowserShutdown;
-  }
-
-  // If there aren't any other windows on our profile, and we're an Incognito
-  // or Guest profile, and there are downloads associated with that profile,
-  // those downloads would be cancelled by our window (-> profile) close.
-  DownloadCoreService* download_core_service =
-      DownloadCoreServiceFactory::GetForBrowserContext(profile());
-  if (last_window_for_profile &&
-      (download_core_service->BlockingShutdownCount() > 0) &&
-      (profile()->IsIncognitoProfile() || profile()->IsGuestSession())) {
-    *num_downloads_blocking = download_core_service->BlockingShutdownCount();
-    return profile()->IsGuestSession()
-               ? DownloadCloseType::kLastWindowInGuestSession
-               : DownloadCloseType::kLastWindowInIncognitoProfile;
-  }
-
-  // Those are the only conditions under which we will block shutdown.
-  return DownloadCloseType::kOk;
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Browser, Tab adding/showing functions:
@@ -1185,11 +974,11 @@ void Browser::UpdateUIForNavigationInTab(WebContents* contents,
 
   bool contents_is_selected =
       contents == tab_strip_model_->GetActiveWebContents();
-  if (user_initiated && contents_is_selected && window()->GetLocationBar()) {
+  if (user_initiated && contents_is_selected && window_->GetLocationBar()) {
     // Forcibly reset the location bar if the url is going to change in the
     // current tab, since otherwise it won't discard any ongoing user edits,
     // since it doesn't realize this is a user-initiated action.
-    window()->GetLocationBar()->Revert();
+    window_->GetLocationBar()->Revert();
   }
 
   std::vector<StatusBubble*> status_bubbles = GetStatusBubbles();
@@ -1212,7 +1001,7 @@ void Browser::UpdateUIForNavigationInTab(WebContents* contents,
   // Note that focusing contents of NTP-initiated navigations is taken care of
   // elsewhere - see FocusTabAfterNavigationHelper.
   if (user_initiated && contents_is_selected &&
-      (window()->IsActive() ||
+      (window_->IsActive() ||
        action == NavigateParams::WindowAction::kShowWindow)) {
     contents->SetInitialFocus();
   }
@@ -1354,15 +1143,15 @@ void Browser::SetFocusToLocationBar() {
 
 void Browser::PreHandleDragUpdate(const content::DropData& drop_data,
                                   const gfx::PointF& client_pt) {
-  window()->PreHandleDragUpdate(drop_data, client_pt);
+  window_->PreHandleDragUpdate(drop_data, client_pt);
 }
 
 void Browser::PreHandleDragExit() {
-  window()->PreHandleDragExit();
+  window_->PreHandleDragExit();
 }
 
 void Browser::HandleDragEnded() {
-  window()->HandleDragEnded();
+  window_->HandleDragEnded();
 }
 
 content::KeyboardEventProcessingResult Browser::PreHandleKeyboardEvent(
@@ -1376,7 +1165,7 @@ content::KeyboardEventProcessingResult Browser::PreHandleKeyboardEvent(
     return content::KeyboardEventProcessingResult::HANDLED;
   }
 
-  return window()->PreHandleKeyboardEvent(event);
+  return window_->PreHandleKeyboardEvent(event);
 }
 
 bool Browser::HandleKeyboardEvent(content::WebContents* source,
@@ -1384,7 +1173,7 @@ bool Browser::HandleKeyboardEvent(content::WebContents* source,
   DevToolsWindow* devtools_window =
       DevToolsWindow::GetInstanceForInspectedWebContents(source);
   return (devtools_window && devtools_window->ForwardKeyboardEvent(event)) ||
-         window()->HandleKeyboardEvent(event);
+         window_->HandleKeyboardEvent(event);
 }
 
 bool Browser::CanDragEnter(content::WebContents* source,
@@ -1939,7 +1728,7 @@ WebContents* Browser::CreateCustomWebContents(
     // to happen in the same tab.
     content::NavigationController::LoadURLParams params(target_url);
     params.initiator_frame_token = opener->GetFrameToken();
-    params.initiator_process_id = opener->GetProcess()->GetDeprecatedID();
+    params.initiator_process_id = opener->GetProcess()->GetID();
     params.initiator_origin = opener->GetLastCommittedOrigin();
     params.source_site_instance = source_site_instance;
     params.transition_type = ui::PAGE_TRANSITION_LINK;
@@ -1960,8 +1749,7 @@ WebContents* Browser::CreateCustomWebContents(
 }
 
 void Browser::WebContentsCreated(WebContents* source_contents,
-                                 int opener_render_process_id,
-                                 int opener_render_frame_id,
+                                 const GlobalRenderFrameHostId& opener_id,
                                  const std::string& frame_name,
                                  const GURL& target_url,
                                  WebContents* new_contents) {
@@ -2021,7 +1809,7 @@ bool Browser::GuestSaveFrame(content::WebContents* guest_web_contents) {
 std::unique_ptr<content::EyeDropper> Browser::OpenEyeDropper(
     content::RenderFrameHost* frame,
     content::EyeDropperListener* listener) {
-  return window()->OpenEyeDropper(frame, listener);
+  return window_->OpenEyeDropper(frame, listener);
 }
 
 bool Browser::ShouldUseInstancedSystemMediaControls() const {
@@ -2868,7 +2656,7 @@ void Browser::ProcessPendingUIUpdates() {
 
       // TODO(crbug.com/40122780): Ideally, we should simply ask the state to
       // update, and doing that in an appropriate and efficient manner.
-      window()->UpdatePageActionIcon(PageActionIconType::kPwaInstall);
+      window_->UpdatePageActionIcon(PageActionIconType::kPwaInstall);
     }
 
     // We don't need to process INVALIDATE_STATE, since that's not visible.
@@ -2919,86 +2707,6 @@ chrome::BrowserCommandController* Browser::GetCommandController() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Browser, Session restore functions (private):
-
-
-///////////////////////////////////////////////////////////////////////////////
-// Browser, In-progress download termination handling (private):
-
-bool Browser::CanCloseWithInProgressDownloads() {
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-  // On Mac and ChromeOS, non-incognito and non-Guest downloads can still
-  // continue after window is closed.
-  if (!profile_->IsOffTheRecord()) {
-    return true;
-  }
-#endif
-
-  // If we've prompted, we need to hear from the user before we
-  // can close.
-  if (cancel_download_confirmation_state_ !=
-      CancelDownloadConfirmationState::kNotPrompted) {
-    return cancel_download_confirmation_state_ !=
-           CancelDownloadConfirmationState::kWaitingForResponse;
-  }
-
-  int num_downloads_blocking;
-  DownloadCloseType dialog_type =
-      OkToCloseWithInProgressDownloads(&num_downloads_blocking);
-  if (dialog_type == DownloadCloseType::kOk) {
-    return true;
-  }
-
-  // Closing this window will kill some downloads; prompt to make sure
-  // that's ok.
-  cancel_download_confirmation_state_ =
-      CancelDownloadConfirmationState::kWaitingForResponse;
-  window_->ConfirmBrowserCloseWithPendingDownloads(
-      num_downloads_blocking, dialog_type,
-      base::BindOnce(&Browser::InProgressDownloadResponse,
-                     weak_factory_.GetWeakPtr()));
-
-  // Return false so the browser does not close.  We'll close if the user
-  // confirms in the dialog.
-  return false;
-}
-
-void Browser::InProgressDownloadResponse(bool cancel_downloads) {
-  if (cancel_downloads) {
-    cancel_download_confirmation_state_ =
-        CancelDownloadConfirmationState::kResponseReceived;
-    std::move(warn_before_closing_callback_)
-        .Run(WarnBeforeClosingResult::kOkToClose);
-    return;
-  }
-
-  // Sets the confirmation state to
-  // CancelDownloadConfirmationState::kNotPrompted so that if the user tries to
-  // close again we'll show the warning again.
-  cancel_download_confirmation_state_ =
-      CancelDownloadConfirmationState::kNotPrompted;
-
-  // Show the download page so the user can figure-out what downloads are still
-  // in-progress.
-  chrome::ShowDownloads(this);
-
-  std::move(warn_before_closing_callback_)
-      .Run(WarnBeforeClosingResult::kDoNotClose);
-}
-
-void Browser::FinishWarnBeforeClosing(WarnBeforeClosingResult result) {
-  switch (result) {
-    case WarnBeforeClosingResult::kOkToClose:
-      chrome::CloseWindow(this);
-      break;
-    case WarnBeforeClosingResult::kDoNotClose:
-      // Reset UnloadController::is_attempting_to_close_browser_ so that we
-      // don't prompt every time any tab is closed. http://crbug.com/40336263
-      UnloadController::From(this)->CancelWindowClose();
-  }
-}
-
-///////////////////////////////////////////////////////////////////////////////
 // Browser, Assorted utility functions (private):
 
 void Browser::SetAsDelegate(WebContents* web_contents, bool set_delegate) {
@@ -3032,7 +2740,7 @@ void Browser::TabDetachedAtImpl(content::WebContents* contents,
     // location bar, saving the current tab's location bar state to a
     // non-selected tab can corrupt both tabs.
     if (was_active) {
-      LocationBar* location_bar = window()->GetLocationBar();
+      LocationBar* location_bar = window_->GetLocationBar();
       if (location_bar) {
         location_bar->SaveStateToContents(contents);
       }
@@ -3159,7 +2867,7 @@ BackgroundContents* Browser::CreateBackgroundContents(
   params.is_renderer_initiated = true;
   if (opener) {
     params.initiator_origin = opener->GetLastCommittedOrigin();
-    params.initiator_process_id = opener->GetProcess()->GetDeprecatedID();
+    params.initiator_process_id = opener->GetProcess()->GetID();
   } else {
     params.initiator_origin = url::Origin::Create(opener_url);
   }

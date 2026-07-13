@@ -87,11 +87,9 @@ void WaitForHistogram(const std::string& histogram_name) {
 }
 
 scoped_refptr<os_crypt_async::Encryptor> GetInstanceSync(
-    os_crypt_async::OSCryptAsync& factory,
-    os_crypt_async::Encryptor::Option option =
-        os_crypt_async::Encryptor::Option::kNone) {
+    os_crypt_async::OSCryptAsync& factory) {
   base::test::TestFuture<scoped_refptr<os_crypt_async::Encryptor>> future;
-  factory.GetInstance(future.GetCallback(), option);
+  factory.GetInstance(future.GetCallback());
   return future.Take();
 }
 
@@ -147,8 +145,8 @@ class AppBoundEncryptionWinTestBase : public InProcessBrowserTest {
 
   std::optional<std::vector<uint8_t>> RetrieveData() {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    return base::ReadFileToBytes(
-        browser()->profile()->GetPath().Append(FILE_PATH_LITERAL("TestData")));
+    return base::ReadFileToBytes(browser()->GetProfile()->GetPath().Append(
+        FILE_PATH_LITERAL("TestData")));
   }
 
   static bool IsPreTest() {

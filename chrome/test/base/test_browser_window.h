@@ -164,7 +164,7 @@ class TestBrowserWindow : public BrowserWindow,
   DownloadBubbleUIController* GetDownloadBubbleUIController() override;
   void ConfirmBrowserCloseWithPendingDownloads(
       int download_count,
-      Browser::DownloadCloseType dialog_type,
+      UnloadController::DownloadCloseType dialog_type,
       base::OnceCallback<void(bool)> callback) override {}
 
   std::unique_ptr<FindBar> CreateFindBar() override;
@@ -206,10 +206,6 @@ class TestBrowserWindow : public BrowserWindow,
 
   void CreateTabSearchBubble() override {}
   void CloseTabSearchBubble() override {}
-
-  bool IsTabModalPopupDeprecated() const override;
-  void SetIsTabModalPopupDeprecated(
-      bool is_tab_modal_popup_deprecated) override;
 
   void set_workspace(std::string workspace) { workspace_ = workspace; }
   void set_visible_on_all_workspaces(bool visible_on_all_workspaces) {
@@ -258,6 +254,7 @@ class TestBrowserWindow : public BrowserWindow,
     bool IsDrawn() const override;
     bool IsFullscreen() const override;
     bool IsEditingOrEmpty() const override;
+    bool IsMouseHovered() const override;
     void InvalidateLayout() override {}
     gfx::Rect Bounds() const override;
     gfx::Rect BoundsInScreen() const override;
@@ -281,7 +278,6 @@ class TestBrowserWindow : public BrowserWindow,
   bool is_active_ = false;
   bool is_closed_ = false;
   bool is_tab_strip_editable_ = true;
-  bool is_tab_modal_popup_deprecated_ = false;
 
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
       browser_collection_observation_{this};

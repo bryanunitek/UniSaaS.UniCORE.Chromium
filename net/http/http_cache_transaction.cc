@@ -4,7 +4,6 @@
 
 #include "net/http/http_cache_transaction.h"
 
-#include "base/byte_count.h"
 #include "build/build_config.h"  // For IS_POSIX
 
 #if BUILDFLAG(IS_POSIX)
@@ -14,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -401,7 +401,8 @@ int HttpCache::Transaction::TransitionToReadingState() {
   // offset is behind the current offset else from the network.
   int disk_entry_size = entry_->GetEntry()->GetDataSize(kResponseContentIndex);
   if (read_offset_ == disk_entry_size ||
-      entry_->writers()->network_read_only()) {
+      entry_->writers()->network_read_only() ||
+      entry_->writers()->compressing_for_cache()) {
     next_state_ = STATE_NETWORK_READ_CACHE_WRITE;
   } else {
     DCHECK_LT(read_offset_, disk_entry_size);
@@ -1714,7 +1715,6 @@ int HttpCache::Transaction::DoCacheReadResponseComplete(int result) {
     CHECK_EQ(compressed_disk_offset_, 0u);
     decompressor_ = std::make_unique<CacheBodyDecompressor>();
     if (!decompressor_->Init()) {
-      DVLOG(1) << "Failed to init zstd decompression for cached entry";
       decompressor_.reset();
       net_log_.AddEvent(NetLogEventType::HTTP_CACHE_DECOMPRESS, [&] {
         base::DictValue params;
@@ -1762,14 +1762,15 @@ int HttpCache::Transaction::DoCacheReadResponseComplete(int result) {
   // mentioned in the associated bug.
   if (!entry_->IsWritingInProgress()) {
     int current_size = entry_->GetEntry()->GetDataSize(kResponseContentIndex);
-    std::optional<base::ByteCount> content_length =
+    std::optional<base::ByteSize> content_length =
         response_.headers->GetContentLength();
 
     // Some resources may have slipped in as truncated when they're not.
     // When body is zstd-compressed, disk size != content_length, so skip
     // this check — the entry was marked complete at finalization time.
     if (!response_.zstd_uncompressed_body_size.has_value() && content_length &&
-        content_length->InBytes() == current_size) {
+        current_size >= 0 &&
+        content_length->InBytes() == base::as_unsigned(current_size)) {
       truncated_ = false;
     }
 
@@ -4014,7 +4015,7 @@ bool HttpCache::Transaction::CanResume(bool has_data) {
 
   // Note that if this is a 206, content-length was already fixed after calling
   // PartialData::ResponseHeadersOK().
-  std::optional<base::ByteCount> content_length =
+  std::optional<base::ByteSize> content_length =
       response_.headers->GetContentLength();
   if (!content_length.has_value() || content_length->is_zero() ||
       response_.headers->HasHeaderValue("Accept-Ranges", "none") ||
@@ -4132,10 +4133,10 @@ void HttpCache::Transaction::RecordHistograms() {
       }
       CACHE_STATUS_HISTOGRAMS(".CSS");
     } else if (mime_type.starts_with("image/")) {
-      std::optional<base::ByteCount> content_length =
+      std::optional<base::ByteSize> content_length =
           response_headers->GetContentLength();
       if (content_length) {
-        if (content_length->InBytes() >= 0 && content_length->InBytes() < 100) {
+        if (content_length->InBytes() < 100) {
           CACHE_STATUS_HISTOGRAMS(".TinyImage");
         } else if (content_length->InBytes() >= 100) {
           CACHE_STATUS_HISTOGRAMS(".NonTinyImage");
@@ -4218,7 +4219,6 @@ void HttpCache::Transaction::RecordHistograms() {
       (!did_send_request &&
        (cache_entry_status_ == CacheEntryStatus::ENTRY_USED ||
         cache_entry_status_ == CacheEntryStatus::ENTRY_CANT_CONDITIONALIZE)));
-
 
   if (!did_send_request) {
     if (cache_entry_status_ == CacheEntryStatus::ENTRY_USED) {

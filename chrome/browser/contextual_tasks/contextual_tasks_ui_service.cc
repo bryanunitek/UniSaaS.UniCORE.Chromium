@@ -39,6 +39,7 @@
 #include "chrome/browser/contextual_tasks/entry_point_eligibility_manager.h"
 #include "chrome/browser/contextual_tasks/guest_opener_user_data.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
@@ -51,6 +52,7 @@
 #include "chrome/common/webui_url_constants.h"
 #include "components/contextual_search/contextual_search_metrics_recorder.h"
 #include "components/contextual_search/contextual_search_service.h"
+#include "components/contextual_search/contextual_search_session_handle.h"
 #include "components/contextual_tasks/public/account_utils.h"
 #include "components/contextual_tasks/public/contextual_task.h"
 #include "components/contextual_tasks/public/contextual_tasks_service.h"
@@ -80,6 +82,7 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
@@ -93,7 +96,8 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/lens/lens_media_link_handler.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"  // nogncheck
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
 #if BUILDFLAG(ENABLE_PDF)
@@ -156,10 +160,10 @@ constexpr net::BackoffEntry::Policy
     kIgnoreFirstErrorRequestAccessTokenBackoffPolicy = {
         // Number of initial errors (in sequence) to ignore before applying
         // exponential back-off rules.
-        1,
+        2,
 
         // Initial delay for exponential back-off in ms.
-        500,
+        150,
 
         // Factor by which the waiting time will be multiplied.
         2,
@@ -169,7 +173,7 @@ constexpr net::BackoffEntry::Policy
         0.2,  // 20%
 
         // Maximum amount of time we are willing to delay our request in ms.
-        10000,  // 10 seconds.
+        2000,  // 2 seconds.
 
         // Time to keep an entry from being discarded even when it
         // has no significant state, -1 to never discard.
@@ -178,6 +182,10 @@ constexpr net::BackoffEntry::Policy
         // Don't use initial delay unless the last request was an error.
         false,
 };
+
+// Heuristic threshold under which an OAuth token fetch is classified as a
+// local cache hit.
+constexpr base::TimeDelta kOAuthCacheHitThreshold = base::Milliseconds(30);
 
 constexpr char kAiPageHost[] = "https://google.com";
 constexpr char kDebugParam[] = "deb";
@@ -235,6 +243,18 @@ EntrypointSource ConvertContextualSearchSourceToEntrypointSource(
   }
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+bool ShouldReloadZeroState(const GURL& url, ContextualTasksUiService* service) {
+  return base::FeatureList::IsEnabled(
+             omnibox::kWebUIOmniboxAskGAboutThisPage) &&
+         ContextualTasksUI::IsZeroState(url, service);
+}
+#else
+bool ShouldReloadZeroState(const GURL& url, ContextualTasksUiService* service) {
+  return false;
+}
+#endif
+
 }  // namespace
 
 ContextualTasksUiService::ContextualTasksUiService(
@@ -279,6 +299,10 @@ void ContextualTasksUiService::Shutdown() {
   }
   tracker_manager_.reset();
   weak_ptr_factory_.InvalidateWeakPtrs();
+  if (current_oauth_fetch_trigger_.has_value()) {
+    RecordOAuthMetrics(GoogleServiceAuthError::CreateRequestCanceled(),
+                       signin::AccessTokenInfo());
+  }
   access_token_fetcher_.reset();
   token_refresh_timer_.Stop();
 }
@@ -299,6 +323,10 @@ void ContextualTasksUiService::OnNavigationToAiPageIntercepted(
                               "OnNavigationToAiPageIntercepted called for URL: "
                            << url;
   CHECK(contextual_tasks_service_);
+
+  // Starts the access token fetch now so it happens in parallel to the WebUI
+  // initializing.
+  StartAccessTokenFetch(OAuthFetchTrigger::kAimNavigationInterception);
 
   // Get the session handle from the source web contents, if provided, to
   // propagate context from the source WebUI.
@@ -354,22 +382,27 @@ void ContextualTasksUiService::OnNavigationToAiPageIntercepted(
       controller->Show();
       contextual_task_web_contents = controller->GetActiveWebContents();
     }
-  } else if (!is_to_new_tab && source_tab) {
-    OMNIBOX_LOG("nav_trace")
-        << "ContextualTasks navigation trace: "
-           "OnNavigationToAiPageIntercepted loading in source tab";
-    source_tab->GetContents()->GetController().LoadURLWithParams(
-        content::NavigationController::LoadURLParams(ui_url));
-    contextual_task_web_contents = source_tab->GetContents();
   } else {
-    OMNIBOX_LOG("nav_trace")
-        << "ContextualTasks navigation trace: "
-           "OnNavigationToAiPageIntercepted opening in new tab";
-    NavigateParams params(profile_, ui_url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    base::RecordAction(
+        base::UserMetricsAction("ContextualTasks.AimFullTab.Shown"));
+    if (!is_to_new_tab && source_tab) {
+      OMNIBOX_LOG("nav_trace")
+          << "ContextualTasks navigation trace: "
+             "OnNavigationToAiPageIntercepted loading in source tab";
+      source_tab->GetContents()->GetController().LoadURLWithParams(
+          content::NavigationController::LoadURLParams(ui_url));
+      contextual_task_web_contents = source_tab->GetContents();
+    } else {
+      OMNIBOX_LOG("nav_trace")
+          << "ContextualTasks navigation trace: "
+             "OnNavigationToAiPageIntercepted opening in new tab";
+      NavigateParams params(profile_, ui_url,
+                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+      params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
 
-    Navigate(&params);
-    contextual_task_web_contents = params.navigated_or_inserted_contents;
+      Navigate(&params);
+      contextual_task_web_contents = params.navigated_or_inserted_contents;
+    }
   }
   // Associate the web contents with the task and set the session handle if
   // provided.
@@ -421,25 +454,89 @@ void ContextualTasksUiService::OnOAuthTokenReceived(
         token_refresh_timer_.Start(
             FROM_HERE, delay,
             base::BindOnce(&ContextualTasksUiService::StartAccessTokenFetch,
-                           weak_ptr_factory_.GetWeakPtr()));
+                           weak_ptr_factory_.GetWeakPtr(), std::nullopt));
       }
       return;
     }
 
-    // TODO(crbug.com/470109970): If at this point the token is empty, the error
-    // is not transient and a blocking error needs to shown to the user to
-    // prevent the user continuing to interact with broken UI.
+    RecordOAuthMetrics(error, access_token_info);
+    request_access_token_backoff_.Reset();
     OMNIBOX_LOG("nav_trace")
         << "ContextualTasks navigation trace: OnOAuthTokenReceived "
            "non-transient error, running callbacks with empty token";
     RunPendingAccessTokenCallbacks("");
     return;
   }
+  RecordOAuthMetrics(error, access_token_info);
   request_access_token_backoff_.Reset();
   OMNIBOX_LOG("nav_trace")
       << "ContextualTasks navigation trace: OnOAuthTokenReceived "
          "success, running callbacks";
   RunPendingAccessTokenCallbacks(access_token_info.token);
+}
+
+void ContextualTasksUiService::RecordOAuthMetrics(
+    GoogleServiceAuthError error,
+    signin::AccessTokenInfo access_token_info) {
+  if (!current_oauth_fetch_trigger_.has_value() ||
+      fetch_start_time_.is_null()) {
+    return;
+  }
+
+  base::TimeDelta latency = base::TimeTicks::Now() - fetch_start_time_;
+  int tries = request_access_token_backoff_.failure_count() + 1;
+  bool success = (error.state() == GoogleServiceAuthError::NONE);
+
+  bool was_cached = false;
+  if (success) {
+    // Heuristic for cache hit.
+    was_cached = (latency < kOAuthCacheHitThreshold);
+  }
+
+  // Record to .All
+  base::UmaHistogramMediumTimes("ContextualTasks.OAuth.Latency.All", latency);
+  base::UmaHistogramExactLinear("ContextualTasks.OAuth.TriesCount.All", tries,
+                                10);
+  if (success) {
+    base::UmaHistogramExactLinear(
+        "ContextualTasks.OAuth.TriesCountBeforeSuccess.All", tries, 10);
+  } else {
+    base::UmaHistogramExactLinear(
+        "ContextualTasks.OAuth.TriesCountBeforeFailure.All", tries, 10);
+  }
+  base::UmaHistogramBoolean("ContextualTasks.OAuth.Success.All", success);
+  if (success) {
+    base::UmaHistogramBoolean("ContextualTasks.OAuth.WasCached.All",
+                              was_cached);
+  }
+
+  // Record to .AimNavigation if applicable
+  if (*current_oauth_fetch_trigger_ ==
+      OAuthFetchTrigger::kAimNavigationInterception) {
+    base::UmaHistogramMediumTimes("ContextualTasks.OAuth.Latency.AimNavigation",
+                                  latency);
+    base::UmaHistogramExactLinear(
+        "ContextualTasks.OAuth.TriesCount.AimNavigation", tries, 10);
+    if (success) {
+      base::UmaHistogramExactLinear(
+          "ContextualTasks.OAuth.TriesCountBeforeSuccess.AimNavigation", tries,
+          10);
+    } else {
+      base::UmaHistogramExactLinear(
+          "ContextualTasks.OAuth.TriesCountBeforeFailure.AimNavigation", tries,
+          10);
+    }
+    base::UmaHistogramBoolean("ContextualTasks.OAuth.Success.AimNavigation",
+                              success);
+    if (success) {
+      base::UmaHistogramBoolean("ContextualTasks.OAuth.WasCached.AimNavigation",
+                                was_cached);
+    }
+  }
+
+  // Reset trigger.
+  current_oauth_fetch_trigger_ = std::nullopt;
+  fetch_start_time_ = base::TimeTicks();
 }
 
 void ContextualTasksUiService::ShowOauthErrorDialogForWebContents(
@@ -567,7 +664,11 @@ static tabs::TabInterface* GetExistingTab(const GURL& url,
   GURL url_no_fragments =
       shared_highlighting::RemoveFragmentSelectorDirectives(url);
   for (int i = 0; i < tab_list->GetTabCount(); ++i) {
-    content::WebContents* web_contents = tab_list->GetTab(i)->GetContents();
+    tabs::TabInterface* tab = tab_list->GetTab(i);
+    content::WebContents* web_contents = tab ? tab->GetContents() : nullptr;
+    if (!web_contents) {
+      continue;
+    }
     std::optional<ContextualTask> task = service->GetContextualTaskForTab(
         SessionTabHelper::IdForTab(web_contents));
     GURL tab_url_no_fragments =
@@ -682,13 +783,8 @@ void ContextualTasksUiService::OnThreadLinkClicked(
   if (GetIsContextualTasksWindowTrackingEnabled() && tracker_manager_) {
     message_proxy_web_contents =
         CreateMessageProxyWebContents(initiator_origin);
-    create_params.opener_render_process_id =
-        message_proxy_web_contents->GetPrimaryMainFrame()
-            ->GetProcess()
-            ->GetID()
-            .value();
-    create_params.opener_render_frame_id =
-        message_proxy_web_contents->GetPrimaryMainFrame()->GetRoutingID();
+    create_params.opener_id =
+        message_proxy_web_contents->GetPrimaryMainFrame()->GetGlobalId();
   }
 
   std::unique_ptr<content::WebContents> new_contents =
@@ -939,6 +1035,16 @@ void ContextualTasksUiService::InitializeTaskInSidePanel(
     std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
         session_handle) {
   AssociateWebContentsToTask(web_contents, task_id);
+  // Retrieve the session handle from pending session handles if it was stored
+  // early to prevent race conditions where the NavigationThrottle checks
+  // eligibility before the handle is associated with the WebContents.
+  if (!session_handle) {
+    auto it = pending_session_handles_.find(task_id);
+    if (it != pending_session_handles_.end()) {
+      session_handle = std::move(it->second);
+      pending_session_handles_.erase(it);
+    }
+  }
   if (session_handle) {
     ContextualSearchWebContentsHelper::GetOrCreateForWebContents(web_contents)
         ->SetTaskSession(task_id, std::move(session_handle),
@@ -976,6 +1082,101 @@ void ContextualTasksUiService::OnSearchResultsNavigationInSidePanel(
   web_ui_interface->TransferNavigationToEmbeddedPage(url_params);
 }
 
+bool ContextualTasksUiService::ShouldRedirectIneligibleRequest(
+    const GURL& url,
+    content::WebContents* source_contents) const {
+  // If it's a top-level frame refresh/navigation while viewing an internal
+  // context, and the user environment isn't eligible, bounce immediately.
+  if (eligibility_manager_ && eligibility_manager_->IsEligible()) {
+    return false;
+  }
+
+  // If the user is signed in and eligible without identity, but identity token
+  // loading is still pending (e.g. during cold start on Android), do not
+  // redirect yet.
+  if (eligibility_manager_ &&
+      eligibility_manager_->IsEligibleWithoutIdentity() && identity_manager_ &&
+      identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSignin) &&
+      !identity_manager_->AreRefreshTokensLoaded()) {
+    return false;
+  }
+
+  base::Uuid task_id;
+  std::string task_id_str;
+  if (net::GetValueForKeyInQuery(url, kTaskQueryParam, &task_id_str)) {
+    task_id = base::Uuid::ParseLowercase(task_id_str);
+  }
+
+  // Bypasses the redirect check if the session was started from Lens and the
+  // Lens side panel unification feature is enabled (either as an active
+  // session or a pending session for the given task ID).
+  if (IsSessionAllowedWhileIneligible(source_contents, task_id)) {
+    return false;
+  }
+
+  if (!IsContextualTasksUrl(url)) {
+    return false;
+  }
+  // Don't intercept internal debugging tools
+  if (url.path() == "/internals") {
+    return false;
+  }
+  // Don't intercept WebUI tests
+  if (url.path() == "/test_loader.html" ||
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kBrowserTest)) {
+    return false;
+  }
+
+  return true;
+}
+
+bool ContextualTasksUiService::IsSessionAllowedWhileIneligible(
+    content::WebContents* web_contents,
+    const base::Uuid& task_id) const {
+  if (!lens::features::IsLensSidePanelUnificationEnabled()) {
+    return false;
+  }
+
+  if (web_contents) {
+    auto* helper =
+        ContextualSearchWebContentsHelper::FromWebContents(web_contents);
+    auto* session_handle = helper ? helper->session_handle() : nullptr;
+    if (session_handle) {
+      auto* metrics_recorder = session_handle->GetMetricsRecorder();
+      if (metrics_recorder &&
+          metrics_recorder->source() ==
+              contextual_search::ContextualSearchSource::kLens) {
+        return true;
+      }
+    }
+  }
+
+  if (task_id.is_valid()) {
+    auto it = pending_session_handles_.find(task_id);
+    if (it != pending_session_handles_.end()) {
+      auto* session_handle = it->second.get();
+      if (session_handle) {
+        auto* metrics_recorder = session_handle->GetMetricsRecorder();
+        if (metrics_recorder &&
+            metrics_recorder->source() ==
+                contextual_search::ContextualSearchSource::kLens) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+void ContextualTasksUiService::AddPendingSessionHandleForTesting(  // IN-TEST
+    const base::Uuid& task_id,
+    std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
+        session_handle) {
+  pending_session_handles_.emplace(task_id, std::move(session_handle));
+}
+
 bool ContextualTasksUiService::HandleNavigation(
     content::OpenURLParams url_params,
     content::WebContents* source_contents,
@@ -1001,25 +1202,33 @@ void ContextualTasksUiService::GetAccessToken(
       << "ContextualTasks navigation trace: GetAccessToken called";
   pending_access_token_callbacks_.emplace_back(std::move(callback),
                                                web_contents);
+  StartAccessTokenFetch(OAuthFetchTrigger::kFetchRequest);
+}
+
+void ContextualTasksUiService::StartAccessTokenFetch(
+    std::optional<OAuthFetchTrigger> trigger) {
+  OMNIBOX_LOG("nav_trace")
+      << "ContextualTasks navigation trace: StartAccessTokenFetch called";
 
   // If a request is already in progress, or we are waiting to retry, do
   // nothing.
   if (access_token_fetcher_ || token_refresh_timer_.IsRunning()) {
     OMNIBOX_LOG("nav_trace")
-        << "ContextualTasks navigation trace: GetAccessToken returning "
+        << "ContextualTasks navigation trace: StartAccessTokenFetch returning "
            "early because fetch is in progress or waiting to retry";
     return;
   }
 
-  OMNIBOX_LOG("nav_trace")
-      << "ContextualTasks navigation trace: GetAccessToken starting "
-         "access token fetch";
-  StartAccessTokenFetch();
-}
+  if (trigger.has_value() && !current_oauth_fetch_trigger_.has_value()) {
+    current_oauth_fetch_trigger_ = trigger;
+    fetch_start_time_ = base::TimeTicks::Now();
+    base::UmaHistogramBoolean("ContextualTasks.OAuth.Start.All", true);
+    if (*trigger == OAuthFetchTrigger::kAimNavigationInterception) {
+      base::UmaHistogramBoolean("ContextualTasks.OAuth.Start.AimNavigation",
+                                true);
+    }
+  }
 
-void ContextualTasksUiService::StartAccessTokenFetch() {
-  OMNIBOX_LOG("nav_trace")
-      << "ContextualTasks navigation trace: StartAccessTokenFetch called";
   token_refresh_timer_.Stop();
 
   if (!identity_manager_ ||
@@ -1027,6 +1236,10 @@ void ContextualTasksUiService::StartAccessTokenFetch() {
     OMNIBOX_LOG("nav_trace")
         << "ContextualTasks navigation trace: StartAccessTokenFetch "
            "returning early due to no primary account";
+    if (current_oauth_fetch_trigger_.has_value()) {
+      RecordOAuthMetrics(GoogleServiceAuthError::CreateAccountNotFound(),
+                         signin::AccessTokenInfo());
+    }
     RunPendingAccessTokenCallbacks("");
     return;
   }
@@ -1066,7 +1279,8 @@ ContextualTasksUiService::CreateMessageProxyWebContents(
 
 void ContextualTasksUiService::OpenUrl(
     const content::OpenURLParams& url_params,
-    const blink::mojom::WindowFeatures& window_features) {
+    const blink::mojom::WindowFeatures& window_features,
+    BrowserWindowInterface* browser) {
   const GURL& url = url_params.url;
   OMNIBOX_LOG("nav_trace")
       << "ContextualTasks navigation trace: OpenUrl called "
@@ -1075,6 +1289,16 @@ void ContextualTasksUiService::OpenUrl(
 
   NavigateParams nav_params(profile_, url, url_params.transition);
   nav_params.FillNavigateParamsFromOpenURLParams(url_params);
+
+  // Browser and tab index have no equivalent in OpenURLParams, so add them to
+  // ensure the tab opens in the right tab strip position.
+  if (browser) {
+    nav_params.browser = browser;
+    TabListInterface* tab_list = TabListInterface::From(browser);
+    if (tab_list) {
+      nav_params.tabstrip_index = tab_list->GetActiveIndex() + 1;
+    }
+  }
   // Reset frame_tree_node_id to avoid targeting the source frame when opening
   // a new tab/window.
   nav_params.frame_tree_node_id = content::FrameTreeNodeId();
@@ -1143,10 +1367,40 @@ bool ContextualTasksUiService::HandleNavigationImpl(
       << (url_params.initiator_origin.has_value()
               ? url_params.initiator_origin->Serialize()
               : "null");
+
+  if (!is_from_embedded_page &&
+      ShouldRedirectIneligibleRequest(url_params.url, source_contents)) {
+    ScheduleRedirectWebUIUrlToAim(
+        std::move(url_params),
+        source_contents ? source_contents->GetWeakPtr() : nullptr, tab);
+    return true;
+  }
+
+  // Whether the navigation is from forward navigation and originally from
+  // a link click. `page_transition` can contain both the original navigation
+  // information (from link click or typed, etc) and the modified one(from
+  // forward/back).
+  ui::PageTransition page_transition = url_params.transition;
+  bool is_forward_link_navigation =
+      (page_transition & ui::PAGE_TRANSITION_FORWARD_BACK) && source_contents &&
+      (source_contents->GetController().GetPendingEntryIndex() >
+       source_contents->GetController().GetLastCommittedEntryIndex()) &&
+      (ui::PageTransitionCoreTypeIs(page_transition,
+                                    ui::PAGE_TRANSITION_LINK) ||
+       ui::PageTransitionCoreTypeIs(page_transition,
+                                    ui::PAGE_TRANSITION_RELOAD));
+
+  bool is_nav_within_existing_session =
+      lens::features::IsLensSidePanelUnificationEnabled() &&
+      (is_from_embedded_page || is_forward_link_navigation) &&
+      source_contents &&
+      IsContextualTasksUrl(source_contents->GetLastCommittedURL());
+
   // Make sure the user is eligible to use the feature before attempting to
   // intercept.
-  if (!eligibility_manager_ ||
-      !eligibility_manager_->IsEligibleWithoutIdentity()) {
+  if (!is_nav_within_existing_session &&
+      (!eligibility_manager_ ||
+       !eligibility_manager_->IsEligibleWithoutIdentity())) {
     OMNIBOX_LOG("nav_trace")
         << "ContextualTasks navigation trace: HandleNavigationImpl "
            "returning early, not eligible";
@@ -1283,7 +1537,8 @@ bool ContextualTasksUiService::HandleNavigationImpl(
   }
 
   // If the user is not signed in to Chrome, do not intercept.
-  if (!IsSignedInToBrowserWithValidCredentials()) {
+  if (!is_nav_within_existing_session &&
+      !IsSignedInToBrowserWithValidCredentials()) {
     OMNIBOX_LOG("nav_trace")
         << "ContextualTasks navigation trace: HandleNavigationImpl "
            "returning false, not signed into browser";
@@ -1292,7 +1547,8 @@ bool ContextualTasksUiService::HandleNavigationImpl(
 
   // If the user is not signed in to the account that is using the URL, do not
   // intercept.
-  if (is_nav_to_ai && !IsUrlForPrimaryAccount(url_params.url)) {
+  if (!is_nav_within_existing_session && is_nav_to_ai &&
+      !IsUrlForPrimaryAccount(url_params.url)) {
     OMNIBOX_LOG("nav_trace")
         << "ContextualTasks navigation trace: HandleNavigationImpl "
            "returning false, not signed into account for AI URL";
@@ -1306,20 +1562,6 @@ bool ContextualTasksUiService::HandleNavigationImpl(
   BrowserWindowInterface* browser =
       tab ? tab->GetBrowserWindowInterface()
           : webui::GetBrowserWindowInterface(source_contents);
-
-  // Whether the navigation is from forward navigation and originally from
-  // a link click. `page_transition` can contain both the original navigation
-  // information (from link click or typed, etc) and the modified one(from
-  // forward/back).
-  ui::PageTransition page_transition = url_params.transition;
-  bool is_forward_link_navigation =
-      (page_transition & ui::PAGE_TRANSITION_FORWARD_BACK) &&
-      (source_contents->GetController().GetPendingEntryIndex() >
-       source_contents->GetController().GetLastCommittedEntryIndex()) &&
-      (ui::PageTransitionCoreTypeIs(page_transition,
-                                    ui::PAGE_TRANSITION_LINK) ||
-       ui::PageTransitionCoreTypeIs(page_transition,
-                                    ui::PAGE_TRANSITION_RELOAD));
 
   // Retrieve the stored open url params from the pending tracker. If found, use
   // those params for this navigation. This is required as the second call to
@@ -1346,6 +1588,14 @@ bool ContextualTasksUiService::HandleNavigationImpl(
         << "ContextualTasks navigation trace: HandleNavigationImpl "
            "overriding url_params with stored params from CanCreateWindow";
   }
+  if (pending_tracker && !url_params.frame_tree_node_id.is_null()) {
+    pending_tracker->SetWebViewFrameTreeNodeId(url_params.frame_tree_node_id);
+    OMNIBOX_LOG("window_tracker")
+        << "Associated webview_frame_tree_node_id: "
+        << url_params.frame_tree_node_id.value() << " with tracker for task: "
+        << pending_tracker->task_id().value().AsLowercaseString();
+  }
+
   // Determine if this is a navigation to a new tab. Its considered new tab
   // if the disposition will be a new tab/window, or if there is a tracked
   // window for this navigation. The tracked window covers cases that go through
@@ -1366,6 +1616,43 @@ bool ContextualTasksUiService::HandleNavigationImpl(
   // unless it is the embedded page.
   if ((is_from_embedded_page || is_forward_link_navigation) &&
       IsContextualTasksUrl(source_contents->GetLastCommittedURL())) {
+    // Check if this navigation is from a <webview> that was created as part of
+    // a window.open call. If so, and it has a actively open WebContents being
+    // tracked, forward the navigation to that window instead. This solves the
+    // flow of a user opening a window via window.open, and then changing its
+    // url via window.location.href.
+    if (!url_params.frame_tree_node_id.is_null()) {
+      ContextualTasksWindowTracker* tracker =
+          tracker_manager_
+              ? tracker_manager_->FindTrackerByWebViewFrameTreeNodeId(
+                    url_params.frame_tree_node_id)
+              : nullptr;
+      if (tracker) {
+        content::WebContents* tab_contents = tracker->GetTabWebContents();
+        if (tab_contents) {
+          OMNIBOX_LOG("window_tracker")
+              << "Redirecting webview navigation to tab. Task: "
+              << tracker->task_id().value().AsLowercaseString()
+              << ", URL: " << url_params.url.spec();
+          base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+              FROM_HERE,
+              base::BindOnce(
+                  [](base::WeakPtr<content::WebContents> wc,
+                     content::OpenURLParams params) {
+                    if (!wc) {
+                      return;
+                    }
+                    content::NavigationController::LoadURLParams load_params(
+                        params);
+                    load_params.frame_tree_node_id = content::FrameTreeNodeId();
+                    wc->GetController().LoadURLWithParams(load_params);
+                  },
+                  tab_contents->GetWeakPtr(), std::move(url_params)));
+          return true;  // Cancel navigation in webview
+        }
+      }
+    }
+
     // If aim is telling the browser what to do with links, the share case
     // doesn't explicitly need to be handled. If aim doesn't communicate this,
     // handle share links specifically to avoid ambiguity with other special-
@@ -1384,7 +1671,7 @@ bool ContextualTasksUiService::HandleNavigationImpl(
           FROM_HERE, base::BindOnce(&ContextualTasksUiService::OpenUrl,
                                     weak_ptr_factory_.GetWeakPtr(),
                                     std::move(new_url_params),
-                                    blink::mojom::WindowFeatures()));
+                                    blink::mojom::WindowFeatures(), browser));
       return true;
     }
 
@@ -1440,8 +1727,10 @@ bool ContextualTasksUiService::HandleNavigationImpl(
           // Allow any navigations to an AI page from embedded page.
           return false;
         }
-      } else if (IsValidSearchResultsPage(url_params.url) || is_nav_to_ai) {
-        if (!lens::HasCommonSearchQueryParameters(url_params.url)) {
+      } else if (IsValidSearchResultsPage(url_params.url) || is_nav_to_ai ||
+                 IsGoogleCaptchaUrl(url_params.url)) {
+        if (!lens::HasCommonSearchQueryParameters(url_params.url) &&
+            !IsGoogleCaptchaUrl(url_params.url)) {
           OMNIBOX_LOG("nav_trace")
               << "ContextualTasks navigation trace: HandleNavigationImpl "
                  "posting OnSearchResultsNavigationInSidePanel";
@@ -1458,10 +1747,11 @@ bool ContextualTasksUiService::HandleNavigationImpl(
         }
 
         // If the params are present and the page is "valid" (e.g. not
-        // shopping and has a query), allow the navigation.
+        // shopping and has a query), or it is a CAPTCHA challenge page, allow
+        // the navigation.
         OMNIBOX_LOG("nav_trace")
             << "ContextualTasks navigation trace: HandleNavigationImpl "
-               "returning false, valid SRP with params";
+               "returning false, valid SRP with params or CAPTCHA URL";
         return false;
       }
     }
@@ -1496,6 +1786,14 @@ bool ContextualTasksUiService::HandleNavigationImpl(
                            weak_ptr_factory_.GetWeakPtr()));
         tracker->SetOpenURLParams(url_params);
         tracker->SetWindowFeatures(window_features);
+        if (!url_params.frame_tree_node_id.is_null()) {
+          tracker->SetWebViewFrameTreeNodeId(url_params.frame_tree_node_id);
+          OMNIBOX_LOG("window_tracker")
+              << "Associated webview_frame_tree_node_id: "
+              << url_params.frame_tree_node_id.value()
+              << " with tracker for task: "
+              << tracker->task_id().value().AsLowercaseString();
+        }
         OMNIBOX_LOG("window_tracker")
             << "Stored window features for URL " << url_params.url.spec()
             << ": bounds=[" << window_features.bounds.x() << ","
@@ -1517,6 +1815,26 @@ bool ContextualTasksUiService::HandleNavigationImpl(
           }
         }
       }
+
+      // On mobile phones without window tracking, link navigations that request
+      // new window creation cannot create separate windows. Intercept them here
+      // and route to `OnThreadLinkClicked` for bottom-sheet handling, whereas
+      // Desktop/AL allows natural window creation and handles AIM links at line
+      // 1846.
+      if (IsAndroidMobileFormFactor()) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(
+                &ContextualTasksUiService::OnThreadLinkClicked,
+                weak_ptr_factory_.GetWeakPtr(), url_params.url, task_id,
+                tab ? tab->GetWeakPtr() : nullptr,
+                browser ? browser->GetWeakPtr() : nullptr,
+                initiator_origin.value_or(source_contents->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin())));
+        return true;  // Return true to cancel natural (unsupported) window
+                      // creation on mobile.
+      }
+
       return false;
     }
 
@@ -1575,7 +1893,8 @@ bool ContextualTasksUiService::HandleNavigationImpl(
                                         std::move(url_params),
                                         pending_tracker
                                             ? pending_tracker->window_features()
-                                            : blink::mojom::WindowFeatures()));
+                                            : blink::mojom::WindowFeatures(),
+                                        browser));
         }
         return true;
       } else {
@@ -1587,7 +1906,8 @@ bool ContextualTasksUiService::HandleNavigationImpl(
                            weak_ptr_factory_.GetWeakPtr(),
                            std::move(url_params),
                            pending_tracker ? pending_tracker->window_features()
-                                           : blink::mojom::WindowFeatures()));
+                                           : blink::mojom::WindowFeatures(),
+                           browser));
         return true;
       }
     } else {
@@ -1659,6 +1979,14 @@ void ContextualTasksUiService::OnBackButtonExpandsSidePanel(
   auto* controller =
       contextual_tasks::ContextualTasksPanelController::From(browser);
   if (controller && controller->IsPanelOpenForContextualTask()) {
+    base::RecordAction(
+        base::UserMetricsAction("ContextualTasks.BackButton.UserAction."
+                                "NavigatedFromSidePanelToFullTab"));
+    base::UmaHistogramBoolean(
+        "ContextualTasks.BackButton.UserAction."
+        "NavigatedFromSidePanelToFullTab",
+        true);
+
     content::WebContents* side_panel_contents =
         controller->GetActiveWebContents();
     controller->MoveTaskUiToNewTab();
@@ -1684,6 +2012,15 @@ void ContextualTasksUiService::OnBackButtonExpandsSidePanel(
                 side_panel_contents->GetController()
                     .GetLastCommittedEntryIndex(),
                 content::RestoreType::kRestored, &entries);
+
+            // Calling Restore() marks the NavigationController with
+            // NeedsReload() = true. Since side_panel_contents is already live
+            // and committed, consume and stop the reload immediately so it does
+            // not refresh when subsequently shown.
+            if (side_panel_contents->GetController().NeedsReload()) {
+              side_panel_contents->GetController().LoadIfNecessary();
+              side_panel_contents->Stop();
+            }
           }
         }
         tab_strip_model->CloseWebContentsAt(
@@ -1703,6 +2040,38 @@ void ContextualTasksUiService::LoadUrlInWebContents(
   content::NavigationController::LoadURLParams params(url);
   params.transition_type = ::ui::PAGE_TRANSITION_AUTO_TOPLEVEL;
   web_contents->GetController().LoadURLWithParams(params);
+}
+
+void ContextualTasksUiService::ScheduleRedirectWebUIUrlToAim(
+    content::OpenURLParams url_params,
+    base::WeakPtr<content::WebContents> source_contents,
+    tabs::TabInterface* target_tab) {
+  url_params.url = GetAiUrlFromWebUIUrl(GetDefaultAiPageUrl(), url_params.url);
+
+  // Fall back to the main active tab window contents if the raw pointer is
+  // unassigned
+  base::WeakPtr<content::WebContents> destination_contents = source_contents;
+  if (!destination_contents && target_tab) {
+    destination_contents = target_tab->GetContents()->GetWeakPtr();
+  }
+
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<content::WebContents> wc,
+                        const content::OpenURLParams& open_url_params) {
+                       if (!wc) {
+                         return;
+                       }
+                       content::NavigationController::LoadURLParams load_params(
+                           open_url_params);
+                       load_params.transition_type =
+                           ui::PAGE_TRANSITION_AUTO_TOPLEVEL;
+
+                       // This triggers the breakout from the secure subframe
+                       // cleanly
+                       wc->GetController().LoadURLWithParams(load_params);
+                     },
+                     destination_contents, std::move(url_params)));
 }
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -2152,7 +2521,22 @@ void ContextualTasksUiService::StartTaskUiInSidePanel(
     tabs::TabInterface* tab_interface,
     const GURL& url,
     std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
-        session_handle) {
+        session_handle,
+    omnibox::ChromeAimEntryPoint entry_point) {
+  StartTaskUiInSidePanel(browser_window_interface, tab_interface, url,
+                         std::move(session_handle),
+                         /*associate_web_contents=*/true, entry_point);
+}
+
+void ContextualTasksUiService::StartTaskUiInSidePanel(
+    BrowserWindowInterface* browser_window_interface,
+    tabs::TabInterface* tab_interface,
+    const GURL& url,
+    std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
+        session_handle,
+    bool associate_web_contents,
+    omnibox::ChromeAimEntryPoint entry_point,
+    bool use_mstk_for_task_association) {
   CHECK(!url.is_empty());
   CHECK(contextual_tasks_service_);
 
@@ -2169,13 +2553,45 @@ void ContextualTasksUiService::StartTaskUiInSidePanel(
 
   // Create a task for the URL if the side panel wasn't already showing a task.
   if (!panel_contents || !controller->IsPanelOpenForContextualTask()) {
-    ContextualTask task = contextual_tasks_service_->CreateTaskFromUrl(url);
-    task_id_to_creation_url_[task.GetTaskId()] = url;
-    AssociateWebContentsToTask(tab_interface->GetContents(), task.GetTaskId());
-    controller->Show();
+    base::Uuid task_id;
+    if (use_mstk_for_task_association) {
+      std::string mstk;
+      if (net::GetValueForKeyInQuery(url, "mstk", &mstk)) {
+        for (const auto& [id, initial_mstk] : task_id_to_initial_mstk_) {
+          if (initial_mstk == mstk) {
+            task_id = id;
+            break;
+          }
+        }
+      }
+    }
 
-    InitializeTaskInSidePanel(controller->GetActiveWebContents(),
-                              task.GetTaskId(), std::move(session_handle));
+    if (!task_id.is_valid()) {
+      ContextualTask task = contextual_tasks_service_->CreateTaskFromUrl(url);
+      task_id = task.GetTaskId();
+      task_id_to_creation_url_[task_id] = url;
+      std::string mstk;
+      if (net::GetValueForKeyInQuery(url, "mstk", &mstk)) {
+        task_id_to_initial_mstk_[task_id] = mstk;
+      }
+    }
+
+    if (associate_web_contents) {
+      AssociateWebContentsToTask(tab_interface->GetContents(), task_id);
+    } else {
+      // Associating the WebContents is used for two things, 1) to know which
+      // task to open next to the given WebContents and 2) add the WebContents
+      // as context implicitly. We don't want to do the latter, so set the
+      // pending task so the former still happens.
+      controller->SetPendingTaskForTab(tab_interface, task_id);
+    }
+    if (session_handle) {
+      pending_session_handles_.emplace(task_id, std::move(session_handle));
+    }
+    controller->Show(/*transition_from_tab=*/false, entry_point);
+
+    InitializeTaskInSidePanel(controller->GetActiveWebContents(), task_id,
+                              nullptr);
     return;
   }
 
@@ -2196,6 +2612,22 @@ void ContextualTasksUiService::StartTaskUiInSidePanel(
   // navigation directly to the embedded page.
   if (ContextualTasksUIInterface* web_ui_interface =
           GetWebUiInterface(panel_contents)) {
+    if (ShouldReloadZeroState(url, this)) {
+      // Cleanly start over: Create a new task and reload the parent WebUI.
+      ContextualTask task = contextual_tasks_service_->CreateTaskFromUrl(url);
+      task_id_to_creation_url_[task.GetTaskId()] = url;
+      AssociateWebContentsToTask(tab_interface->GetContents(),
+                                 task.GetTaskId());
+
+      content::NavigationController::LoadURLParams load_params(
+          GetContextualTaskUrlForTask(task.GetTaskId()));
+      panel_contents->GetController().LoadURLWithParams(load_params);
+
+      InitializeTaskInSidePanel(panel_contents, task.GetTaskId(),
+                                std::move(session_handle));
+      return;
+    }
+
     content::OpenURLParams url_params(
         url, content::Referrer(), WindowOpenDisposition::CURRENT_TAB,
         ui::PAGE_TRANSITION_LINK, /*is_renderer_initiated=*/false);
@@ -2207,7 +2639,8 @@ void ContextualTasksUiService::InitSidePanelWithGhostLoader(
     BrowserWindowInterface* browser_window_interface,
     tabs::TabInterface* tab_interface,
     std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
-        session_handle) {
+        session_handle,
+    omnibox::ChromeAimEntryPoint entry_point) {
   CHECK(contextual_tasks_service_);
 
   // Get the controller for the current window.
@@ -2225,17 +2658,22 @@ void ContextualTasksUiService::InitSidePanelWithGhostLoader(
   ContextualTask task = contextual_tasks_service_->CreateTask();
   tasks_waiting_for_url_[task.GetTaskId()] = base::NullCallback();
   AssociateWebContentsToTask(tab_interface->GetContents(), task.GetTaskId());
-  controller->Show();
+  if (session_handle) {
+    pending_session_handles_.emplace(task.GetTaskId(),
+                                     std::move(session_handle));
+  }
+  controller->Show(/*transition_from_tab=*/false, entry_point);
 
   InitializeTaskInSidePanel(controller->GetActiveWebContents(),
-                            task.GetTaskId(), std::move(session_handle));
+                            task.GetTaskId(), nullptr);
 }
 
 void ContextualTasksUiService::StartTaskUiInSidePanelWithErrorPage(
     BrowserWindowInterface* browser_window_interface,
     tabs::TabInterface* tab_interface,
     std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
-        session_handle) {
+        session_handle,
+    omnibox::ChromeAimEntryPoint entry_point) {
   // Abort if the tab is no longer active to prevent opening the panel on the
   // wrong tab.
   if (!tab_interface || !tab_interface->IsActivated()) {
@@ -2259,12 +2697,17 @@ void ContextualTasksUiService::StartTaskUiInSidePanelWithErrorPage(
       !panel_contents || !controller->IsPanelOpenForContextualTask();
   if (panel_was_closed) {
     pending_error_page_tasks_.emplace(task.GetTaskId(), source);
-    controller->Show();
+    if (session_handle) {
+      pending_session_handles_.emplace(task.GetTaskId(),
+                                       std::move(session_handle));
+    }
+    controller->Show(/*transition_from_tab=*/false, entry_point);
   }
 
   content::WebContents* web_contents = controller->GetActiveWebContents();
-  InitializeTaskInSidePanel(web_contents, task.GetTaskId(),
-                            std::move(session_handle));
+  InitializeTaskInSidePanel(
+      web_contents, task.GetTaskId(),
+      panel_was_closed ? nullptr : std::move(session_handle));
 
   if (!panel_was_closed) {
     if (auto* web_ui_interface = GetWebUiInterface(web_contents)) {
@@ -2341,6 +2784,14 @@ bool ContextualTasksUiService::IsValidSearchResultsPage(const GURL& url) {
           !value.empty());
 }
 
+bool ContextualTasksUiService::IsGoogleCaptchaUrl(const GURL& url) {
+  if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS() || !IsAllowedHost(url)) {
+    return false;
+  }
+
+  return base::StartsWith(url.path(), "/sorry/");
+}
+
 GURL ContextualTasksUiService::CopyParamsFromWebUIUrl(const GURL& base_url,
                                                       const GURL& webui_url) {
   std::string host_value;
@@ -2379,6 +2830,14 @@ GURL ContextualTasksUiService::CopyParamsFromWebUIUrl(const GURL& base_url,
       aim_url = net::AppendOrReplaceQueryParameter(aim_url, key, value);
     }
     it.Advance();
+  }
+
+  if (webui_url.has_ref()) {
+    aim_url = net::AppendOrReplaceRef(aim_url, webui_url.ref());
+  } else {
+    GURL::Replacements replacements;
+    replacements.ClearRef();
+    aim_url = aim_url.ReplaceComponents(replacements);
   }
 
   return aim_url;

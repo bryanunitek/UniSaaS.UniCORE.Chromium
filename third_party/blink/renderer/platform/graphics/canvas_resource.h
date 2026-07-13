@@ -58,9 +58,6 @@ class PLATFORM_EXPORT CanvasResource : public gpu::ClientImage {
       const gpu::SyncToken& sync_token,
       bool is_lost)>;
 
-  using LastUnrefCallback = base::OnceCallback<void(
-      scoped_refptr<blink::CanvasResource> canvas_resource)>;
-
   // Returns true if this instance creates TransferableResources for usage with
   // GPU compositing.
   virtual bool CreatesAcceleratedTransferableResources() const = 0;
@@ -142,7 +139,7 @@ class PLATFORM_EXPORT CanvasResource : public gpu::ClientImage {
   const scoped_refptr<base::SingleThreadTaskRunner> owning_thread_task_runner_;
 
  private:
-  friend class CanvasResourceProviderTest;
+  friend class Canvas2DResourceProviderTest;
   friend class WebGPUMailboxTexture;
   friend class ExportedCanvasResource;
 
@@ -235,12 +232,7 @@ class PLATFORM_EXPORT CanvasResourceSharedImage final : public CanvasResource {
   // Should be called only if the resource is using software raster.
   void UploadSoftwareRenderingResults(SkSurface* sk_surface);
 
-  void PrepareForWebGPUDummyMailbox();
-
  private:
-  friend class Canvas2DResourceProviderSharedImage;
-  friend class CanvasNon2DResourceProviderSharedImage;
-
   base::WeakPtr<WebGraphicsContext3DProviderWrapper> ContextProviderWrapper()
       const override;
   void VerifySyncToken() override;
@@ -286,7 +278,6 @@ class PLATFORM_EXPORT ExternalCanvasResource final : public CanvasResource {
   bool CreatesAcceleratedTransferableResources() const override { return true; }
   void NotifyResourceLost() override { resource_is_lost_ = true; }
   void WaitSyncToken(const gpu::SyncToken&) override;
-  void ProduceSyncToken();
 
   scoped_refptr<StaticBitmapImage> Bitmap() override;
   const gfx::HDRMetadata& GetHdrMetadata() const override {
@@ -319,6 +310,9 @@ class PLATFORM_EXPORT ExternalCanvasResource final : public CanvasResource {
   viz::ReleaseCallback release_callback_;
   bool resource_is_lost_ = false;
   const SkAlphaType alpha_type_;
+
+  // SyncToken to wait on at destruction.
+  gpu::SyncToken destruction_sync_token_;
 };
 
 }  // namespace blink

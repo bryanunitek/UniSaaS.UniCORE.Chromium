@@ -18,6 +18,10 @@
 
 class Profile;
 
+namespace blink {
+class WebInputEvent;
+}
+
 namespace views {
 class View;
 }
@@ -87,12 +91,14 @@ class PaymentHandlerWebFlowViewController
       bool* was_blocked) override;
   bool HandleKeyboardEvent(content::WebContents* source,
                            const input::NativeWebKeyboardEvent& event) override;
+  void CloseContents(content::WebContents* source) override;
 
   // content::WebContentsObserver:
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
   void LoadProgressChanged(double progress) override;
   void TitleWasSet(content::NavigationEntry* entry) override;
+  void DidGetUserInteraction(const blink::WebInputEvent& event) override;
 
   void AbortPayment();
   void SetHeaderColorsAndOriginLabelText();

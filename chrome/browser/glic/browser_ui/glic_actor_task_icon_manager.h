@@ -32,6 +32,9 @@ class GlicActorTaskIconManager : public KeyedService {
   // Called whenever actor task state updates.
   void OnActorTaskStateUpdate(actor::TaskId task_id);
 
+  // Called when a tab is added to the task.
+  void OnTabAddedToTask(actor::TaskId task_id);
+
   // Called whenever updates are needed to the task icon components.
   void UpdateTaskIconComponents(actor::TaskId task_id);
 
@@ -49,6 +52,14 @@ class GlicActorTaskIconManager : public KeyedService {
                                actor::ActorTask::TaskDuration duration,
                                glic::mojom::FeatureMode feature_mode);
 
+  // Returns true if the task is an active experimental task.
+  static bool IsActiveExperimentalTask(actor::ActorTask::State state,
+                                       glic::mojom::FeatureMode feature_mode);
+
+  // Returns true if the task is an active universal cart task.
+  static bool IsActiveUniversalCartTask(actor::ActorTask::State state,
+                                        glic::mojom::FeatureMode feature_mode);
+
   // Register for this callback to get task nudge state change notifications.
   using TaskNudgeChangeCallback = base::RepeatingCallback<void(
       bool show_bubble,
@@ -58,7 +69,8 @@ class GlicActorTaskIconManager : public KeyedService {
 
   // Register for this callback to get task state change notifications for the
   // bubble.
-  using TaskListBubbleChangeCallback = base::RepeatingCallback<void()>;
+  using TaskListBubbleChangeCallback =
+      base::RepeatingCallback<void(bool is_start_notification)>;
   base::CallbackListSubscription RegisterTaskListBubbleStateChange(
       TaskListBubbleChangeCallback callback);
 
@@ -98,7 +110,8 @@ class GlicActorTaskIconManager : public KeyedService {
       actor::ui::ActorTaskNudgeState actor_task_nudge_text)>;
   TaskNudgeChangeCallbackList task_nudge_state_change_callback_list_;
 
-  using TaskListBubbleChangeCallbackList = base::RepeatingCallbackList<void()>;
+  using TaskListBubbleChangeCallbackList =
+      base::RepeatingCallbackList<void(bool is_start_notification)>;
   TaskListBubbleChangeCallbackList task_list_bubble_change_callback_list_;
 
   actor::ui::ActorTaskNudgeState current_actor_task_nudge_state_;

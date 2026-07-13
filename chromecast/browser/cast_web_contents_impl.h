@@ -131,6 +131,7 @@ class CastWebContentsImpl : public CastWebContents,
   void ResourceLoadComplete(
       content::RenderFrameHost* render_frame_host,
       const content::GlobalRequestID& request_id,
+      const GURL& original_url,
       const blink::mojom::ResourceLoadInfo& resource_load_info) override;
   void InnerWebContentsCreated(
       content::WebContents* inner_web_contents) override;
@@ -139,7 +140,8 @@ class CastWebContentsImpl : public CastWebContents,
   void WebContentsDestroyed() override;
   void DidUpdateFaviconURL(
       content::RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override;
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override;
   void MediaStartedPlaying(const MediaPlayerInfo& video_type,
                            const content::MediaPlayerId& id) override;
   void MediaStoppedPlaying(

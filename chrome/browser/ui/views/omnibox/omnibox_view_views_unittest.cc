@@ -64,6 +64,7 @@
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/clipboard/test/clipboard_test_util.h"
+#include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_edit_commands.h"
 #include "ui/events/event_utils.h"
@@ -100,10 +101,6 @@ class TestingOmniboxView : public OmniboxViewViews {
                                 const Range& selection_range);
 
   void CheckUpdatePopupNotCalled();
-
-  void SetClipboardTextForTesting(const std::u16string& text) {
-    clipboard_text_for_menu_ = text;
-  }
 
   Range scheme_range() const { return scheme_range_; }
   Range emphasis_range() const { return emphasis_range_; }
@@ -330,6 +327,7 @@ class TestLocationBar : public LocationBar {
   bool IsDrawn() const override { return true; }
   bool IsFullscreen() const override { return false; }
   bool IsEditingOrEmpty() const override { return false; }
+  bool IsMouseHovered() const override { return false; }
   void InvalidateLayout() override {}
   gfx::Rect Bounds() const override { return gfx::Rect(); }
   gfx::Rect BoundsInScreen() const override { return gfx::Rect(); }
@@ -508,8 +506,7 @@ void OmniboxViewViewsTest::SetUp() {
   util_ = std::make_unique<TemplateURLServiceFactoryTestUtil>(profile_.get());
 
   // We need a widget so OmniboxView can be correctly focused and unfocused.
-  widget_ =
-      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  widget_ = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   widget_->Show();
 
   AutocompleteClassifierFactory::GetInstance()->SetTestingFactoryAndUse(
@@ -1869,4 +1866,31 @@ TEST_F(OmniboxViewViewsTest, SetUserTextForTab) {
   ASSERT_TRUE(state2);
   EXPECT_EQ(injected_text, state2->model_state.user_text);
   EXPECT_TRUE(state2->model_state.user_input_in_progress);
+}
+
+TEST_F(OmniboxViewViewsTest, DragAndDropTextWithinOmnibox) {
+  // Setup: Set text to "abcdef" and select "bcd".
+  omnibox_view()->SetText(u"abcdef");
+  omnibox_view()->SetSelectedRange(gfx::Range(1, 4));
+  EXPECT_EQ(omnibox_textfield()->GetSelectedText(), u"bcd");
+
+  // Simulate dragging from the Omnibox itself.
+  GetTextfieldTestApi().SetInitiatingDrag(true);
+
+  // Perform a drag & drop.
+  ui::OSExchangeData data;
+  data.SetString(u"bcd");
+  ui::DropTargetEvent event(data, {}, {}, ui::DragDropTypes::DRAG_MOVE);
+  views::View::DropCallback drop_callback =
+      omnibox_view()->GetDropCallback(event);
+  ASSERT_FALSE(drop_callback.is_null());
+  ui::mojom::DragOperation output_drag_op = ui::mojom::DragOperation::kNone;
+  std::move(drop_callback)
+      .Run(event, output_drag_op,
+           /*drag_image_layer_owner=*/nullptr);
+
+  // The text should be moved to the start instead of replacing all omnibox text
+  // like dragging from outside the omnibox would.
+  EXPECT_EQ(omnibox_view()->GetText(), u"bcdaef");
+  EXPECT_EQ(output_drag_op, ui::mojom::DragOperation::kMove);
 }

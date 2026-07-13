@@ -64,6 +64,10 @@ void GlicActorTaskIconManager::OnActorTaskStateUpdate(actor::TaskId task_id) {
   UpdateTaskIconComponents(task_id);
 }
 
+void GlicActorTaskIconManager::OnTabAddedToTask(actor::TaskId task_id) {
+  UpdateTaskIconComponents(task_id);
+}
+
 void GlicActorTaskIconManager::Shutdown() {}
 
 void GlicActorTaskIconManager::UpdateTaskNudge() {
@@ -156,22 +160,48 @@ void GlicActorTaskIconManager::UpdateTaskListBubble(actor::TaskId task_id) {
   }
 
   glic::mojom::FeatureMode feature_mode = manager->GetFeatureMode(task_id);
-  if (feature_mode == glic::mojom::FeatureMode::kExperimentalTriggering &&
-      state.value() == actor::ActorTask::State::kActing &&
-      actor_task_list_bubble_rows_.contains(task_id)) {
+  bool is_active_universal_cart_task =
+      IsActiveUniversalCartTask(state.value(), feature_mode);
+  bool is_active_task = IsActiveExperimentalTask(state.value(), feature_mode) ||
+                        is_active_universal_cart_task;
+
+  if (is_active_task && actor_task_list_bubble_rows_.contains(task_id) &&
+      actor_task_list_bubble_rows_[task_id]) {
     return;
   }
 
+  // Delay showing notifications/adding to active task list for Universal Cart
+  // tasks until a tab has been associated with the task.
+  if (is_active_universal_cart_task) {
+    auto task_tab = manager->GetLastActedOnTab(task_id);
+    bool has_tab = task_tab && *task_tab;
+    if (!has_tab) {
+      return;
+    }
+  }
+
   const auto duration = manager->GetDuration(task_id);
+  bool is_new_task = !actor_task_list_bubble_rows_.contains(task_id);
   actor_task_list_bubble_rows_[task_id] =
       RequiresTaskProcessing(state.value(), feature_mode);
+
+  if (is_new_task && is_active_task) {
+    // Notify the bubble only if a task now requires processing. This callback
+    // will open the task list bubble and make it active, in order to bring it
+    // to the user's attention. This is also necessary for when a user
+    // switches windows in order to show the bubble in the active window.
+    task_list_bubble_change_callback_list_.Notify(
+        /*is_start_notification=*/true);
+    return;
+  }
 
   if (ShouldShowBubble(state.value(), duration, feature_mode)) {
     // Notify the bubble only if a task now requires processing. This callback
     // will open the task list bubble and make it active, in order to bring it
     // to the user's attention. This is also necessary for when a user
     // switches windows in order to show the bubble in the active window.
-    task_list_bubble_change_callback_list_.Notify();
+    task_list_bubble_change_callback_list_.Notify(
+        /*is_start_notification=*/false);
   }
 }
 
@@ -212,8 +242,8 @@ bool GlicActorTaskIconManager::RequiresTaskProcessing(
   }
   return GlicActorTaskIconManager::RequiresAttention(state) ||
          state == TaskState::kFinished || state == TaskState::kFailed ||
-         (feature_mode == glic::mojom::FeatureMode::kExperimentalTriggering &&
-          state == TaskState::kActing);
+         IsActiveExperimentalTask(state, feature_mode) ||
+         IsActiveUniversalCartTask(state, feature_mode);
 }
 
 // static
@@ -227,14 +257,26 @@ bool GlicActorTaskIconManager::ShouldSuppressNotification(
 }
 
 // static
+bool GlicActorTaskIconManager::IsActiveExperimentalTask(
+    TaskState state,
+    glic::mojom::FeatureMode feature_mode) {
+  return feature_mode == glic::mojom::FeatureMode::kExperimentalTriggering &&
+         (state == TaskState::kActing || state == TaskState::kReflecting);
+}
+
+// static
+bool GlicActorTaskIconManager::IsActiveUniversalCartTask(
+    TaskState state,
+    glic::mojom::FeatureMode feature_mode) {
+  return feature_mode == glic::mojom::FeatureMode::kUniversalCart &&
+         (state == TaskState::kActing || state == TaskState::kReflecting);
+}
+
+// static
 bool GlicActorTaskIconManager::ShouldShowBubble(
     TaskState state,
     TaskDuration duration,
     glic::mojom::FeatureMode feature_mode) {
-  if (feature_mode == glic::mojom::FeatureMode::kExperimentalTriggering &&
-      state == TaskState::kActing) {
-    return true;
-  }
   if (GlicActorTaskIconManager::RequiresAttention(state)) {
     return true;
   }
@@ -252,11 +294,11 @@ bool GlicActorTaskIconManager::HasActiveExperimentalTask() const {
   }
   for (const auto& [task_id, requires_processing] :
        actor_task_list_bubble_rows_) {
-    if (requires_processing &&
-        ui_state_manager->GetFeatureMode(task_id) ==
-            glic::mojom::FeatureMode::kExperimentalTriggering &&
-        ui_state_manager->GetActorTaskState(task_id) ==
-            actor::ActorTask::State::kActing) {
+    const std::optional<TaskState> state =
+        ui_state_manager->GetActorTaskState(task_id);
+    if (requires_processing && state &&
+        IsActiveExperimentalTask(*state,
+                                 ui_state_manager->GetFeatureMode(task_id))) {
       return true;
     }
   }

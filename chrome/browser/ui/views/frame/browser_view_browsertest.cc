@@ -24,6 +24,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands_mac.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
@@ -57,6 +58,7 @@
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/bookmarks/common/bookmark_bar_visibility_state.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/enterprise/connectors/core/common.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
@@ -65,6 +67,7 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/browser/realtime/fake_url_lookup_service.h"
+#include "components/search/ntp_features.h"
 #include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tabs/public/split_tab_collection.h"
 #include "content/public/browser/desktop_capture_pip_utils.h"
@@ -125,7 +128,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewPipTest, DynamicStatePropagation) {
   Browser::CreateParams params(Browser::TYPE_PICTURE_IN_PICTURE,
                                browser()->profile(), true);
   Browser* pip_browser = Browser::Create(params);
-  pip_browser->window()->Show();
+  pip_browser->GetWindow()->Show();
   BrowserView* pip_browser_view =
       BrowserView::GetBrowserViewForBrowser(pip_browser);
 
@@ -149,7 +152,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewPipTest, InitialStateVerification) {
   Browser::CreateParams params(Browser::TYPE_PICTURE_IN_PICTURE,
                                browser()->profile(), true);
   Browser* pip_browser = Browser::Create(params);
-  pip_browser->window()->Show();
+  pip_browser->GetWindow()->Show();
   BrowserView* pip_browser_view =
       BrowserView::GetBrowserViewForBrowser(pip_browser);
 
@@ -177,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewPipDisabledTest, FeatureFlagEnforcement) {
   Browser::CreateParams params(Browser::TYPE_PICTURE_IN_PICTURE,
                                browser()->profile(), true);
   Browser* pip_browser = Browser::Create(params);
-  pip_browser->window()->Show();
+  pip_browser->GetWindow()->Show();
   BrowserView* pip_browser_view =
       BrowserView::GetBrowserViewForBrowser(pip_browser);
 
@@ -213,7 +216,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewPipTest, NewWindowInitializationIsolation) {
   Browser::CreateParams params(Browser::TYPE_NORMAL, browser()->profile(),
                                true);
   Browser* new_normal_browser = Browser::Create(params);
-  new_normal_browser->window()->Show();
+  new_normal_browser->GetWindow()->Show();
 
   BrowserView* new_normal_view =
       BrowserView::GetBrowserViewForBrowser(new_normal_browser);
@@ -269,6 +272,14 @@ class BrowserViewTest : public InProcessBrowserTest {
     return browser_view()
         ->multi_contents_view()
         ->GetInactiveContentsContainerView();
+  }
+
+  std::u16string GetAccessibleNameForTabAt(int index) {
+    return browser_view()
+        ->tab_strip_view()
+        ->GetTabAnchorViewAt(index)
+        ->GetViewAccessibility()
+        .GetCachedName();
   }
 
   void OpenDevToolsWindow(bool docked) {
@@ -617,8 +628,20 @@ class BookmarkBarViewObserverImpl : public BookmarkBarViewObserver {
   int change_count_ = 0;
 };
 
+class BrowserViewLegacyBookmarkBarTest : public BrowserViewTest {
+ public:
+  BrowserViewLegacyBookmarkBarTest() {
+    feature_list_.InitAndDisableFeature(
+        ntp_features::kNtpSimplificationBookmarkBar);
+  }
+
+ protected:
+  base::test::ScopedFeatureList feature_list_;
+};
+
 // Verifies we don't unnecessarily change the visibility of the BookmarkBarView.
-IN_PROC_BROWSER_TEST_F(BrowserViewTest, AvoidUnnecessaryVisibilityChanges) {
+IN_PROC_BROWSER_TEST_F(BrowserViewLegacyBookmarkBarTest,
+                       AvoidUnnecessaryVisibilityChanges) {
   // Create two tabs, the first empty and the second the ntp. Make it so the
   // BookmarkBarView isn't shown.
   browser()->profile()->GetPrefs()->SetBoolean(
@@ -663,6 +686,89 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, AvoidUnnecessaryVisibilityChanges) {
       1, TabStripUserGestureDetails(
              TabStripUserGestureDetails::GestureType::kOther));
   EXPECT_TRUE(bookmark_bar->GetVisible());
+  EXPECT_EQ(0, observer.change_count());
+  observer.clear_change_count();
+
+  browser_view()->bookmark_bar()->RemoveObserver(&observer);
+}
+
+class BrowserViewSimplifiedBookmarkBarTest : public BrowserViewTest {
+ public:
+  BrowserViewSimplifiedBookmarkBarTest() {
+    feature_list_.InitAndEnableFeature(
+        ntp_features::kNtpSimplificationBookmarkBar);
+  }
+
+ protected:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Verifies we don't unnecessarily change the visibility of the BookmarkBarView
+// when using the simplified bookmark bar feature.
+IN_PROC_BROWSER_TEST_F(BrowserViewSimplifiedBookmarkBarTest,
+                       AvoidUnnecessaryVisibilityChanges) {
+  browser()->profile()->GetPrefs()->SetInteger(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kOnlyShowOnNtp));
+  GURL new_tab_url = chrome::ChromeUINewTabURLAsGURL();
+  chrome::AddTabAt(browser(), GURL(), -1, true);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), new_tab_url));
+
+  ASSERT_TRUE(browser_view()->bookmark_bar());
+  BookmarkBarViewObserverImpl observer;
+  BookmarkBarView* bookmark_bar = browser_view()->bookmark_bar();
+  bookmark_bar->AddObserver(&observer);
+  EXPECT_FALSE(bookmark_bar->GetVisible());
+
+  // Go to empty tab. Bookmark bar should hide.
+  browser()->tab_strip_model()->ActivateTabAt(
+      0, TabStripUserGestureDetails(
+             TabStripUserGestureDetails::GestureType::kOther));
+  EXPECT_FALSE(bookmark_bar->GetVisible());
+  EXPECT_EQ(0, observer.change_count());
+  observer.clear_change_count();
+
+  // Go to ntp tab. Bookmark bar should not show.
+  browser()->tab_strip_model()->ActivateTabAt(
+      1, TabStripUserGestureDetails(
+             TabStripUserGestureDetails::GestureType::kOther));
+  EXPECT_FALSE(bookmark_bar->GetVisible());
+  EXPECT_EQ(0, observer.change_count());
+  observer.clear_change_count();
+
+  // Repeat with the bookmark bar always visible.
+  browser()->profile()->GetPrefs()->SetInteger(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
+  browser()->tab_strip_model()->ActivateTabAt(
+      0, TabStripUserGestureDetails(
+             TabStripUserGestureDetails::GestureType::kOther));
+  EXPECT_TRUE(bookmark_bar->GetVisible());
+  EXPECT_EQ(1, observer.change_count());
+  observer.clear_change_count();
+
+  browser()->tab_strip_model()->ActivateTabAt(
+      1, TabStripUserGestureDetails(
+             TabStripUserGestureDetails::GestureType::kOther));
+  EXPECT_TRUE(bookmark_bar->GetVisible());
+  EXPECT_EQ(0, observer.change_count());
+  observer.clear_change_count();
+
+  // Repeat with the bookmark bar always hidden.
+  browser()->profile()->GetPrefs()->SetInteger(
+      bookmarks::prefs::kBookmarkBarVisibilityState,
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysHide));
+  browser()->tab_strip_model()->ActivateTabAt(
+      0, TabStripUserGestureDetails(
+             TabStripUserGestureDetails::GestureType::kOther));
+  EXPECT_FALSE(bookmark_bar->GetVisible());
+  EXPECT_EQ(1, observer.change_count());
+  observer.clear_change_count();
+
+  browser()->tab_strip_model()->ActivateTabAt(
+      1, TabStripUserGestureDetails(
+             TabStripUserGestureDetails::GestureType::kOther));
+  EXPECT_FALSE(bookmark_bar->GetVisible());
   EXPECT_EQ(0, observer.change_count());
   observer.clear_change_count();
 
@@ -961,13 +1067,13 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest,
       inactive_contents_container_view()->devtools_web_view()->GetVisible());
 }
 
-// TODO(crbug.com/425715421): Re-enable when wayland supports drag and drop
-#if !BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
-#define MAYBE_DragNotSupportedInFullscreen DragNotSupportedInFullscreen
-#else
-#define MAYBE_DragNotSupportedInFullscreen DISABLED_DragNotSupportedInFullscreen
+IN_PROC_BROWSER_TEST_F(BrowserViewTest, DragNotSupportedInFullscreen) {
+#if BUILDFLAG(IS_OZONE)
+  // TODO(crbug.com/425715421): Re-enable when wayland supports drag and drop
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Wayland doesn't support drag and drop in fullscreen";
+  }
 #endif
-IN_PROC_BROWSER_TEST_F(BrowserViewTest, MAYBE_DragNotSupportedInFullscreen) {
   // Add enough tabs to create two split views.
   chrome::AddTabAt(browser(), GURL(), -1, true);
   // Add tabs to splits.
@@ -1049,8 +1155,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, AccessibleTabLabel) {
                                                    ->tab_strip_model()
                                                    ->GetTabAtIndex(0)
                                                    ->GetHandle()))),
-            tabs::GetAccessibleTabLabel(
-                browser()->tab_strip_model()->GetTabAtIndex(0), false));
+            GetAccessibleNameForTabAt(0));
   EXPECT_EQ(l10n_util::GetStringFUTF16(
                 IDS_TAB_AX_LABEL_PINNED_FORMAT,
                 l10n_util::GetStringFUTF16(
@@ -1059,8 +1164,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, AccessibleTabLabel) {
                                                    ->tab_strip_model()
                                                    ->GetTabAtIndex(1)
                                                    ->GetHandle()))),
-            tabs::GetAccessibleTabLabel(
-                browser()->tab_strip_model()->GetTabAtIndex(1), false));
+            GetAccessibleNameForTabAt(1));
 
   // Create a side-by-side split.
   chrome::AddTabAt(browser(), GURL(), -1, true);
@@ -1074,15 +1178,13 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, AccessibleTabLabel) {
           IDS_TAB_AX_LABEL_SPLIT_TAB_LEFT_VIEW_FORMAT,
           controller->GetTitleForTab(
               browser()->tab_strip_model()->GetTabAtIndex(2)->GetHandle())),
-      tabs::GetAccessibleTabLabel(
-          browser()->tab_strip_model()->GetTabAtIndex(2), false));
+      GetAccessibleNameForTabAt(2));
   EXPECT_EQ(
       l10n_util::GetStringFUTF16(
           IDS_TAB_AX_LABEL_SPLIT_TAB_RIGHT_VIEW_FORMAT,
           controller->GetTitleForTab(
               browser()->tab_strip_model()->GetTabAtIndex(3)->GetHandle())),
-      tabs::GetAccessibleTabLabel(
-          browser()->tab_strip_model()->GetTabAtIndex(3), false));
+      GetAccessibleNameForTabAt(3));
 
   // Create a grouped split.
   chrome::AddTabAt(browser(), GURL(), -1, true);
@@ -1100,8 +1202,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, AccessibleTabLabel) {
                                                    ->tab_strip_model()
                                                    ->GetTabAtIndex(4)
                                                    ->GetHandle()))),
-            tabs::GetAccessibleTabLabel(
-                browser()->tab_strip_model()->GetTabAtIndex(4), false));
+            GetAccessibleNameForTabAt(4));
   EXPECT_EQ(l10n_util::GetStringFUTF16(
                 IDS_TAB_AX_LABEL_UNNAMED_GROUP_FORMAT,
                 l10n_util::GetStringFUTF16(
@@ -1110,8 +1211,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, AccessibleTabLabel) {
                                                    ->tab_strip_model()
                                                    ->GetTabAtIndex(5)
                                                    ->GetHandle()))),
-            tabs::GetAccessibleTabLabel(
-                browser()->tab_strip_model()->GetTabAtIndex(5), false));
+            GetAccessibleNameForTabAt(5));
 
   // Create a stacked split.
   chrome::AddTabAt(browser(), GURL(), -1, true);
@@ -1125,15 +1225,51 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, AccessibleTabLabel) {
           IDS_TAB_AX_LABEL_SPLIT_TAB_TOP_VIEW_FORMAT,
           controller->GetTitleForTab(
               browser()->tab_strip_model()->GetTabAtIndex(6)->GetHandle())),
-      tabs::GetAccessibleTabLabel(
-          browser()->tab_strip_model()->GetTabAtIndex(6), false));
+      GetAccessibleNameForTabAt(6));
   EXPECT_EQ(
       l10n_util::GetStringFUTF16(
           IDS_TAB_AX_LABEL_SPLIT_TAB_BOTTOM_VIEW_FORMAT,
           controller->GetTitleForTab(
               browser()->tab_strip_model()->GetTabAtIndex(7)->GetHandle())),
-      tabs::GetAccessibleTabLabel(
-          browser()->tab_strip_model()->GetTabAtIndex(7), false));
+      GetAccessibleNameForTabAt(7));
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserViewTest,
+                       ChangingSplitLayoutUpdatesAccessibleTabLabel) {
+  auto* controller = WindowMetadataController::From(browser());
+
+  // Create a side-by-side split.
+  chrome::AddTabAt(browser(), GURL(), -1, true);
+  split_tabs::SplitTabId split_id = browser()->tab_strip_model()->AddToNewSplit(
+      {0},
+      split_tabs::SplitTabVisualData(split_tabs::SplitTabLayout::kSideBySide),
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+
+  tabs::TabInterface* start_tab =
+      browser()->tab_strip_model()->GetTabAtIndex(0);
+  tabs::TabInterface* end_tab = browser()->tab_strip_model()->GetTabAtIndex(1);
+
+  EXPECT_EQ(l10n_util::GetStringFUTF16(
+                IDS_TAB_AX_LABEL_SPLIT_TAB_LEFT_VIEW_FORMAT,
+                controller->GetTitleForTab(start_tab->GetHandle())),
+            GetAccessibleNameForTabAt(0));
+  EXPECT_EQ(l10n_util::GetStringFUTF16(
+                IDS_TAB_AX_LABEL_SPLIT_TAB_RIGHT_VIEW_FORMAT,
+                controller->GetTitleForTab(end_tab->GetHandle())),
+            GetAccessibleNameForTabAt(1));
+
+  // Change the split layout to stacked.
+  browser()->tab_strip_model()->UpdateSplitLayout(
+      split_id, split_tabs::SplitTabLayout::kStacked);
+
+  EXPECT_EQ(l10n_util::GetStringFUTF16(
+                IDS_TAB_AX_LABEL_SPLIT_TAB_TOP_VIEW_FORMAT,
+                controller->GetTitleForTab(start_tab->GetHandle())),
+            GetAccessibleNameForTabAt(0));
+  EXPECT_EQ(l10n_util::GetStringFUTF16(
+                IDS_TAB_AX_LABEL_SPLIT_TAB_BOTTOM_VIEW_FORMAT,
+                controller->GetTitleForTab(end_tab->GetHandle())),
+            GetAccessibleNameForTabAt(1));
 }
 
 #if BUILDFLAG(IS_MAC)
@@ -1202,15 +1338,15 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, SplitViewTabRevealFullscreen) {
                   .IsSelected(1));
 
   ui_test_utils::ToggleFullscreenModeAndWait(browser());
-  ASSERT_FALSE(browser()->window()->IsToolbarShowing());
+  ASSERT_FALSE(BrowserWindow::FromBrowser(browser())->IsToolbarShowing());
 
   // Switching between split tabs does not reveal top container.
   browser()->tab_strip_model()->ActivateTabAt(1);
-  ASSERT_FALSE(browser()->window()->IsToolbarShowing());
+  ASSERT_FALSE(BrowserWindow::FromBrowser(browser())->IsToolbarShowing());
 
   // Switching to tab not in split should reveal top container.
   browser()->tab_strip_model()->ActivateTabAt(2);
-  ASSERT_TRUE(browser()->window()->IsToolbarShowing());
+  ASSERT_TRUE(BrowserWindow::FromBrowser(browser())->IsToolbarShowing());
 }
 #endif
 
@@ -1398,7 +1534,7 @@ class BrowserViewScrimPixelTest : public UiBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
     GURL url = embedded_test_server()->GetURL(kSimplePage);
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-    browser()->window()->Show();
+    browser()->GetWindow()->Show();
     BrowserView::GetBrowserViewForBrowser(browser())
         ->GetActiveContentsContainerView()
         ->contents_scrim_view()

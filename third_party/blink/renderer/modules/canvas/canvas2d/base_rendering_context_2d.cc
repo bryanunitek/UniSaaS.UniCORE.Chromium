@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -75,6 +76,8 @@
 #include "third_party/blink/renderer/platform/geometry/path.h"
 #include "third_party/blink/renderer/platform/graphics/bitmap_image.h"
 #include "third_party/blink/renderer/platform/graphics/blend_mode.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_2d_bitmap_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_2d_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_deferred_paint_record.h"
 #include "third_party/blink/renderer/platform/graphics/flush_reason.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
@@ -251,7 +254,7 @@ void BaseRenderingContext2D::TryRestoreContextEvent(TimerBase* timer) {
       (!SharedGpuContext::IsGpuCompositingEnabled() &&
        SharedGpuContext::SharedImageInterfaceProvider())) {
     RestoreGuard context_is_being_restored(*this);
-    if (GetOrCreateResourceProvider()) {
+    if (InitializeResourceProvider()) {
       try_restore_context_event_timer_.Stop();
       DispatchContextRestoredEvent(nullptr);
       return;
@@ -273,7 +276,6 @@ void BaseRenderingContext2D::RestoreFromInvalidSizeIfNeeded() {
       !host) {
     return;
   }
-  DCHECK(!GetResourceProvider());
 
   if (host->IsValidImageSize()) {
     // The size was restored. Fire a contextrestored event, but only if there's
@@ -719,16 +721,6 @@ void BaseRenderingContext2D::Trace(Visitor* visitor) const {
   Canvas2DRecorderContext::Trace(visitor);
 }
 
-bool BaseRenderingContext2D::Is2DCanvasAccelerated() const {
-  if (IsHibernating()) {
-    return false;
-  }
-
-  auto* resource_provider = GetResourceProvider();
-  return resource_provider ? resource_provider->IsAccelerated()
-                           : Host()->ShouldTryToUseGpuRaster();
-}
-
 void BaseRenderingContext2D::RestoreCanvasMatrixClipStack(
     cc::PaintCanvas* c) const {
   RestoreMatrixClipStack(c);
@@ -738,20 +730,26 @@ void BaseRenderingContext2D::Reset() {
   ResetInternal();
 }
 
-scoped_refptr<StaticBitmapImage>
-BaseRenderingContext2D::PaintRenderingResultsToSnapshot(
-    SourceDrawingBuffer source_buffer) {
-  if (!IsResourceProviderValid()) {
-    return nullptr;
+std::optional<cc::PaintRecord> BaseRenderingContext2D::FlushCanvasInternal(
+    Canvas2DResourceProvider* shared_image_provider,
+    Canvas2DBitmapProvider* bitmap_provider,
+    FlushReason reason) {
+  std::optional<cc::PaintRecord> recording;
+  if (shared_image_provider) {
+    recording = shared_image_provider->Flush(reason);
+    if (recording) {
+      shared_image_provider->ReleaseImageProviderImages();
+    }
+  } else if (bitmap_provider) {
+    recording = bitmap_provider->Flush(reason);
+    if (recording) {
+      bitmap_provider->ReleaseImageProviderImages();
+    }
   }
-
-  CanvasResourceProvider* provider = GetResourceProvider();
-  provider->Flush();
-  return provider->Snapshot();
-}
-
-bool BaseRenderingContext2D::IsResourceProviderValid() {
-  return GetResourceProvider() && GetResourceProvider()->IsValid();
+  if (recording && Host()) {
+    Host()->DidFlush();
+  }
+  return recording;
 }
 
 void BaseRenderingContext2D::WillUseCurrentFont() const {
@@ -1073,6 +1071,31 @@ void BaseRenderingContext2D::DrawTextInternal(
   }
 
   location.Offset(0, TextMetrics::GetFontBaseline(baseline, *font_data));
+
+  if (host && host->ShouldCaptureRenderedText()) {
+    gfx::RectF exact_bounds = bounds;
+    // If the text is scaled horizontally to fit maxWidth, scale the bounding
+    // box by the same factor.
+    if (use_max_width) {
+      float scale_x = width / font_width;
+      exact_bounds.set_x(exact_bounds.x() * scale_x);
+      exact_bounds.set_width(exact_bounds.width() * scale_x);
+    }
+
+    // Offset the bounding box to the actual draw location.
+    exact_bounds.Offset(location.x(), location.y());
+
+    // Inflate the bounding box to account for stroke width if we are stroking.
+    if (paint_type == CanvasRenderingContext2DState::kStrokePaintType) {
+      InflateStrokeRect(exact_bounds);
+    }
+
+    // Map the bounds to the canvas coordinate system and record the text.
+    exact_bounds = state.GetTransform().MapRect(exact_bounds);
+    host->RecordRenderedText(text.substr(run_start, run_end - run_start),
+                             exact_bounds,
+                             font_data->GetFontMetrics().FloatHeight());
+  }
 
   bounds.Offset(location.x(), location.y());
   if (paint_type == CanvasRenderingContext2DState::kStrokePaintType) {
@@ -1439,6 +1462,10 @@ DOMMatrix* BaseRenderingContext2D::DrawElementInternal(
   }
 
   cc::PaintRecord paint_record = std::move(child_paint_record->record);
+  uint32_t animated_image_frame_index_map_pos =
+      animated_image_frame_index_maps_.size();
+  animated_image_frame_index_maps_.emplace_back(
+      child_paint_record->paint_state.animated_image_frame_index_map);
   // TODO(crbug.com/421834883): This code is based on image drawing. Maybe we
   // need a distinct paint_type: kImagePaintType seems to do the right thing
   // but maybe its treatment of anti-aliasing is incorrect. The kNonOpaqueImage
@@ -1447,8 +1474,8 @@ DOMMatrix* BaseRenderingContext2D::DrawElementInternal(
   // opaque so going with that for now.
   Draw<OverdrawOp::kNone>(
       /*draw_func=*/
-      [paint_record, dst_rect, src_rect](MemoryManagedPaintCanvas* c,
-                                         const cc::PaintFlags* flags) {
+      [paint_record, dst_rect, src_rect, animated_image_frame_index_map_pos](
+          MemoryManagedPaintCanvas* c, const cc::PaintFlags* flags) {
         cc::RecordPaintCanvas::DisableFlushCheckScope disable_flush_check_scope(
             static_cast<cc::RecordPaintCanvas*>(c));
         int initial_save_count = c->getSaveCount();
@@ -1499,10 +1526,18 @@ DOMMatrix* BaseRenderingContext2D::DrawElementInternal(
         c->clipRect(SkRect::MakeXYWH(src_rect.x(), src_rect.y(),
                                      src_rect.width(), src_rect.height()));
 
+        // A CustomDataOp callback will be used to apply the animated image
+        // frame index map for this ElementImage prior to processing
+        // DrawImage(Rect)Op's in this paint_record.
+        c->recordCustomData(animated_image_frame_index_map_pos);
+
         c->drawPicture(std::move(paint_record),
                        // use a save at the beginning of the record to keep
                        // transforms local:
                        true);
+
+        // Reset the animated image frame index map
+        c->recordCustomData(std::numeric_limits<uint32_t>::max());
 
         c->restoreToCount(initial_save_count);
       },
@@ -1536,6 +1571,20 @@ DOMMatrix* BaseRenderingContext2D::DrawElementInternal(
 
   return MakeGarbageCollected<DOMMatrix>(result_transform,
                                          result_transform.Is2dTransform());
+}
+
+scoped_refptr<const cc::AnimatedImageFrameIndexMap>
+BaseRenderingContext2D::GetAnimatedImageFrameIndexMap(uint32_t id) const {
+  DCHECK(id == std::numeric_limits<uint32_t>::max() ||
+         id < animated_image_frame_index_maps_.size());
+  if (id < animated_image_frame_index_maps_.size()) {
+    return animated_image_frame_index_maps_[id];
+  }
+  return nullptr;
+}
+
+void BaseRenderingContext2D::DidFlush() {
+  animated_image_frame_index_maps_.clear();
 }
 
 }  // namespace blink

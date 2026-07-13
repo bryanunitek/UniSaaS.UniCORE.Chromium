@@ -435,7 +435,7 @@ scoped_refptr<VideoFrame> CreateMappableSharedImageVideoFrame(
                         gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
   // Create a mappable shared image.
   auto shared_image = test_sii->CreateSharedImage(
-      {*si_format, frame->coded_size(), gfx::ColorSpace(),
+      {*si_format, frame->coded_size(), frame->ColorSpace(),
        gpu::SharedImageUsageSet(si_usage), "VideoFrameTestHelpers"},
       gpu::kNullSurfaceHandle, buffer_usage, std::move(gmb_handle));
   if (!shared_image) {
@@ -463,7 +463,8 @@ scoped_refptr<const VideoFrame> CreateVideoFrameFromImage(const Image& image) {
   const auto format = image.PixelFormat();
   const auto& image_size = image.Size();
   // Loaded image data must be tight.
-  DCHECK_EQ(image.DataSize(), VideoFrame::AllocationSize(format, image_size));
+  DCHECK_EQ(image.DataSpan().size(),
+            VideoFrame::AllocationSize(format, image_size));
 
   // Create planes for layout. We cannot use WrapExternalData() because it
   // calls GetDefaultLayout() and it supports only a few pixel formats.

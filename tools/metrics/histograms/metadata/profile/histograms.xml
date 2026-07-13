@@ -22,6 +22,18 @@ chromium-metrics-reviews@google.com.
 
 <histograms>
 
+<!-- LINT.IfChange(BrowserProfileType) -->
+
+<variants name="BrowserProfileType">
+  <variant name="Guest"/>
+  <variant name="Incognito"/>
+  <variant name="OtherOffTheRecordProfile"/>
+  <variant name="Regular"/>
+  <variant name="System"/>
+</variants>
+
+<!-- LINT.ThenChange(//components/profile_metrics/browser_profile_type.h:BrowserProfileType) -->
+
 <!-- LINT.IfChange(ProfileActivityThreshold) -->
 
 <variants name="ProfileActivityThreshold">
@@ -80,7 +92,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Profile.AddSignInFlowOutcome"
-    enum="ProfileSignedInFlowOutcome" expires_after="2026-10-18">
+    enum="ProfileSignedInFlowOutcome" expires_after="2026-12-20">
   <owner>rsult@google.com</owner>
   <owner>droger@chromium.org</owner>
   <owner>chrome-signin-team@google.com</owner>
@@ -147,7 +159,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Profile.DeleteProfileContext" enum="ProfileDeleteContext"
-    expires_after="2026-10-11">
+    expires_after="2026-12-27">
   <owner>alexilin@chromium.org</owner>
   <owner>droger@chromium.org</owner>
   <owner>msalama@chromium.org</owner>
@@ -171,7 +183,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Profile.DidDestroyProfileBeforeShutdown" enum="Boolean"
-    expires_after="2026-07-01">
+    expires_after="2027-01-08">
   <owner>nicolaso@chromium.org</owner>
   <owner>cbe-eng@google.com</owner>
   <summary>
@@ -184,7 +196,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Profile.Guest.ForcedByPolicy" enum="BooleanForced"
-    expires_after="2026-11-01">
+    expires_after="2027-01-03">
   <owner>duellweber@chromium.org</owner>
   <owner>arabm@google.com</owner>
   <owner>chrome-incognito@google.com</owner>
@@ -256,7 +268,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Profile.KeepAliveLeakAtShutdown" enum="ProfileKeepAliveOrigin"
-    expires_after="2026-07-01">
+    expires_after="2027-01-08">
   <owner>nicolaso@chromium.org</owner>
   <owner>cbe-eng@google.com</owner>
   <summary>
@@ -273,7 +285,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Profile.LiveProfileCount" units="profiles"
-    expires_after="2026-10-25">
+    expires_after="2026-12-27">
   <owner>nicolaso@chromium.org</owner>
   <owner>cbe-eng@google.com</owner>
   <summary>
@@ -317,7 +329,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Profile.NukeFromDisk.Result" enum="NukeProfileResult"
-    expires_after="2026-07-01">
+    expires_after="2027-01-08">
   <owner>nicolaso@chromium.org</owner>
   <owner>cbe-eng@google.com</owner>
   <summary>
@@ -515,7 +527,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Profile.NumberOfUnusedProfiles{ProfileActivityThreshold}"
-    units="profiles" expires_after="2026-10-25">
+    units="profiles" expires_after="2027-01-03">
   <owner>msarda@chromium.org</owner>
   <owner>droger@chromium.org</owner>
   <summary>
@@ -704,6 +716,53 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Profile.Windows.ProfileLockStatus.{BrowserProfileType}"
+    enum="ProfileLockStatus" expires_after="2027-03-13">
+  <owner>spvm@chromium.org</owner>
+  <owner>catan-team@chromium.org</owner>
+  <summary>
+    Records the status of the creation/acquiry of the Profile.lock file on
+    Windows in a {BrowserProfileType} profile. Specifically whether it was
+    locked by another process or if the previous session crashed. Recorded once
+    per profile load.
+  </summary>
+</histogram>
+
+<histogram
+    name="Profile.Windows.ProfilePreviousExitStatus.{BrowserProfileType}"
+    enum="ProfilePreviousExitStatus" expires_after="2027-03-13">
+  <owner>spvm@chromium.org</owner>
+  <owner>catan-team@chromium.org</owner>
+  <summary>
+    Records the status of the previous exit of the profile load for a
+    {BrowserProfileType} profile on Windows. Specifically, whether there was a
+    crash, and whether there was an unacked crash bubble present. Recorded once
+    per profile load only if Profile.lock was successfully acquired and both
+    Profile.waiting_for_crash_ack and Profile.crashed were successfully created.
+  </summary>
+</histogram>
+
+<histogram name="Profile.Windows.{Operation}{File}Result.{BrowserProfileType}"
+    enum="WinGetLastError" expires_after="2027-03-13">
+  <owner>spvm@chromium.org</owner>
+  <owner>catan-team@chromium.org</owner>
+  <summary>
+    Records the Windows error code following the {Operation} call on the
+    `Profile.{File}` file in a {BrowserProfileType} profile, which may otherwise
+    corrupt subsequent data reporting of Profile.Windows.LoadStatus given that
+    the marker files were left around.
+  </summary>
+  <token key="Operation">
+    <variant name="Create" summary="base::File::File()"/>
+    <variant name="Delete" summary="base::DeleteFile()"/>
+  </token>
+  <token key="File">
+    <variant name="CrashAck" summary="waiting_for_crash_ack"/>
+    <variant name="Dirty" summary="dirty"/>
+    <variant name="Lock" summary="lock"/>
+  </token>
+</histogram>
+
 <histogram name="Profile.ZombieProfileCount" units="profiles"
     expires_after="2026-11-01">
   <owner>nicolaso@chromium.org</owner>
@@ -729,7 +788,7 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Profile.{Database}Size" units="MB" expires_after="2026-10-25">
+<histogram name="Profile.{Database}Size" units="MB" expires_after="2027-01-03">
   <owner>etienneb@chromium.org</owner>
   <owner>gab@chromium.org</owner>
   <summary>
@@ -815,7 +874,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="ProfilePicker.FirstProfileTime.FirstWebContentsNonEmptyPaint.AutoLaunchByOs"
-    units="ms" expires_after="2026-10-25">
+    units="ms" expires_after="2026-12-27">
   <owner>atharvmaan@google.com</owner>
   <owner>chrome-desktop-ui-waterloo@google.com</owner>
   <summary>
@@ -894,6 +953,93 @@ chromium-metrics-reviews@google.com.
     run or the profile is not able to display the first run experience, nothing
     will be recorded.
   </summary>
+</histogram>
+
+<histogram name="ProfilePicker.FREFlow.FeatureShowcase.StartBrowsing"
+    enum="FeatureShowcaseStep" expires_after="2026-12-31">
+  <owner>ernn@google.com</owner>
+  <owner>kbajkiewicz@google.com</owner>
+  <owner>chrome-signin-desktop-team@google.com</owner>
+  <summary>
+    Records the Feature Showcase step the user was looking at when they clicked
+    the 'Start Browsing' button.
+  </summary>
+</histogram>
+
+<histogram name="ProfilePicker.FREFlow.FeatureShowcase.StepEligible"
+    enum="FeatureShowcaseStep" expires_after="2026-12-31">
+  <owner>ernn@google.com</owner>
+  <owner>kbajkiewicz@google.com</owner>
+  <owner>chrome-signin-desktop-team@google.com</owner>
+  <summary>
+    Records the Feature Showcase step when it is eligible to be shown to the
+    user during the first run experience. Recorded when the user first enter the
+    Feature Showcase step. Records each step the user is eligible for.
+  </summary>
+</histogram>
+
+<histogram name="ProfilePicker.FREFlow.FeatureShowcase.StepShown"
+    enum="FeatureShowcaseStep" expires_after="2026-12-31">
+  <owner>ernn@google.com</owner>
+  <owner>kbajkiewicz@google.com</owner>
+  <owner>chrome-signin-desktop-team@google.com</owner>
+  <summary>
+    Records the Feature Showcase step when it is shown to the user during the
+    first run experience. Recorded every time a step is shown.
+  </summary>
+</histogram>
+
+<histogram
+    name="ProfilePicker.FREFlow.FeatureShowcase.StepUserAction.{FeatureShowcaseStep}"
+    enum="FeatureShowcaseStepUserAction" expires_after="2026-12-31">
+  <owner>ernn@google.com</owner>
+  <owner>kbajkiewicz@google.com</owner>
+  <owner>chrome-signin-desktop-team@google.com</owner>
+  <summary>
+    Records the action taken by the user on the {FeatureShowcaseStep} step in
+    the First Run Experience Feature Showcase. Recorded when the step is
+    completed.
+  </summary>
+<!-- LINT.IfChange(FeatureShowcaseStepSuffix) -->
+
+  <token key="FeatureShowcaseStep">
+    <variant name="DefaultBrowser" summary="Default Browser"/>
+    <variant name="GoogleLens" summary="Google Lens"/>
+    <variant name="PasswordManager" summary="Password Manager"/>
+    <variant name="ThemesAndCustomization" summary="Themes and Customization"/>
+  </token>
+<!-- LINT.ThenChange(//chrome/browser/ui/views/profiles/feature_showcase/feature_showcase_metrics.cc:FeatureShowcaseStepSuffix) -->
+
+</histogram>
+
+<histogram
+    name="ProfilePicker.FREFlow.FeatureShowcase.ThemesAndCustomization.ThemeChanged"
+    enum="Boolean" expires_after="2026-12-31">
+  <owner>ernn@google.com</owner>
+  <owner>kbajkiewicz@google.com</owner>
+  <owner>chrome-signin-desktop-team@google.com</owner>
+  <summary>
+    Records when the user changes the theme or color scheme mode on the Themes
+    and Customization step of the First Run Experience Feature Showcase.
+    Recorded the first (and only) time a user interacts with the color picker on
+    the Themes and Customization step.
+  </summary>
+</histogram>
+
+<histogram name="ProfilePicker.FREFlow.MediaEffects.{Action}"
+    enum="ProfileManagementFlowStep" expires_after="2026-12-31">
+  <owner>ernn@google.com</owner>
+  <owner>kbajkiewicz@google.com</owner>
+  <owner>chrome-signin-desktop-team@google.com</owner>
+  <summary>
+    Records the step every time the user clicks on the media effects action
+    button in the First Run Experience flow to {Action} media effects, i.e.
+    sound and animations (if applicable).
+  </summary>
+  <token key="Action">
+    <variant name="Disable" summary="disable"/>
+    <variant name="Enable" summary="enable"/>
+  </token>
 </histogram>
 
 <histogram name="ProfilePicker.ReauthResult" enum="ProfilePickerReauthResult"
@@ -1026,7 +1172,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ProfilePicker.{ProfilePickerFlowType}.SignInError"
-    enum="SigninUIErrorType" expires_after="2026-10-04">
+    enum="SigninUIErrorType" expires_after="2026-12-06">
   <owner>anthie@google.com</owner>
   <owner>rsult@google.com</owner>
   <owner>chrome-signin-team@google.com</owner>
@@ -1054,6 +1200,7 @@ chromium-metrics-reviews@google.com.
     <variant name=".DefaultBrowser" summary="the default browser promo step"/>
     <variant name=".FeatureShowcase" summary="the feature showcase step"/>
     <variant name=".FinishFlow" summary="the Finish flow step"/>
+    <variant name=".FinishOrContinue" summary="the finish or continue step"/>
     <variant name=".FinishSamlFlow" summary="the Finish SAML flow step"/>
     <variant name=".FREIntro" summary="the FRE main page step"/>
     <variant name=".PickerMainApp" summary="the profile picker main page step"/>

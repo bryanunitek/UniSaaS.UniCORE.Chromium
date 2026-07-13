@@ -9,11 +9,15 @@
 #include <utility>
 #include <vector>
 
+#include "base/check_deref.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/functional/concurrent_closures.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/types/expected_macros.h"
 #include "components/unexportable_keys/background_task_priority.h"
 #include "components/unexportable_keys/service_error.h"
+#include "components/unexportable_keys/unexportable_key_id.h"
 #include "components/unexportable_keys/unexportable_key_service.h"
 #include "net/base/features.h"
 #include "net/base/net_errors.h"
@@ -24,6 +28,7 @@
 #include "net/device_bound_sessions/session_error.h"
 #include "net/device_bound_sessions/session_json_utils.h"
 #include "net/device_bound_sessions/session_key.h"
+#include "net/device_bound_sessions/session_params.h"
 #include "net/device_bound_sessions/url_fetcher.h"
 #include "net/log/net_log_event_type.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -198,16 +203,29 @@ class RegistrationFetcherImpl : public RegistrationFetcher {
   ~RegistrationFetcherImpl() override {}
 
   void OnSigningKeyGenerated(
+      base::OnceClosure closure,
       unexportable_keys::ServiceErrorOr<
-          unexportable_keys::UnexportableSigningKeyId> key_id) {
-    if (!key_id.has_value()) {
-      RunCallback(
-          CreateErrorRegistrationResult(SessionError(SessionError::kKeyError)));
+          unexportable_keys::UnexportableSigningKeyId> key_id_or_error) {
+    ASSIGN_OR_RETURN(key_id_, key_id_or_error, [this](auto) {
+      RunCallback(CreateErrorRegistrationResult(
+          SessionError(SessionError::kSigningKeyGenerationError)));
       // `this` may be deleted.
-      return;
-    }
+    });
 
-    key_id_ = std::move(*key_id);
+    std::move(closure).Run();
+  }
+
+  void OnAttestationKeyGenerated(
+      base::OnceClosure closure,
+      unexportable_keys::ServiceErrorOr<
+          unexportable_keys::UnexportableAttestationKeyId> key_id_or_error) {
+    ASSIGN_OR_RETURN(attestation_key_id_, key_id_or_error, [this](auto) {
+      RunCallback(CreateErrorRegistrationResult(
+          SessionError(SessionError::kAttestationKeyGenerationError)));
+      // `this` may be deleted.
+    });
+
+    std::move(closure).Run();
   }
 
   SessionError FillSessionError(SessionError error) {
@@ -285,14 +303,23 @@ class RegistrationFetcherImpl : public RegistrationFetcher {
     CHECK(callback_.is_null());
     callback_ = std::move(callback);
 
+    base::ConcurrentClosures concurrent;
     key_service_->GenerateSigningKeySlowlyAsync(
         supported_algos, priority_,
         base::BindOnce(&RegistrationFetcherImpl::OnSigningKeyGenerated,
-                       GetWeakPtr())
-            .Then(base::BindOnce(&RegistrationFetcherImpl::StartFetch,
-                                 GetWeakPtr(),
-                                 registration_params.TakeChallenge(),
-                                 registration_params.TakeAuthorization())));
+                       GetWeakPtr(), concurrent.CreateClosure()));
+
+    if (registration_params.attestation_mode() == AttestationMode::kRequired) {
+      key_service_->GenerateAttestationKeySlowlyAsync(
+          supported_algos, priority_,
+          base::BindOnce(&RegistrationFetcherImpl::OnAttestationKeyGenerated,
+                         GetWeakPtr(), concurrent.CreateClosure()));
+    }
+
+    std::move(concurrent)
+        .Done(base::BindOnce(&RegistrationFetcherImpl::StartFetch, GetWeakPtr(),
+                             registration_params.TakeChallenge(),
+                             registration_params.TakeAuthorization()));
     // `this` may be deleted.
   }
 
@@ -492,38 +519,35 @@ class RegistrationFetcherImpl : public RegistrationFetcher {
             base::BindOnce(&RegistrationFetcherImpl::OnRegistrationTokenCreated,
                            GetWeakPtr(), current_challenge_, *key_id_);
 
-    if (base::FeatureList::IsEnabled(
-            features::kDeviceBoundSessionSigningQuotaAndCaching)) {
-      SchemefulSite site = SchemefulSite(fetcher_endpoint_);
-      if (IsForRefreshRequest()) {
-        SessionKey session_key{site, Session::Id(*session_identifier_)};
-        const SessionService::SignedRefreshChallenge* signed_refresh_challenge =
-            session_service_->GetLatestSignedRefreshChallenge(session_key);
-        // If we already have a matching signed refresh challenge, we
-        // can skip past the signing. We know we have a
-        // `current_challenge_` here because this block is behind
-        // `IsForRefreshRequest()`.
-        if (signed_refresh_challenge &&
-            signed_refresh_challenge->challenge == *current_challenge_ &&
-            signed_refresh_challenge->key_id == *key_id_) {
-          std::move(callback).Run(signed_refresh_challenge->signed_challenge);
-          // `this` may be deleted.
-          return;
-        }
-      }
-
-      // Now, right before signing, we check whether the signing quota is
-      // exceeded. Note this callback is intentionally different from the one
-      // defined above.
-      if (session_service_->SigningQuotaExceeded(site)) {
-        RunCallback(CreateErrorRegistrationResult(
-            SessionError(SessionError::kSigningQuotaExceeded)));
+    SchemefulSite site(fetcher_endpoint_);
+    if (IsForRefreshRequest()) {
+      SessionKey session_key{site, Session::Id(*session_identifier_)};
+      const SessionService::SignedRefreshChallenge* signed_refresh_challenge =
+          session_service_->GetLatestSignedRefreshChallenge(session_key);
+      // If we already have a matching signed refresh challenge, we
+      // can skip past the signing. We know we have a
+      // `current_challenge_` here because this block is behind
+      // `IsForRefreshRequest()`.
+      if (signed_refresh_challenge &&
+          signed_refresh_challenge->challenge == *current_challenge_ &&
+          signed_refresh_challenge->key_id == *key_id_) {
+        std::move(callback).Run(signed_refresh_challenge->signed_challenge);
         // `this` may be deleted.
         return;
       }
-      // Track a new signing attempt.
-      session_service_->AddSigningOccurrence(site);
     }
+
+    // Now, right before signing, we check whether the signing quota is
+    // exceeded. Note this callback is intentionally different from the one
+    // defined above.
+    if (session_service_->SigningQuotaExceeded(site)) {
+      RunCallback(CreateErrorRegistrationResult(
+          SessionError(SessionError::kSigningQuotaExceeded)));
+      // `this` may be deleted.
+      return;
+    }
+    // Track a new signing attempt.
+    session_service_->AddSigningOccurrence(site);
 
     SignChallengeWithKey(IsForRefreshRequest(), *key_service_, *key_id_,
                          priority_, fetcher_endpoint_, current_challenge_,
@@ -553,9 +577,7 @@ class RegistrationFetcherImpl : public RegistrationFetcher {
 
     // Cache the signed refresh challenge in case the same challenge is
     // attempted next time (e.g. if refresh transiently fails).
-    if (base::FeatureList::IsEnabled(
-            features::kDeviceBoundSessionSigningQuotaAndCaching) &&
-        IsForRefreshRequest() && challenge.has_value()) {
+    if (IsForRefreshRequest() && challenge.has_value()) {
       SessionKey session_key{SchemefulSite(fetcher_endpoint_),
                              Session::Id(*session_identifier_)};
       SessionService::SignedRefreshChallenge signed_refresh_challenge = {
@@ -675,8 +697,7 @@ class RegistrationFetcherImpl : public RegistrationFetcher {
     GURL final_registration_url = url_fetcher_->request().url();
 
     base::expected<SessionParams, SessionError> params_or_error =
-        ParseSessionInstructionJson(final_registration_url, *key_id_,
-                                    session_identifier_,
+        ParseSessionInstructionJson(final_registration_url, session_identifier_,
                                     url_fetcher_->data_received());
     if (!params_or_error.has_value()) {
       RunCallback(
@@ -685,7 +706,9 @@ class RegistrationFetcherImpl : public RegistrationFetcher {
       return;
     }
 
-    const SessionParams& params = *params_or_error;
+    SessionParams& params = *params_or_error;
+    params.key_id = CHECK_DEREF(key_id_);
+    params.attestation_key_id = attestation_key_id_;
     base::expected<std::unique_ptr<Session>, SessionError> session_or_error =
         Session::CreateIfValid(params);
     if (!session_or_error.has_value()) {
@@ -865,6 +888,8 @@ class RegistrationFetcherImpl : public RegistrationFetcher {
   const raw_ref<SessionService> session_service_;
   const raw_ref<unexportable_keys::UnexportableKeyService> key_service_;
   std::optional<unexportable_keys::UnexportableSigningKeyId> key_id_;
+  std::optional<unexportable_keys::UnexportableAttestationKeyId>
+      attestation_key_id_;
   raw_ptr<const URLRequestContext> context_;
   IsolationInfo isolation_info_;
   std::optional<net::NetLogSource> net_log_source_;

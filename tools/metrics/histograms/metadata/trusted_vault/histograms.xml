@@ -47,7 +47,7 @@ chromium-metrics-reviews@google.com.
 <histogram
     name="TrustedVault.DownloadAuthenticationFactorsRegistrationState{SecurityDomainId}"
     enum="DownloadAuthenticationFactorsRegistrationStateResult"
-    expires_after="2026-10-05">
+    expires_after="2026-12-06">
   <owner>mmoskvitin@google.com</owner>
   <owner>mastiz@chromium.org</owner>
   <owner>thomasth@google.com</owner>
@@ -232,6 +232,18 @@ chromium-metrics-reviews@google.com.
   <token key="SecurityDomainId" variants="SecurityDomainId"/>
 </histogram>
 
+<histogram name="TrustedVault.RecoveryFlowTriggeredEndpoint"
+    enum="TrustedVaultRecoveryFlowEndpoint" expires_after="2027-06-08">
+  <owner>ammarmk@google.com</owner>
+  <owner>thomasth@google.com</owner>
+  <owner>markusheintz@google.com</owner>
+  <owner>ylahodiuk@google.com</owner>
+  <summary>
+    Recorded when the GPM keychain recovery flow is triggered in the browser.
+    Tracks which endpoint (Desktop or Desktop Embedded) is being targeted.
+  </summary>
+</histogram>
+
 <histogram name="TrustedVault.RecoveryKeyStoreCertificatesFetchStatus"
     enum="RecoveryKeyStoreCertificatesFetchStatus" expires_after="2026-06-03">
   <owner>nsatragno@chromium.org</owner>
@@ -283,6 +295,8 @@ chromium-metrics-reviews@google.com.
     <variant name="" summary="Any reason"/>
     <variant name=".DownloadAuthenticationFactorsRegistrationState"
         summary="Downloading of auth factor registrations"/>
+    <variant name=".DownloadGaiaPasswordPublicKey"
+        summary="Downloading of Gaia password public key"/>
     <variant name=".DownloadIsRecoverabilityDegraded"
         summary="Downloading of the recoverability-degraded state"/>
     <variant name=".DownloadKeys" summary="Downloading of keys"/>
@@ -296,6 +310,7 @@ chromium-metrics-reviews@google.com.
                  local password)"/>
     <variant name=".RegisterUnspecifiedAuthenticationFactor"
         summary="Registration of an authentication factor of unspecified type"/>
+    <variant name=".RotateSharedKey" summary="Rotation of the shared key"/>
   </token>
 </histogram>
 

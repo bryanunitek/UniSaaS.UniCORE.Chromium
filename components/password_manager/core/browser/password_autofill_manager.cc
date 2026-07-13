@@ -98,10 +98,12 @@ bool IsSuggestionHandledInPasswordManager(SuggestionType type) {
     case SuggestionType::kManageAddress:
     case SuggestionType::kManageAutofillAi:
     case SuggestionType::kManageAutofillAiIdentityDocs:
+    case SuggestionType::kManageAutofillAiShopping:
     case SuggestionType::kManageAutofillAiTravel:
     case SuggestionType::kManageCreditCard:
     case SuggestionType::kManageIban:
     case SuggestionType::kManageLoyaltyCard:
+    case SuggestionType::kManageEnhancedAutofill:
     case SuggestionType::kUndoOrClear:
     case SuggestionType::kDatalistEntry:
     case SuggestionType::kAutocompleteEntry:
@@ -119,6 +121,8 @@ bool IsSuggestionHandledInPasswordManager(SuggestionType type) {
     case SuggestionType::kAtMemoryInactivityNudge:
     case SuggestionType::kOpenGemini:
     case SuggestionType::kAtMemoryNoConnection:
+    case SuggestionType::kAtMemoryAiDisclosure:
+    case SuggestionType::kAtMemoryGenericError:
     case SuggestionType::kAtMemorySearchAffordance:
     case SuggestionType::kPersonalContextNotice:
     case SuggestionType::kIdentityCredential:
@@ -142,8 +146,12 @@ bool IsSuggestionHandledInPasswordManager(SuggestionType type) {
     case SuggestionType::kViewPasswordDetails:
     case SuggestionType::kPendingStateSignin:
     case SuggestionType::kLoadingThrobber:
+    case SuggestionType::kFetchingAmbientData:
+    case SuggestionType::kAutofillAiOtherOrders:
+    case SuggestionType::kAutofillAiPrivateInferenceNotice:
     case SuggestionType::kBnplFootnote:
     case SuggestionType::kAutocompleteAtMemoryButton:
+    case SuggestionType::kMaximizeCreditCardBenefitsEntry:
       return false;
   }
 }
@@ -238,12 +246,13 @@ PasswordAutofillManager::GetWebauthnSignInWithAnotherDeviceSuggestion() const {
 }
 
 std::variant<autofill::AutofillDriver*, PasswordManagerDriver*>
-PasswordAutofillManager::GetDriver() {
+PasswordAutofillManager::GetDriver_DoNotUse() {
   return password_manager_driver_.get();
 }
 
 void PasswordAutofillManager::OnSuggestionsShown(
-    base::span<const Suggestion> suggestions) {}
+    base::span<const Suggestion> suggestions,
+    base::optional_ref<const SuggestionMetadata> parent_suggestion_metadata) {}
 
 void PasswordAutofillManager::OnSuggestionsHidden(
     autofill::SuggestionHidingReason reason) {
@@ -279,9 +288,10 @@ void PasswordAutofillManager::DidSelectSuggestion(
             ->IsBiometricAuthenticationBeforeFillingEnabled()) {
       return;
     }
+    size_t password_length =
+        payload.is_cross_domain ? 8 : payload.backup_password.value().length();
     password_manager_driver_->PreviewSuggestion(
-        payload.username,
-        std::u16string(payload.backup_password.value().length(), '*'));
+        payload.username, std::u16string(password_length, '*'));
     return;
   }
   PreviewSuggestion(GetUsernameFromSuggestion(suggestion.main_text.value),
@@ -330,9 +340,16 @@ void PasswordAutofillManager::DidAcceptSuggestion(
           std::move(last_popup_open_args_).suggestions, suggestion));
       break;
     case autofill::SuggestionType::kWebauthnSignInWithAnotherDevice:
-    case autofill::SuggestionType::kWebauthnPasskeyQrCode:
       metrics_util::LogPasswordSuggestionSelected(
           PasswordDropdownSelectedOption::kWebAuthnSignInWithAnotherDevice,
+          password_client_->IsOffTheRecord());
+      password_client_
+          ->GetWebAuthnCredentialsDelegateForDriver(password_manager_driver_)
+          ->LaunchSecurityKeyOrHybridFlow();
+      break;
+    case autofill::SuggestionType::kWebauthnPasskeyQrCode:
+      metrics_util::LogPasswordSuggestionSelected(
+          PasswordDropdownSelectedOption::kWebAuthnPasskeyQrCode,
           password_client_->IsOffTheRecord());
       password_client_
           ->GetWebAuthnCredentialsDelegateForDriver(password_manager_driver_)
@@ -374,9 +391,28 @@ void PasswordAutofillManager::DidAcceptSuggestion(
       auto payload =
           suggestion
               .GetPayload<autofill::Suggestion::PasswordSuggestionDetails>();
-      OnPasswordCredentialSuggestionAccepted(
+      auto fill_backup_callback =
           base::BindOnce(&PasswordAutofillManager::FillBackupSuggestion,
-                         weak_ptr_factory_.GetWeakPtr(), payload));
+                         weak_ptr_factory_.GetWeakPtr(), payload);
+      if (payload.is_cross_domain) {
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_ANDROID)
+        cross_domain_confirmation_controller_ =
+            password_client_->ShowCrossDomainConfirmationPopup(
+                last_popup_open_args_.element_bounds,
+                last_popup_open_args_.text_direction,
+                password_manager_driver_->GetLastCommittedURL(),
+                password_manager_util::GetHumanReadableRealm(
+                    payload.signon_realm.value_or(std::string())),
+                /*show_warning_text=*/true,
+                base::BindOnce(&PasswordAutofillManager::
+                                   OnPasswordCredentialSuggestionAccepted,
+                               weak_ptr_factory_.GetWeakPtr(),
+                               std::move(fill_backup_callback)));
+#endif
+      } else {
+        OnPasswordCredentialSuggestionAccepted(std::move(fill_backup_callback));
+      }
       break;
     }
     case autofill::SuggestionType::kTroubleSigningInEntry: {
@@ -444,13 +480,6 @@ void PasswordAutofillManager::DidAcceptSuggestion(
         autofill::SuggestionHidingReason::kAcceptSuggestion,
         GetMainFillingProduct());
   }
-}
-
-void PasswordAutofillManager::DidPerformButtonActionForSuggestion(
-    const Suggestion&,
-    const autofill::SuggestionButtonAction&) {
-  // Button actions do currently not exist for password entries.
-  NOTREACHED();
 }
 
 bool PasswordAutofillManager::RemoveSuggestion(const Suggestion& suggestion) {
@@ -530,6 +559,17 @@ void PasswordAutofillManager::ShowSuggestions(
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
   if (autofill::IsPasswordsAutofillManuallyTriggered(field.trigger_source)) {
+    if (base::FeatureList::IsEnabled(
+            features::kPasswordManualFallbackSecurityChecks)) {
+      const bool manual_fallback_allowed_for_frame =
+          password_manager_driver_->HasValidURL(/*may_kill_renderer=*/true) &&
+          password_manager_driver_->IsRenderFrameHostSupported();
+      if (!manual_fallback_allowed_for_frame) {
+        // Do not show manual fallback suggestions if the current frame doesn't
+        // meet security criteria, see crbug.com/521502218.
+        return;
+      }
+    }
     if (!manual_fallback_flow_) {
       manual_fallback_flow_ = std::make_unique<PasswordManualFallbackFlow>(
           password_manager_driver_, autofill_client_, password_client_,
@@ -540,7 +580,7 @@ void PasswordAutofillManager::ShowSuggestions(
               password_client_->GetProfilePasswordStore(),
               password_client_->GetAccountPasswordStore()));
     }
-    manual_fallback_flow_->RunFlow(field.element_id.renderer_id, field.bounds,
+    manual_fallback_flow_->RunFlow(field.element_id, field.bounds,
                                    field.text_direction);
     return;
   }
@@ -621,7 +661,7 @@ void PasswordAutofillManager::OnPasskeysReady(
 void PasswordAutofillManager::ContinueShowingSuggestions(
     const autofill::TriggeringField& field) {
   bool autofill_available = ShowPopup(
-      field.bounds, field.text_direction,
+      field.element_id, field.bounds, field.text_direction,
       GetSuggestions(field.typed_username, OffersGeneration(false),
                      ShowPasswordSuggestions(true),
                      ShowWebAuthnCredentials(field.show_webauthn_credentials),
@@ -636,9 +676,10 @@ void PasswordAutofillManager::ContinueShowingSuggestions(
 }
 
 bool PasswordAutofillManager::MaybeShowPasswordSuggestions(
+    const autofill::FieldGlobalId& field_id,
     const gfx::RectF& bounds,
     base::i18n::TextDirection text_direction) {
-  return ShowPopup(bounds, text_direction,
+  return ShowPopup(field_id, bounds, text_direction,
                    GetSuggestions(std::u16string(), OffersGeneration(false),
                                   ShowPasswordSuggestions(true),
                                   ShowWebAuthnCredentials(false),
@@ -647,11 +688,12 @@ bool PasswordAutofillManager::MaybeShowPasswordSuggestions(
 }
 
 bool PasswordAutofillManager::MaybeShowPasswordSuggestionsWithGeneration(
+    const autofill::FieldGlobalId& field_id,
     const gfx::RectF& bounds,
     base::i18n::TextDirection text_direction,
     bool show_password_suggestions) {
   return ShowPopup(
-      bounds, text_direction,
+      field_id, bounds, text_direction,
       GetSuggestions(std::u16string(), OffersGeneration(true),
                      ShowPasswordSuggestions(show_password_suggestions),
                      ShowWebAuthnCredentials(false),
@@ -689,6 +731,7 @@ base::WeakPtr<PasswordAutofillManager> PasswordAutofillManager::GetWeakPtr() {
 // PasswordAutofillManager, private:
 
 bool PasswordAutofillManager::ShowPopup(
+    const autofill::FieldGlobalId& field_id,
     const gfx::RectF& bounds,
     base::i18n::TextDirection text_direction,
     const std::vector<Suggestion>& suggestions,
@@ -719,17 +762,21 @@ bool PasswordAutofillManager::ShowPopup(
         suggestions, is_for_webauthn_request);
     // TODO(crbug.com/41474723): Set the right `form_control_ax_id`.
     last_popup_open_args_ = autofill::AutofillClient::PopupOpenArgs(
-        bounds, text_direction, suggestions,
+        field_id.frame_token, bounds, text_direction, suggestions,
         autofill::AutofillSuggestionTriggerSource::kPasswordManager,
         /*form_control_ax_id=*/0, autofill::PopupAnchorType::kField);
   }
-  autofill_client_->ShowAutofillSuggestions(last_popup_open_args_,
-                                            weak_ptr_factory_.GetWeakPtr());
+  last_session_id_ = autofill_client_->ShowAutofillSuggestions(
+      last_popup_open_args_, weak_ptr_factory_.GetWeakPtr());
   return true;
 }
 
 void PasswordAutofillManager::UpdatePopup(std::vector<Suggestion> suggestions) {
   if (!password_manager_driver_->CanShowAutofillUi()) {
+    return;
+  }
+  if (last_session_id_ !=
+      autofill_client_->GetSessionIdForCurrentAutofillSuggestions()) {
     return;
   }
   if (!ContainsOtherThanManagePasswords(suggestions)) {
@@ -794,9 +841,12 @@ bool PasswordAutofillManager::PreviewSuggestion(const std::u16string& username,
   }
   if (const autofill::PasswordAndMetadata* password_and_metadata =
           GetPasswordAndMetadataForUsername(username, type)) {
+    size_t password_length =
+        password_and_metadata->is_grouped_affiliation
+            ? 8
+            : password_and_metadata->password_value.length();
     password_manager_driver_->PreviewSuggestion(
-        username,
-        std::u16string(password_and_metadata->password_value.length(), '*'));
+        username, std::u16string(password_length, '*'));
     return true;
   }
   return false;
@@ -929,10 +979,12 @@ std::vector<autofill::Suggestion> PasswordAutofillManager::GetSuggestions(
   if (proactive_recovery_login) {
     CHECK(proactive_recovery_login->backup_password_value);
 
-    const auto suggestion_details = Suggestion::PasswordSuggestionDetails(
+    auto suggestion_details = Suggestion::PasswordSuggestionDetails(
         proactive_recovery_login->username_value,
         proactive_recovery_login->password_value,
-        proactive_recovery_login->backup_password_value.value());
+        proactive_recovery_login->backup_password_value.value(),
+        proactive_recovery_login->realm,
+        proactive_recovery_login->is_grouped_affiliation);
     return suggestion_generator_.GetProactiveRecoverySuggestions(
         suggestion_details);
   }

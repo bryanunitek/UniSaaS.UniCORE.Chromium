@@ -13,6 +13,7 @@
 #include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/trace_event/trace_event.h"
+#include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/glic_profile_manager.h"
 #include "chrome/browser/glic/host/context/glic_pin_candidate_provider.h"
 #include "chrome/browser/glic/host/context/glic_screenshot_capturer.h"
@@ -24,6 +25,7 @@
 #include "chrome/browser/glic/host/host.h"
 #include "chrome/browser/glic/host/webui_contents_container.h"
 #include "chrome/browser/glic/public/features.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/glic/public/glic_instance_metrics_backwards_compatibility.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
@@ -134,32 +136,6 @@ void Host::NotifyActorTaskListRowClicked(int32_t task_id) {
   }
 }
 
-void Host::NotifyIsInvoking(bool is_invoking) {
-  if (auto* client = GetPrimaryWebClient()) {
-    client->NotifyIsInvoking(is_invoking);
-  }
-}
-
-void Host::NotifyContextualSkillsChanged(
-    std::vector<mojom::SkillPreviewPtr> contextual_skill_previews) {
-  if (auto* client = GetPrimaryWebClient()) {
-    client->NotifyContextualSkillPreviewsChanged(
-        std::move(contextual_skill_previews));
-  } else {
-    pending_contextual_skills_ = std::move(contextual_skill_previews);
-  }
-}
-
-void Host::GetExperimentalTriggeringUpdates(
-    mojo::PendingRemote<mojom::ExperimentalTriggeringUpdatesHandler> handler,
-    base::OnceCallback<void(bool)> success_status_callback) {
-  if (auto* client = GetPrimaryWebClient()) {
-    client->GetExperimentalTriggeringUpdates(
-        std::move(handler), std::move(success_status_callback));
-  } else {
-    std::move(success_status_callback).Run(false);
-  }
-}
 
 void Host::Invoke(mojom::InvokeOptionsPtr options, base::OnceClosure callback) {
   CHECK(!options->auto_submit) << "Use InvokeWithAutoSubmit instead.";
@@ -276,31 +252,12 @@ void Host::SwitchConversation(
   delegate_->SwitchConversation(std::move(info), std::move(callback));
 }
 
-void Host::RegisterConversation(
-    glic::mojom::ConversationInfoPtr info,
-    mojom::WebClientHandler::RegisterConversationCallback callback) {
-  instance_delegate().RegisterConversation(std::move(info),
-                                           std::move(callback));
-}
-
 void Host::AddObserver(Observer* observer) {
   observers_.AddObserver(observer);
 }
 
 void Host::RemoveObserver(Observer* observer) {
   observers_.RemoveObserver(observer);
-}
-
-void Host::AddPanelStateObserver(PanelStateObserver* observer) {
-  if (glic_instance_) {
-    glic_instance_->AddStateObserver(observer);
-  }
-}
-
-void Host::RemovePanelStateObserver(PanelStateObserver* observer) {
-  if (glic_instance_) {
-    glic_instance_->RemoveStateObserver(observer);
-  }
 }
 
 void Host::WebUIPageHandlerAdded(GlicPageHandler* page_handler) {
@@ -336,17 +293,15 @@ GlicKeyedService& Host::glic_service() {
   return *GlicKeyedService::Get(profile_);
 }
 
-GlicSharingManager& Host::sharing_manager() {
-  return sharing_manager_provider_->sharing_manager();
+GlicSharingManagerInternal& Host::GetSharingManagerInternal() {
+  return sharing_manager_provider_->GetSharingManagerInternal();
 }
 
 GlicPinCandidateProvider& Host::pin_candidate_provider() {
   return sharing_manager_provider_->pin_candidate_provider();
 }
 
-GlicSkillsManager& Host::skills_manager() {
-  return instance_delegate().skills_manager();
-}
+
 
 Host::InstanceDelegate& Host::instance_delegate() {
   CHECK(instance_delegate_);
@@ -426,12 +381,6 @@ void Host::SetWebClient(GlicWebClientAccess* web_client) {
   CHECK(web_client);
   handler_info_->web_client = web_client;
 
-  // TODO(b/507074189): Refactor Skills to use the invoke API.
-  if (!pending_contextual_skills_.empty()) {
-    web_client->NotifyContextualSkillPreviewsChanged(
-        std::move(pending_contextual_skills_));
-    pending_contextual_skills_.clear();
-  }
 
   for (auto& [source, context] : pending_additional_contexts_) {
     web_client->NotifyAdditionalContext(std::move(context));
@@ -482,7 +431,7 @@ void Host::SetWebClient(GlicWebClientAccess* web_client) {
       web_client->PanelWasClosed(base::DoNothing());
     }
   }
-  skills_manager().UpdateSkillPreviews(std::nullopt);
+  instance_delegate().skills_manager().UpdateSkillPreviews(std::nullopt);
 
   observers_.Notify(&Observer::WebClientConnected);
 }
@@ -602,6 +551,9 @@ bool Host::IsWebClientConnected() const {
 void Host::WebUiStateChanged(GlicPageHandler* page_handler,
                              mojom::WebUiState new_state) {
   base::UmaHistogramEnumeration("Glic.PanelWebUiState", new_state);
+  if (!GlicEnabling::HasConsentedForProfile(profile_)) {
+    base::UmaHistogramEnumeration("Glic.Fre.PanelWebUiState", new_state);
+  }
   // UI State has changed
   primary_webui_state_ = new_state;
   observers_.Notify(&Observer::WebUiStateChanged, primary_webui_state_);
@@ -619,6 +571,18 @@ void Host::NotifyZeroStateSuggestion(
 void Host::NotifyInstanceActivationChanged(bool is_active) {
   if (handler_info_ && handler_info_->web_client) {
     handler_info_->web_client->NotifyInstanceActivationChanged(is_active);
+  }
+}
+
+void Host::OnActuatingChanged(bool actuating) {
+  if (contents_) {
+    contents_->OnActuatingChanged(actuating);
+  }
+}
+
+void Host::OnTaskTabsVisibilityChanged(bool has_visible_tab) {
+  if (contents_) {
+    contents_->OnTaskTabsVisibilityChanged(has_visible_tab);
   }
 }
 
@@ -691,10 +655,6 @@ void Host::CaptureScreenshot(
 
 bool Host::IsWidgetShowing(GlicWebClientAccess* client) const {
   return delegate_->IsShowing();
-}
-
-mojom::PanelState Host::GetPanelState(GlicWebClientAccess* client) const {
-  return glic_instance_ ? glic_instance_->GetPanelState() : mojom::PanelState();
 }
 
 void Host::FloatingPanelCanAttachChanged(bool can_attach) {

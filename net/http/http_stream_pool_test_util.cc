@@ -159,12 +159,10 @@ FakeServiceEndpointRequest::CallOnServiceEndpointsUpdated() {
   return *this;
 }
 
-FakeServiceEndpointRequest&
-FakeServiceEndpointRequest::CallOnServiceEndpointRequestFinished(int rv) {
+void FakeServiceEndpointRequest::CallOnServiceEndpointRequestFinished(int rv) {
   CHECK(delegate_);
   resolution_.set_crypto_ready(true);
   delegate_->OnServiceEndpointRequestFinished(rv);
-  return *this;
 }
 
 int FakeServiceEndpointRequest::Start(Delegate* delegate) {
@@ -200,8 +198,8 @@ const HostCache::EntryStaleness* FakeServiceEndpointRequest::GetStaleInfo()
   return nullptr;
 }
 
-bool FakeServiceEndpointRequest::IsStaleWhileRefresing() const {
-  return false;
+bool FakeServiceEndpointRequest::IsStaleWhileRefreshing() const {
+  return is_stale_while_refreshing_;
 }
 
 void FakeServiceEndpointRequest::ChangeRequestPriority(
@@ -277,6 +275,7 @@ FakeServiceEndpointResolver::CreateServiceEndpointRequest(
         std::make_unique<FakeServiceEndpointRequest>();
     request->resolution_ = *default_resolution_;
     request->set_priority(parameters.initial_priority);
+    request->resolve_host_params_ = parameters;
     return request;
   }
 
@@ -285,6 +284,7 @@ FakeServiceEndpointResolver::CreateServiceEndpointRequest(
       std::move(requests_.front());
   requests_.pop_front();
   request->set_priority(parameters.initial_priority);
+  request->resolve_host_params_ = parameters;
   return request;
 }
 

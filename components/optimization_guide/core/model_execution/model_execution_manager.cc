@@ -109,6 +109,7 @@ size_t GetMaxParallelFeatureExecutions(ModelBasedCapabilityKey feature) {
     case ModelBasedCapabilityKey::kAnnotationReducerOnePResolver:
     case ModelBasedCapabilityKey::kAnnotationReducerQueryClassifier:
     case ModelBasedCapabilityKey::kContextualCueing:
+    case ModelBasedCapabilityKey::kContextHub:
       return 1;
     case ModelBasedCapabilityKey::kFormsClassifications:
       // Since there can be multiple forms on a single page, multiple parallel
@@ -124,8 +125,9 @@ size_t GetMaxParallelFeatureExecutions(ModelBasedCapabilityKey feature) {
 
 bool IsEligibleForPrivateAI(ModelBasedCapabilityKey feature) {
   switch (feature) {
-    case ModelBasedCapabilityKey::kZeroStateSuggestions:
     case ModelBasedCapabilityKey::kContextualCueing:
+    case ModelBasedCapabilityKey::kFormsClassifications:
+    case ModelBasedCapabilityKey::kZeroStateSuggestions:
       return true;
     default:
       return false;

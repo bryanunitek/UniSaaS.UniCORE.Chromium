@@ -55,6 +55,7 @@
 .project
 .projectile
 .pydevproject
+/.scratch
 .siso_failed_targets
 *.class
 compile_commands.json
@@ -64,6 +65,7 @@ GRTAGS
 GSYMS
 GTAGS
 Session.vim
+/siso_result.json
 tags
 TAGS
 Thumbs.db

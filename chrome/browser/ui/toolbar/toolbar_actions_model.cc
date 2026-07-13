@@ -27,6 +27,8 @@
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model_factory.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_action_manager.h"
@@ -113,8 +115,15 @@ void ToolbarActionsModel::OnExtensionInstalled(
 
   auto* extension_management =
       extensions::ExtensionManagementFactory::GetForBrowserContext(profile_);
-  if (extension_management->GetToolbarPinMode(extension->id()) ==
-      extensions::ManagedToolbarPinMode::kDefaultPinned) {
+  extensions::ManagedToolbarPinMode pin_mode =
+      extension_management->GetToolbarPinMode(extension->id());
+  // Pin the extension if the policy enforces default pinning, OR if no policy
+  // is set and the feature flag for pinning new extensions by default is
+  // enabled.
+  if (pin_mode == extensions::ManagedToolbarPinMode::kDefaultPinned ||
+      (pin_mode == extensions::ManagedToolbarPinMode::kNotSet &&
+       base::FeatureList::IsEnabled(features::kExtensionsPinnedByDefault) &&
+       profile_->GetPrefs()->GetBoolean(prefs::kExtensionsPinnedByDefault))) {
     SetActionVisibility(extension->id(), true);
   }
 }
@@ -536,10 +545,6 @@ void ToolbarActionsModel::InitializeActionList() {
   pinned_action_ids_ = GetFilteredPinnedActionIds();
 
   if (!profile_->IsOffTheRecord()) {
-    // Prefixed with "ExtensionToolbarModel" rather than "Extensions.Toolbar"
-    // for historical reasons.
-    base::UmaHistogramCounts100("ExtensionToolbarModel.BrowserActionsCount",
-                                action_ids_.size());
     if (extensions::profile_util::ProfileCanUseNonComponentExtensions(
             profile_)) {
       base::UmaHistogramCounts100("Extension.Toolbar.BrowserActionsCount2",

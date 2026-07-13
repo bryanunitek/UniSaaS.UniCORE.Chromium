@@ -16,6 +16,7 @@
 #include <variant>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
@@ -105,6 +106,10 @@ class URLRequestContext;
 class URLRequestContextBuilder;
 }  // namespace net
 
+namespace net::device_bound_sessions {
+struct CookieAccessCheckParams;
+}  // namespace net::device_bound_sessions
+
 namespace certificate_transparency {
 class ChromeRequireCTDelegate;
 }  // namespace certificate_transparency
@@ -129,9 +134,14 @@ class MojoBackendFileOperationsFactory;
 class NetworkService;
 class NetworkServiceNetworkDelegate;
 class P2PSocketManager;
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+class DeviceBoundSessionServiceDelegate;
+#endif
 class PendingTrustTokenStore;
 class PrefetchCache;
 class PrefetchMatchingURLLoaderFactory;
+class ProxyCheckingHostResolverRequest;
 class ProxyLookupRequest;
 class ResourceSchedulerClient;
 class SCTAuditingHandler;
@@ -151,14 +161,13 @@ struct ResourceRequest;
 // NetworkService's mojo interface and are owned jointly by the NetworkService
 // and the mojo::Remote<NetworkContext> used to talk to them, and the
 // NetworkContext is destroyed when either one is torn down.
+class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+    : public mojom::NetworkContext
 #if BUILDFLAG(ENABLE_REPORTING)
-class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
-    : public mojom::NetworkContext,
-      public net::ReportingCacheObserver {
-#else
-class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
-    : public mojom::NetworkContext {
-#endif  // BUILDFLAG(ENABLE_REPORTING)
+    ,
+      public net::ReportingCacheObserver
+#endif
+{
 
  public:
   using OnConnectionCloseCallback =
@@ -295,6 +304,11 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
                       base::Time end_time,
                       mojom::ClearDataFilterPtr filter,
                       ClearHttpCacheCallback callback) override;
+  void ClearHttpCacheLogically(
+      base::Time start_time,
+      base::Time end_time,
+      mojom::ClearDataFilterPtr filter,
+      ClearHttpCacheLogicallyCallback callback) override;
   void ComputeHttpCacheSize(base::Time start_time,
                             base::Time end_time,
                             ComputeHttpCacheSizeCallback callback) override;
@@ -303,6 +317,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
                               const std::string& http_method,
                               const net::NetworkIsolationKey& key,
                               bool include_credentials) override;
+#if BUILDFLAG(IS_ANDROID)
+  void SetHttpCacheMaxSize(base::ByteSize http_cache_max_size,
+                           bool force_initialization) override;
+#endif  // BUILDFLAG(IS_ANDROID)
   void ClearCorsPreflightCache(
       mojom::ClearDataFilterPtr filter,
       ClearCorsPreflightCacheCallback callback) override;
@@ -406,8 +424,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
       mojo::PendingRemote<mojom::WebSocketAuthenticationHandler> auth_handler,
       mojo::PendingRemote<mojom::TrustedHeaderClient> header_client,
       const std::optional<base::UnguessableToken>& throttling_profile_id,
-      const std::optional<base::UnguessableToken>& network_restrictions_id)
-      override;
+      const base::UnguessableToken& network_restrictions_id) override;
   void CreateWebTransport(
       const GURL& url,
       const url::Origin& origin,
@@ -423,8 +440,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
       mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>
           url_loader_network_observer,
       mojom::ClientSecurityStatePtr client_security_state,
-      const std::optional<base::UnguessableToken>& network_restrictions_id)
-      override;
+      const base::UnguessableToken& network_restrictions_id) override;
   void CreateNetLogExporter(
       mojo::PendingReceiver<mojom::NetLogExporter> receiver) override;
   void ResolveHost(
@@ -483,7 +499,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
       const GURL& url,
       mojom::CredentialsMode credentials_mode,
       const net::NetworkAnonymizationKey& network_anonymization_key,
-      const std::optional<base::UnguessableToken>& network_restrictions_id,
+      const base::UnguessableToken& network_restrictions_id,
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
       const std::optional<net::ConnectionKeepAliveConfig>& keepalive_config,
       mojo::PendingRemote<mojom::ConnectionChangeObserverClient>
@@ -602,6 +618,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
       mojo::PendingReceiver<network::mojom::DeviceBoundSessionManager>
           device_bound_session_manager) override;
 
+  bool HasCookieAccessForDeviceBoundSession(
+      const net::device_bound_sessions::CookieAccessCheckParams& params);
+
   void SetTLS13EarlyDataEnabled(bool enabled);
 
   // Destroys |request| when a proxy lookup completes.
@@ -633,6 +652,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
   size_t pending_proxy_lookup_requests_for_testing() const {
     return proxy_lookup_requests_.size();
   }
+
+  void OnProxyCheckingHostResolverRequestComplete(
+      ProxyCheckingHostResolverRequest* request);
 
   void set_network_qualities_pref_delegate_for_testing(
       std::unique_ptr<NetworkQualitiesPrefDelegate>
@@ -798,9 +820,20 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
       net::handles::NetworkHandle bound_network);
   scoped_refptr<SessionCleanupCookieStore> MakeSessionCleanupCookieStore()
       const;
+  enum class ClearHttpCacheMode {
+    kPhysical = 0,
+    kLogical = 1,
+    kMaxValue = kLogical,
+  };
+
+  void ClearHttpCacheInternal(base::Time start_time,
+                              base::Time end_time,
+                              mojom::ClearDataFilterPtr filter,
+                              ClearHttpCacheMode mode,
+                              base::OnceClosure callback);
 
   // Invoked when the HTTP cache was cleared. Invokes |callback|.
-  void OnHttpCacheCleared(ClearHttpCacheCallback callback,
+  void OnHttpCacheCleared(base::OnceClosure callback,
                           HttpCacheDataRemover* remover);
 
   void OnHostResolverShutdown(HostResolver* resolver);
@@ -889,6 +922,13 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
   std::unique_ptr<domain_reliability::DomainReliabilityMonitor>
       domain_reliability_monitor_;
 
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+  // This must be declared before `url_request_context_owner_` because the
+  // context builder takes a repeating callback referencing it via Unretained.
+  std::unique_ptr<DeviceBoundSessionServiceDelegate>
+      device_bound_session_service_delegate_;
+#endif
+
   // Holds owning pointer to |url_request_context_|. Will contain a nullptr for
   // |url_request_context| when the NetworkContextImpl doesn't own its own
   // URLRequestContext.
@@ -915,6 +955,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
   std::vector<std::unique_ptr<HttpCacheDataCounter>> http_cache_data_counters_;
   std::set<std::unique_ptr<ProxyLookupRequest>, base::UniquePtrComparator>
       proxy_lookup_requests_;
+  std::set<std::unique_ptr<ProxyCheckingHostResolverRequest>,
+           base::UniquePtrComparator>
+      proxy_checking_host_resolver_requests_;
 
   // If non-null, called when the mojo pipe for the NetworkContext is closed.
   OnConnectionCloseCallback on_connection_close_callback_;

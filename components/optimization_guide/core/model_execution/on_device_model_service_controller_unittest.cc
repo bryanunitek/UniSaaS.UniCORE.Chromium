@@ -936,9 +936,7 @@ TEST_F(OnDeviceModelServiceControllerTest, SessionRequiresSafetyModel) {
     base::HistogramTester histogram_tester;
 
     broker_.model_provider().RemoveModel(
-        features::ShouldUseGeneralizedSafetyModel()
-            ? proto::OPTIMIZATION_TARGET_GENERALIZED_SAFETY
-            : proto::OPTIMIZATION_TARGET_TEXT_SAFETY);
+        proto::OPTIMIZATION_TARGET_GENERALIZED_SAFETY);
     EXPECT_TRUE(CreateSession(SessionConfigParams{}));
 
     histogram_tester.ExpectUniqueSample(
@@ -3519,8 +3517,8 @@ TEST_F(OnDeviceModelServiceControllerTest,
 TEST_F(OnDeviceModelServiceControllerTest,
        BrokerCreateSessionFailedOnNotEnoughDiskSpace) {
   // 20gb is the default in `IsFreeDiskSpaceSufficientForOnDeviceModelInstall`.
-  broker_.component_state().SetFreeDiskSpace(base::GiB(20) -
-                                             base::ByteCount(1));
+  broker_.component_state().SetFreeDiskSpace(base::GiBU(20) -
+                                             base::ByteSizeDelta(1));
 
   mojo::PendingReceiver<mojom::ModelBroker> pending_broker;
   OptimizationGuideLogger logger;

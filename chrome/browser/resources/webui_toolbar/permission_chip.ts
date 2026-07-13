@@ -2,19 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {TrackedElementManager} from '//resources/js/tracked_element/tracked_element_manager.js';
 import {ensureTransitionEndEvent} from '//resources/js/util.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import {LhsChipIdentifier, PermissionAction, PermissionChipTheme, PermissionPromptStyle} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
+import type {PermissionChipState} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
+import {HelpBubbleMixinLit} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin_lit.js';
 
 import {BrowserProxyImpl} from './browser_proxy.js';
 import {getCss} from './permission_chip.css.js';
 import {getHtml} from './permission_chip.html.js';
 import {BUTTON_LEFT} from './toolbar_button.js';
-import {LhsChipIdentifier, PermissionAction, PermissionChipTheme, PermissionPromptStyle} from './toolbar_ui_api_data_model.mojom-webui.js';
-import type {PermissionChipState} from './toolbar_ui_api_data_model.mojom-webui.js';
 
-export class PermissionChipElement extends CrLitElement {
+export interface PermissionChipElement {
+  $: {
+    message: HTMLSpanElement,
+  };
+}
+
+const PermissionChipElementBase = HelpBubbleMixinLit(CrLitElement);
+
+export class PermissionChipElement extends PermissionChipElementBase {
   static get is() {
     return 'permission-chip';
   }
@@ -30,39 +38,24 @@ export class PermissionChipElement extends CrLitElement {
   static override get properties() {
     return {
       chipState: {type: Object},
+      hasDivider: {type: Boolean, attribute: 'has-divider', reflect: true},
+      isFullyCollapsed_: {type: Boolean},
     };
   }
 
   accessor chipState: PermissionChipState|null = null;
+  accessor hasDivider: boolean = false;
+  protected accessor isFullyCollapsed_: boolean = true;
 
-  private isFullyCollapsed_: boolean = true;
-  private trackedElementManager_: TrackedElementManager;
-
-  constructor() {
-    super();
-    this.trackedElementManager_ = TrackedElementManager.getInstance();
-  }
-
-  override connectedCallback() {
-    super.connectedCallback();
-    const id = this.id === 'request-chip' ?
-        'PermissionChipView::kPermissionRequestChipElementId' :
-        'PermissionChipView::kIndicatorChipElementId';
-    this.trackedElementManager_.startTracking(this, id, {
-      onHighlightChanged: (highlighted: boolean) => {
-        // Manually toggle the DOM attribute to bypass Lit's asynchronous update
-        // batching, ensuring the style updates synchronously.
-        // TODO(crbug.com/502598627): Re-evaluate how big the visual flash
-        // problem is, and whether we really need to manually toggle it or if we
-        // can use a reflected Lit property.
-        this.toggleAttribute('anchor-highlighted', highlighted);
-      },
-    });
-  }
+  private isTracking_: boolean = false;
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this.trackedElementManager_.stopTracking(this);
+    if (this.isTracking_) {
+      this.isTracking_ = false;
+      // The HelpBubbleMixin's disconnected callback will unregister the
+      // bubbles.
+    }
   }
 
   override updated(changedProperties: PropertyValues<this>) {
@@ -70,11 +63,13 @@ export class PermissionChipElement extends CrLitElement {
     if (changedProperties.has('chipState')) {
       this.updateColors_();
       this.onChipStateChanged_();
+      this.updateTracking_();
     }
   }
 
   private onChipStateChanged_() {
-    if (!this.chipState) {
+    if (!this.chipState || !this.chipState.isVisible) {
+      this.isFullyCollapsed_ = true;
       return;
     }
 
@@ -103,14 +98,41 @@ export class PermissionChipElement extends CrLitElement {
       }
     };
 
-    const chipEl = this.shadowRoot.querySelector<HTMLElement>('#chip');
-    if (chipEl) {
-      chipEl.addEventListener('transitionend', fireIpc, {once: true});
-      // Fallback in case there is no CSS transition (e.g., hidden
-      // element) or the tab is backgrounded, which might delay or
-      // suppress transitionend. `ensureTransitionEndEvent` fetches the
-      // duration from the CSS.
-      ensureTransitionEndEvent(chipEl);
+    const messageEl = this.$.message;
+    messageEl.addEventListener('transitionend', fireIpc, {once: true});
+    // Fallback in case there is no CSS transition (e.g., hidden
+    // element) or the tab is backgrounded, which might delay or
+    // suppress transitionend. `ensureTransitionEndEvent` fetches the
+    // duration from the CSS.
+    ensureTransitionEndEvent(messageEl);
+  }
+
+  // Dynamically start/stop tracking based on visibility. Since the chips are
+  // permanently in the DOM to support exit animations, tracking them in
+  // connectedCallback would register them immediately upon connection. This
+  // occurs before the WebUI receives its initial sync state from C++, sending
+  // Mojo messages prematurely and breaking unit tests (like Sync Enabled)
+  // that assert 0 tracked elements before sync.
+  private updateTracking_() {
+    const id = this.id === 'request-chip' ?
+        'PermissionChipView::kPermissionRequestChipElementId' :
+        'PermissionChipView::kIndicatorChipElementId';
+    const shouldTrack = !!(this.chipState && this.chipState.isVisible);
+    if (shouldTrack && !this.isTracking_) {
+      this.registerHelpBubble(id, this, {
+        onHighlightChanged: (highlighted: boolean) => {
+          // Manually toggle the DOM attribute to bypass Lit's asynchronous
+          // update batching, ensuring the style updates synchronously.
+          // TODO(crbug.com/502598627): Re-evaluate how big the visual flash
+          // problem is, and whether we really need to manually toggle it or
+          // if we can use a reflected Lit property.
+          this.toggleAttribute('anchor-highlighted', highlighted);
+        },
+      });
+      this.isTracking_ = true;
+    } else if (!shouldTrack && this.isTracking_) {
+      this.unregisterHelpBubble(id);
+      this.isTracking_ = false;
     }
   }
 
@@ -234,29 +256,41 @@ export class PermissionChipElement extends CrLitElement {
     }
 
     let iconName = '';
+    // TODO(crbug.com/502598627): This maps new rounded icon names and old names
+    // to the same pre-canned SVG, which means it doesn't actually support
+    // rounded icons. We will need to add the rounded SVGs and update this
+    // mapping if we want to support them in the future.
     switch (this.chipState.iconName) {
-      case 'kLocationOnChromeRefreshIcon':
+      case 'kLocationOnIcon':
+      case 'kLocationOnChromeRefreshOldIcon':
         iconName = 'location_on_chrome_refresh';
         break;
-      case 'kLocationOffChromeRefreshIcon':
+      case 'kLocationOffIcon':
+      case 'kLocationOffChromeRefreshOldIcon':
         iconName = 'location_off_chrome_refresh';
         break;
-      case 'kVideocamChromeRefreshIcon':
+      case 'kVideocamIcon':
+      case 'kVideocamChromeRefreshOldIcon':
         iconName = 'videocam_chrome_refresh';
         break;
-      case 'kVideocamOffChromeRefreshIcon':
+      case 'kVideocamOffIcon':
+      case 'kVideocamOffChromeRefreshOldIcon':
         iconName = 'videocam_off_chrome_refresh';
         break;
-      case 'kMicChromeRefreshIcon':
+      case 'kMicIcon':
+      case 'kMicChromeRefreshOldIcon':
         iconName = 'mic_chrome_refresh';
         break;
-      case 'kMicOffChromeRefreshIcon':
+      case 'kMicOffIcon':
+      case 'kMicOffChromeRefreshOldIcon':
         iconName = 'mic_off_chrome_refresh';
         break;
-      case 'kNotificationsChromeRefreshIcon':
+      case 'kNotificationsIcon':
+      case 'kNotificationsChromeRefreshOldIcon':
         iconName = 'notifications_chrome_refresh';
         break;
-      case 'kNotificationsOffChromeRefreshIcon':
+      case 'kNotificationsOffIcon':
+      case 'kNotificationsOffChromeRefreshOldIcon':
         iconName = 'notifications_off_chrome_refresh';
         break;
       default:

@@ -69,6 +69,8 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   WebViewImpl* GetWebView() const override;
   void ChromeDestroyed() override;
   void SetWindowRect(const gfx::Rect&, LocalFrame&) override;
+  void MoveWindowTo(const gfx::Point&, LocalFrame&) override;
+  void ResizeWindowTo(const gfx::Size&, LocalFrame&) override;
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   void Minimize(LocalFrame&, WindowingControlsChangeCallback) override;
   void Maximize(LocalFrame&, WindowingControlsChangeCallback) override;
@@ -98,7 +100,6 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
                              base::TimeDelta timeout,
                              cc::PaintHoldingReason reason) override;
   void StopDeferringCommits(LocalFrame& main_frame) override;
-  void SetShouldThrottleFrameRate(bool flag, LocalFrame& main_frame) override;
   void RequestMainFrameOnCompositorAnimation(
       LocalFrame&,
       cc::PropertyChangeForcesCommitCriteria criteria,
@@ -289,9 +290,10 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   void DidChangeSelectionInSelectControl(HTMLFormControlElement&) override;
   void SelectFieldOptionsChanged(HTMLFormControlElement&) override;
   void AjaxSucceeded(LocalFrame*) override;
-  void JavaScriptChangedValue(HTMLFormControlElement&,
-                              const String& old_value,
-                              bool was_autofilled) override;
+  void JavaScriptSetValue(HTMLFormControlElement&,
+                          const String& old_value,
+                          bool was_autofilled,
+                          bool value_changed) override;
   bool IsAutofillableElement(const HTMLFormControlElement&) override;
 
   void ShowVirtualKeyboardOnElementFocus(LocalFrame&) override;

@@ -35,7 +35,7 @@
 
 #include "base/check_op.h"
 #include "base/containers/enum_set.h"
-#include "base/containers/lru_cache.h"
+#include "base/containers/hashing_lru_cache.h"
 #include "base/dcheck_is_on.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
@@ -199,7 +199,6 @@ class FontFaceSet;
 class FormController;
 class FragmentDirective;
 class FrameCallback;
-class FrameScheduler;
 class HTMLAllCollection;
 class HTMLBodyElement;
 class HTMLCollection;
@@ -310,8 +309,7 @@ enum class DocumentClass {
   kMaxValue = kText,
 };
 
-using DocumentClassFlags = base::
-    EnumSet<DocumentClass, DocumentClass::kMinValue, DocumentClass::kMaxValue>;
+using DocumentClassFlags = base::EnumSet<DocumentClass>;
 
 // A map of IDL attribute name to Element FrozenArray value, for one particular
 // element.
@@ -363,7 +361,6 @@ struct UnloadEventTimingInfo {
 class CORE_EXPORT Document : public ContainerNode,
                              public TreeScope,
                              public UseCounter,
-                             public WidgetCreationObserver,
                              public Supplementable<Document> {
   DEFINE_WRAPPERTYPEINFO();
 
@@ -997,6 +994,11 @@ class CORE_EXPORT Document : public ContainerNode,
   // This is not an implementation of web-exposed Document.prototype.URL.
   const KURL& Url() const { return url_; }
   void SetURL(const KURL&);
+
+  KURL OutgoingReferrerUrl() const;
+  bool IsOutgoingReferrerUrlCachedForTesting() const {
+    return cached_outgoing_referrer_url_.has_value();
+  }
 
   // Bind the url to document.url, if unavailable bind to about:blank.
   KURL urlForBinding() const;
@@ -1747,24 +1749,7 @@ class CORE_EXPORT Document : public ContainerNode,
     --popover_hiding_nesting_count_;
   }
 
-  // Unbounded elements shown in any local frame under the same page are tracked
-  // on the top-level Main Frame document so that they can be checked globally
-  // (e.g. for clip escaping and hit testing). Non-top documents forward the
-  // count to TopDocument() and must always keep their local
-  // `active_unbounded_element_count_` at 0.
-  void IncrementActiveUnboundedElementCount() {
-    DCHECK(&TopDocument() == this || !active_unbounded_element_count_);
-    TopDocument().active_unbounded_element_count_++;
-  }
-  void DecrementActiveUnboundedElementCount() {
-    DCHECK(&TopDocument() == this || !active_unbounded_element_count_);
-    DCHECK_GT(TopDocument().active_unbounded_element_count_, 0u);
-    TopDocument().active_unbounded_element_count_--;
-  }
-  bool HasActiveUnboundedElements() const {
-    DCHECK(&TopDocument() == this || !active_unbounded_element_count_);
-    return TopDocument().active_unbounded_element_count_ > 0;
-  }
+  bool HasActiveUnboundedElements() const;
 
   HeapHashSet<Member<HTMLElement>>& AllOpenPopovers() {
     return all_open_popovers_;
@@ -2139,19 +2124,11 @@ class CORE_EXPORT Document : public ContainerNode,
     return has_render_blocking_expect_link_elements_;
   }
 
-  void SetHasFullFrameRateBlockingExpectLinkElements(bool flag);
-
-  bool HasFullFrameRateBlockingExpectLinkElements() const {
-    return has_frame_rate_blocking_expect_link_elements_;
-  }
-
   // Whether the document has any pending elements that need to be tracked for
-  // full render blocking or full frame rate blocking.
+  // full render blocking.
   bool HasPendingExpectLinkElements() const {
-    return has_pending_expect_link_elements_;
+    return has_render_blocking_expect_link_elements_;
   }
-
-  void UpdateRenderFrameRate();
 
   // Called when a previously render-blocking resource is no longer render-
   // blocking, due to it has finished loading or has given up render-blocking.
@@ -2337,8 +2314,6 @@ class CORE_EXPORT Document : public ContainerNode,
   void HandlePaymentLink(const KURL& href);
 #endif
 
-  // WidgetCreationObserver implementation
-  void OnLocalRootWidgetCreated() override;
 
   // https://dom.spec.whatwg.org/#effective-global-custom-element-registry
   // A document's effective global custom element registry is its own registry
@@ -2354,6 +2329,11 @@ class CORE_EXPORT Document : public ContainerNode,
     return scoped_custom_element_registry_used_;
   }
 
+  uint64_t CookieModificationCount() const {
+    return cookie_modification_count_;
+  }
+  void IncrementCookieModificationCount() { cookie_modification_count_++; }
+
   ViewTransitionSupplement* GetViewTransitionsIfExists() const {
     return view_transitions_;
   }
@@ -2365,13 +2345,6 @@ class CORE_EXPORT Document : public ContainerNode,
       return CreateViewTransitions();
     }
   }
-
-  const HeapHashSet<Member<const Element>>& OverscrollCommandTargets();
-  void UpdateOverscrollCommandTargets();
-  bool OverscrollCommandTargetsDirty() const;
-  void MarkOverscrollCommandTargetsDirty();
-  void AddOverscrollCommandInvoker(Element& invoker);
-  void RemoveOverscrollCommandInvoker(Element& invoker);
 
   void UpdateActiveState(bool is_active, bool update_active_chain, Element*);
   void UpdateHoverState(Element*);
@@ -2678,7 +2651,6 @@ class CORE_EXPORT Document : public ContainerNode,
                                      StreamingSanitizer* sanitizer,
                                      ExceptionState& exception_state);
 
-  bool CanThrottleFrameRate();
 
   // Called upon prerender activation.
   // Note that not all prerendering pages block script execution; prerendering
@@ -2759,6 +2731,12 @@ class CORE_EXPORT Document : public ContainerNode,
   // The URL cache is mutable because the changes that are made to it during
   // CompleteURLWithOverride() are not observable by callers.
   mutable URLCache url_cache_;
+
+  // Caches the stripped outgoing referrer URL (credentials and fragments
+  // removed) to avoid re-parsing and re-stripping on every subresource request.
+  mutable std::optional<KURL> cached_outgoing_referrer_url_;
+  // Feature flag killswitch for the outgoing referrer URL cache.
+  bool should_cache_outgoing_referrer_ = false;
 
   // Indicates whether all the conditions are met to trigger recording of counts
   // for cases where sandboxed srcdoc documents use their base url to resolve
@@ -2883,9 +2861,6 @@ class CORE_EXPORT Document : public ContainerNode,
 
   bool has_render_blocking_expect_link_elements_ = false;
 
-  bool has_frame_rate_blocking_expect_link_elements_ = false;
-
-  bool has_pending_expect_link_elements_ = false;
 
   // Set to true whenever shadow root is attached to document. Does not
   // get reset if all roots are removed.
@@ -3057,12 +3032,6 @@ class CORE_EXPORT Document : public ContainerNode,
   // Used during the popover show/hide process to avoid reentrant show/hide.
   bool popover_showing_ = false;
   uint32_t popover_hiding_nesting_count_ = 0;
-
-  // Used during unbounded element show/hide to keep track of whether there is
-  // an active unbounded element.
-  // TODO(crbug.com/508672616) this likely can just be a bool, once checks are
-  // implemented to ensure only one unbounded element is open at a time.
-  uint32_t active_unbounded_element_count_ = 0;
 
   // The ordered list of currently-open dialogs, in order they were opened.
   HeapLinkedHashSet<Member<HTMLDialogElement>> all_open_dialogs_;
@@ -3284,6 +3253,12 @@ class CORE_EXPORT Document : public ContainerNode,
   // third-party cookie blocking is enabled.
   bool override_site_for_cookies_for_csp_media_ = false;
 
+  // Tracks the number of times cookies have been modified (e.g., via
+  // document.cookie or CookieStore) within this document. Used to detect if
+  // cookies have changed since a renderer-initiated navigation started, in
+  // which case subsequent duplicate navigations are not ignored.
+  uint64_t cookie_modification_count_ = 0;
+
   // See description in ScheduleShadowTreeCreation().
   HeapHashSet<Member<HTMLInputElement>> elements_needing_shadow_tree_;
 
@@ -3308,16 +3283,6 @@ class CORE_EXPORT Document : public ContainerNode,
 
   bool responsive_embedded_sizing_ = false;
   bool text_scale_meta_tag_present_ = false;
-
-  // `overscroll_command_targets_` is a set of elements that are currently the
-  // targets of command invokers that have `command=toggle-overscroll`. This
-  // set is updated lazily, when `overscroll_command_targets_dirty_` is true.
-  // The `overscroll_command_invokers_` set contains the associated list of
-  // command invokers themselves. Together, these determine the state of the
-  // `:-internal-overscroll-target` pseudo class.
-  HeapHashSet<Member<const Element>> overscroll_command_targets_;
-  HeapHashSet<Member<Element>> overscroll_command_invokers_;
-  bool overscroll_command_targets_dirty_ = false;
 
   // Data on the currently active safe-triangle (if any), for HTML menu
   // elements, that is delaying interest gain/loss.
@@ -3367,7 +3332,7 @@ struct DowncastTraits<Document> {
 
 }  // namespace blink
 
-#ifndef NDEBUG
+#if DCHECK_IS_ON()
 // Outside the blink namespace for ease of invocation from gdb.
 CORE_EXPORT void ShowLiveDocumentInstances();
 #endif

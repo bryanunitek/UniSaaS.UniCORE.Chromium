@@ -26,6 +26,9 @@ namespace base {
 class TimeDelta;
 }  // namespace base
 
+class AiModeButtonService;
+class TemplateURLService;
+
 // The set of parameters customizing the HUP scoring.
 struct HUPScoringParams {
   // A set of parameters describing how to cap a given count score.  First,
@@ -326,7 +329,6 @@ extern const char kMaxNumHQPUrlsIndexedAtStartupOnLowEndDevicesParam[];
 extern const char kMaxNumHQPUrlsIndexedAtStartupOnNonLowEndDevicesParam[];
 
 // Parameter names used by num suggestion experiments.
-extern const char kMaxZeroSuggestMatchesParam[];
 extern const char kUIMaxAutocompleteMatchesByProviderParam[];
 extern const char kUIMaxAutocompleteMatchesParam[];
 // The URL cutoff and increased limit for dynamic max autocompletion.
@@ -392,9 +394,13 @@ bool IsOnFocusZeroSuggestEnabledInContext(
 bool IsHideSuggestionGroupHeadersEnabledInContext(
     metrics::OmniboxEventProto::PageClassification page_classification);
 
-// Returns whether AIM page action in Omnibox is enabled.
+// Returns whether AIM page action in Omnibox is enabled. This is a
+// runtime/dynamic check. I.e. its value can change without restarting the
+// browser.
 bool IsAimOmniboxEntrypointEnabled(
-    const AimEligibilityService* aim_eligibility_service);
+    const AimEligibilityService* aim_eligibility_service,
+    const AiModeButtonService* ai_mode_button_service,
+    const TemplateURLService* template_url_service);
 
 // Returns whether AIM starter pack is enabled.
 bool IsAimStarterPackEnabled(

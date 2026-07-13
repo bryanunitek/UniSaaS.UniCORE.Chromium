@@ -64,10 +64,12 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/install_approval.h"
+#include "extensions/browser/install_prompt_data.h"
 #include "extensions/browser/install_tracker.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/browser/scoped_active_install.h"
 #include "extensions/browser/supervised_user_extensions_delegate.h"
+#include "extensions/browser/ui_util.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
@@ -570,7 +572,7 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnWebstoreParseSuccess(
       details().localized_name ? *details().localized_name : std::string();
 
   std::u16string error;
-  dummy_extension_ = ExtensionInstallPrompt::GetLocalizedExtensionForDisplay(
+  dummy_extension_ = ui_util::GetLocalizedExtensionForDisplay(
       *parsed_manifest_, Extension::FROM_WEBSTORE, id, localized_name,
       std::string(), &error);
 
@@ -622,17 +624,17 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnInstallStatusCheckDone(
   }
 
   if (install_status == kCanRequest || install_status == kRequestPending) {
-    install_prompt_ = std::make_unique<ExtensionInstallPrompt>(web_contents);
-    install_prompt_->ShowDialog(
+    install_prompt_ = ExtensionsBrowserClient::Get()->CreateInstallPrompt(
+        web_contents,
+        std::make_unique<InstallPromptData>(
+            install_status == kCanRequest
+                ? InstallPromptData::EXTENSION_REQUEST_PROMPT
+                : InstallPromptData::EXTENSION_PENDING_REQUEST_PROMPT));
+    install_prompt_->ShowInstallDialog(
         base::BindRepeating(&WebstorePrivateBeginInstallWithManifest3Function::
                                 OnRequestPromptDone,
                             this),
-        dummy_extension_.get(), &icon_,
-        std::make_unique<ExtensionInstallPrompt::Prompt>(
-            install_status == kCanRequest
-                ? ExtensionInstallPrompt::EXTENSION_REQUEST_PROMPT
-                : ExtensionInstallPrompt::EXTENSION_PENDING_REQUEST_PROMPT),
-        ExtensionInstallPrompt::GetDefaultShowDialogCallback());
+        dummy_extension_.get(), &icon_);
   } else {
     ReportWebStoreInstallEsbAllowlistParameter(details().esb_allowlist);
 #if BUILDFLAG(IS_ANDROID)
@@ -648,10 +650,8 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnInstallStatusCheckDone(
     } else if (supervised_user_extensions_delegate->IsChild() &&
                !supervised_user_extensions_delegate
                     ->CanSkipExtensionParentApprovals()) {
-      supervised_user_extensions_metrics_recorder_
-          .RecordAskParentDialogUmaMetrics(
-              SupervisedUserExtensionsMetricsRecorder::AskParentDialogState::
-                  kOpened);
+      supervised_user_extensions_delegate->RecordAskParentDialogUmaMetrics(
+          SupervisedUserExtensionsDelegate::AskParentDialogState::kOpened);
 
       // This install requires parent permission, so show the Ask Parent dialog.
       ShowExtensionInstallAskParentDialog(
@@ -711,8 +711,8 @@ void WebstorePrivateBeginInstallWithManifest3Function::RequestExtensionApproval(
                          OnExtensionApprovalDone,
                      this);
 #else
-  supervised_user_extensions_metrics_recorder_.RecordAskParentDialogUmaMetrics(
-      SupervisedUserExtensionsMetricsRecorder::AskParentDialogState::kApproved);
+  supervised_user_extensions_delegate->RecordAskParentDialogUmaMetrics(
+      SupervisedUserExtensionsDelegate::AskParentDialogState::kApproved);
 
   auto extension_approval_callback =
       base::BindOnce(&WebstorePrivateBeginInstallWithManifest3Function::
@@ -746,18 +746,18 @@ void WebstorePrivateBeginInstallWithManifest3Function::
 
   auto dialog_callback = base::BindOnce(
       [](base::OnceCallback<void(SupervisedExtensionApprovalResult)> callback,
-         ExtensionInstallPrompt::DoneCallbackPayload payload) {
+         ExtensionInstallPromptClient::DoneCallbackPayload payload) {
         switch (payload.result) {
-          case ExtensionInstallPrompt::Result::ACCEPTED:
+          case ExtensionInstallPromptClient::Result::ACCEPTED:
             std::move(callback).Run(
                 SupervisedExtensionApprovalResult::kApproved);
             break;
-          case ExtensionInstallPrompt::Result::USER_CANCELED:
-          case ExtensionInstallPrompt::Result::ABORTED:
+          case ExtensionInstallPromptClient::Result::USER_CANCELED:
+          case ExtensionInstallPromptClient::Result::ABORTED:
             std::move(callback).Run(
                 SupervisedExtensionApprovalResult::kBlocked);
             break;
-          case ExtensionInstallPrompt::Result::
+          case ExtensionInstallPromptClient::Result::
               ACCEPTED_WITH_WITHHELD_PERMISSIONS:
             // Parent approval dialog doesn't support
             // `ACCEPTED_WITH_WITHHELD_PERMISSIONS` result.
@@ -768,15 +768,21 @@ void WebstorePrivateBeginInstallWithManifest3Function::
                          OnExtensionApprovalDone,
                      this));
 
-  auto prompt = std::make_unique<ExtensionInstallPrompt::Prompt>(
-      ExtensionInstallPrompt::EXTENSION_PARENT_APPROVAL_PROMPT);
-  prompt->AddObserver(&supervised_user_extensions_metrics_recorder_);
+  SupervisedUserExtensionsDelegate* supervised_user_extensions_delegate =
+      ManagementAPI::GetFactoryInstance()
+          ->Get(Profile::FromBrowserContext(browser_context_))
+          ->GetSupervisedUserExtensionsDelegate();
+  CHECK(supervised_user_extensions_delegate);
 
-  install_prompt_ = std::make_unique<ExtensionInstallPrompt>(web_contents);
-  install_prompt_->ShowDialog(
-      std::move(dialog_callback), dummy_extension_.get(), &icon_,
-      std::move(prompt),
-      ExtensionInstallPrompt::GetDefaultShowDialogCallback());
+  auto prompt = std::make_unique<InstallPromptData>(
+      InstallPromptData::EXTENSION_PARENT_APPROVAL_PROMPT);
+  prompt->AddObserver(
+      supervised_user_extensions_delegate->GetInstallPromptObserver());
+
+  install_prompt_ = ExtensionsBrowserClient::Get()->CreateInstallPrompt(
+      web_contents, std::move(prompt));
+  install_prompt_->ShowInstallDialog(std::move(dialog_callback),
+                                     dummy_extension_.get(), &icon_);
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -790,9 +796,8 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnExtensionApprovalDone(
   if (result != SupervisedExtensionApprovalResult::kApproved &&
       supervised_user_extensions_delegate->IsChild() &&
       !supervised_user_extensions_delegate->CanSkipExtensionParentApprovals()) {
-    supervised_user_extensions_metrics_recorder_.RecordEnablementUmaMetrics(
-        SupervisedUserExtensionsMetricsRecorder::EnablementState::
-            kFailedToEnable);
+    supervised_user_extensions_delegate->RecordEnablementUmaMetrics(
+        SupervisedUserExtensionsDelegate::EnablementState::kFailedToEnable);
   }
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -926,10 +931,11 @@ void WebstorePrivateBeginInstallWithManifest3Function::
 }
 
 void WebstorePrivateBeginInstallWithManifest3Function::OnInstallPromptDone(
-    ExtensionInstallPrompt::DoneCallbackPayload payload) {
+    ExtensionInstallPromptClient::DoneCallbackPayload payload) {
   switch (payload.result) {
-    case ExtensionInstallPrompt::Result::ACCEPTED:
-    case ExtensionInstallPrompt::Result::ACCEPTED_WITH_WITHHELD_PERMISSIONS: {
+    case ExtensionInstallPromptClient::Result::ACCEPTED:
+    case ExtensionInstallPromptClient::Result::
+        ACCEPTED_WITH_WITHHELD_PERMISSIONS: {
       auto* supervised_user_extensions_delegate =
           ManagementAPI::GetFactoryInstance()
               ->Get(browser_context())
@@ -951,16 +957,16 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnInstallPromptDone(
           break;
         }
       }
-      bool withhold_permissions =
-          payload.result ==
-          ExtensionInstallPrompt::Result::ACCEPTED_WITH_WITHHELD_PERMISSIONS;
+      bool withhold_permissions = payload.result ==
+                                  ExtensionInstallPromptClient::Result::
+                                      ACCEPTED_WITH_WITHHELD_PERMISSIONS;
       HandleInstallProceed(withhold_permissions);
       break;
     }
-    case ExtensionInstallPrompt::Result::USER_CANCELED:
-    case ExtensionInstallPrompt::Result::ABORTED: {
+    case ExtensionInstallPromptClient::Result::USER_CANCELED:
+    case ExtensionInstallPromptClient::Result::ABORTED: {
       HandleInstallAbort(payload.result ==
-                         ExtensionInstallPrompt::Result::USER_CANCELED);
+                         ExtensionInstallPromptClient::Result::USER_CANCELED);
       break;
     }
   }
@@ -970,16 +976,17 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnInstallPromptDone(
 }
 
 void WebstorePrivateBeginInstallWithManifest3Function::OnRequestPromptDone(
-    ExtensionInstallPrompt::DoneCallbackPayload payload) {
+    ExtensionInstallPromptClient::DoneCallbackPayload payload) {
   switch (payload.result) {
-    case ExtensionInstallPrompt::Result::ACCEPTED:
+    case ExtensionInstallPromptClient::Result::ACCEPTED:
       AddExtensionToPendingList(details().id, browser_context_,
                                 payload.justification);
       break;
-    case ExtensionInstallPrompt::Result::USER_CANCELED:
-    case ExtensionInstallPrompt::Result::ABORTED:
+    case ExtensionInstallPromptClient::Result::USER_CANCELED:
+    case ExtensionInstallPromptClient::Result::ABORTED:
       break;
-    case ExtensionInstallPrompt::Result::ACCEPTED_WITH_WITHHELD_PERMISSIONS:
+    case ExtensionInstallPromptClient::Result::
+        ACCEPTED_WITH_WITHHELD_PERMISSIONS:
       NOTREACHED();
   }
 
@@ -1007,8 +1014,12 @@ void WebstorePrivateBeginInstallWithManifest3Function::
         WebstoreInstaller::FailureReason::FAILURE_REASON_CANCELLED);
   }
 
-  supervised_user_extensions_metrics_recorder_.RecordAskParentDialogUmaMetrics(
-      SupervisedUserExtensionsMetricsRecorder::AskParentDialogState::kCanceled);
+  auto* supervised_user_extensions_delegate =
+      ManagementAPI::GetFactoryInstance()
+          ->Get(browser_context())
+          ->GetSupervisedUserExtensionsDelegate();
+  supervised_user_extensions_delegate->RecordAskParentDialogUmaMetrics(
+      SupervisedUserExtensionsDelegate::AskParentDialogState::kCanceled);
 
   Respond(BuildResponse(api::webstore_private::Result::kUserCancelled,
                         kWebstoreUserCancelledError));
@@ -1144,8 +1155,8 @@ void WebstorePrivateBeginInstallWithManifest3Function::
 
 void WebstorePrivateBeginInstallWithManifest3Function::ShowInstallDialog(
     content::WebContents* contents) {
-  auto prompt = std::make_unique<ExtensionInstallPrompt::Prompt>(
-      ExtensionInstallPrompt::INSTALL_PROMPT);
+  auto prompt =
+      std::make_unique<InstallPromptData>(InstallPromptData::INSTALL_PROMPT);
 
   if (!dummy_extension_->is_theme()) {
     auto* supervised_user_extensions_delegate =
@@ -1163,7 +1174,8 @@ void WebstorePrivateBeginInstallWithManifest3Function::ShowInstallDialog(
     // approval"-mode and use the Extension install dialog (that is used by
     // non-supervised users).
     if (supervised_user_extensions_delegate->IsChild()) {
-      prompt->AddObserver(&supervised_user_extensions_metrics_recorder_);
+      prompt->AddObserver(
+          supervised_user_extensions_delegate->GetInstallPromptObserver());
     }
     if (requires_parent_permission) {
       // Bypass the install prompt dialog if V2 is enabled. The
@@ -1182,13 +1194,13 @@ void WebstorePrivateBeginInstallWithManifest3Function::ShowInstallDialog(
     }
   }
 
-  install_prompt_ = std::make_unique<ExtensionInstallPrompt>(contents);
-  install_prompt_->ShowDialog(
+  install_prompt_ = ExtensionsBrowserClient::Get()->CreateInstallPrompt(
+      contents, std::move(prompt));
+  install_prompt_->ShowInstallDialog(
       base::BindOnce(&WebstorePrivateBeginInstallWithManifest3Function::
                          OnInstallPromptDone,
                      this),
-      dummy_extension_.get(), &icon_, std::move(prompt),
-      ExtensionInstallPrompt::GetDefaultShowDialogCallback());
+      dummy_extension_.get(), &icon_);
 }
 
 void WebstorePrivateBeginInstallWithManifest3Function::

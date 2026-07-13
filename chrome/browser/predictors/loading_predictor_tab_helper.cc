@@ -34,6 +34,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "net/base/network_anonymization_key.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/loader/lcp_critical_path_predictor_util.h"
@@ -61,8 +62,9 @@ net::RequestPriority GetRequestPriority(
       return net::HIGHEST;
 
     case network::mojom::RequestDestination::kFont:
-    case network::mojom::RequestDestination::kScript:
     case network::mojom::RequestDestination::kJson:
+    case network::mojom::RequestDestination::kScript:
+    case network::mojom::RequestDestination::kText:
       return net::MEDIUM;
 
     case network::mojom::RequestDestination::kEmpty:
@@ -362,6 +364,19 @@ void LoadingPredictorTabHelper::DidStartNavigation(
     return;
   }
 
+  // If the navigation is blocked by the initiator's Connection-Allowlist, it
+  // will not commit. Skip all of this tab helper's work for it -- speculative
+  // network activity (preconnect, preresolve, resource prewarming) as well as
+  // predictor bookkeeping -- since the navigation won't load. Otherwise the
+  // destination host would leak (e.g. via its DNS resolution) even though the
+  // navigation is blocked. See https://github.com/WICG/connection-allowlists.
+  // TODO(crbug.com/447954811): Once the real network_restrictions_id is plumbed
+  // into the speculative preconnect/preresolve path, the network service will
+  // enforce the allowlist directly and this gate can be removed.
+  if (navigation_handle->IsBlockedByConnectionAllowlist()) {
+    return;
+  }
+
   MaybeSetLCPPNavigationHint(*navigation_handle, *predictor_);
 
   MaybePrewarmMainResourceAndSubresourcesOnNavigation(*navigation_handle,
@@ -410,9 +425,12 @@ void LoadingPredictorTabHelper::PrepareForPageLoad(
   if (!predictor_ || predictor_->WasShutdown()) {
     return;
   }
+  // TODO(crbug.com/447954811, crbug.com/524282506): Pass the
+  // `network_restrictions_id` from the request initiator RenderFrameHost.
   page_data->has_local_preconnect_predictions_for_current_navigation_ =
       predictor_->PrepareForPageLoad(initiator_origin, main_frame_url,
-                                     HintOrigin::NAVIGATION);
+                                     HintOrigin::NAVIGATION,
+                                     network::GetTODONetworkRestrictionsId());
 
   if ((page_data->has_local_preconnect_predictions_for_current_navigation_ &&
        !features::ShouldAlwaysRetrieveOptimizationGuidePredictions()) ||
@@ -515,6 +533,7 @@ void LoadingPredictorTabHelper::DidFinishNavigation(
 void LoadingPredictorTabHelper::ResourceLoadComplete(
     content::RenderFrameHost* render_frame_host,
     const content::GlobalRequestID& request_id,
+    const GURL& original_url,
     const blink::mojom::ResourceLoadInfo& resource_load_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (!predictor_)
@@ -529,7 +548,7 @@ void LoadingPredictorTabHelper::ResourceLoadComplete(
     return;
 
   predictor_->loading_data_collector()->RecordResourceLoadComplete(
-      page_data->navigation_id_, resource_load_info);
+      page_data->navigation_id_, original_url, resource_load_info);
 }
 
 void LoadingPredictorTabHelper::DidLoadResourceFromMemoryCache(
@@ -556,7 +575,7 @@ void LoadingPredictorTabHelper::DidLoadResourceFromMemoryCache(
   resource_load_info.network_info =
       blink::mojom::CommonNetworkInfo::New(false, false, std::nullopt);
   predictor_->loading_data_collector()->RecordResourceLoadComplete(
-      page_data->navigation_id_, resource_load_info);
+      page_data->navigation_id_, url, resource_load_info);
 }
 
 void LoadingPredictorTabHelper::DocumentOnLoadCompletedInPrimaryMainFrame() {
@@ -681,8 +700,11 @@ void LoadingPredictorTabHelper::OnOptimizationGuideDecision(
   // use the predictions to pre* subresources.
   if (!page_data->document_page_data_holder_ &&
       features::ShouldUseOptimizationGuidePredictions()) {
+    // TODO(crbug.com/447954811, crbug.com/524282506): Pass the
+    // `network_restrictions_id` from the request initiator RenderFrameHost.
     predictor_->PrepareForPageLoad(initiator_origin, main_frame_url,
                                    HintOrigin::OPTIMIZATION_GUIDE,
+                                   network::GetTODONetworkRestrictionsId(),
                                    /*preconnectable=*/false, prediction);
   }
 }

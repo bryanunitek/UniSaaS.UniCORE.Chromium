@@ -95,6 +95,12 @@ class CodeSignConfig(object):
         raise ConfigError('enable_updater')
 
     @property
+    def use_static_angle(self):
+        """Returns True if ANGLE is statically linked.
+        """
+        raise ConfigError('use_static_angle')
+
+    @property
     def identity(self):
         """Returns the code signing identity that will be used to sign the
         products, everything but PKG files.
@@ -197,10 +203,6 @@ class CodeSignConfig(object):
         """
         return False
 
-    @property
-    def shared_libvulkan_on_mac(self):
-        """Returns True if ANGLE uses the shared Vulkan loader on Mac."""
-        return True
 
     @property
     def main_executable_pinned_geometry(self):

@@ -111,7 +111,9 @@ class WebAppInstallDialogBrowserTest
  public:
   WebAppInstallDialogBrowserTest() {
     // TODO(b/492657940): Remove this once the feature is launched.
-    feature_list_.InitAndEnableFeature(features::kWebAppInstallDialog);
+    feature_list_.InitWithFeatures(
+        {features::kWebAppInstallDialog, features::kWebAppInstallDialogWinPin},
+        {});
   }
   WebAppInstallDialogBrowserTest(const WebAppInstallDialogBrowserTest&) =
       delete;
@@ -233,13 +235,7 @@ class WebAppInstallDialogBrowserTest
   base::WeakPtrFactory<WebAppInstallDialogBrowserTest> weak_ptr_factory_{this};
 };
 
-// TODO(crbug.com/510455863): Re-enable the test
-#if BUILDFLAG(IS_WIN)
-#define MAYBE_InvokeUi_Intro DISABLED_InvokeUi_Intro
-#else
-#define MAYBE_InvokeUi_Intro InvokeUi_Intro
-#endif
-IN_PROC_BROWSER_TEST_P(WebAppInstallDialogBrowserTest, MAYBE_InvokeUi_Intro) {
+IN_PROC_BROWSER_TEST_P(WebAppInstallDialogBrowserTest, InvokeUi_Intro) {
   ShowAndVerifyUi();
 }
 
@@ -321,6 +317,12 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 class WebAppInstallDialogCheckboxTest : public WebAppInstallDialogBrowserTest {
+ public:
+  WebAppInstallDialogCheckboxTest() {
+    checkbox_feature_list_.InitAndDisableFeature(
+        features::kWebAppInstallDialogWinPin);
+  }
+
  protected:
   WebAppInstallOptionsView* NavigateToAndGetOptionsView() {
     ShowUi("InstallOptions");
@@ -354,6 +356,9 @@ class WebAppInstallDialogCheckboxTest : public WebAppInstallDialogBrowserTest {
 
   bool IsWin() { return GetOsType() == InstallOsType::kWin; }
   bool IsCros() { return GetOsType() == InstallOsType::kCros; }
+
+ private:
+  base::test::ScopedFeatureList checkbox_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(WebAppInstallDialogCheckboxTest,
@@ -381,6 +386,49 @@ IN_PROC_BROWSER_TEST_P(WebAppInstallDialogCheckboxTest,
 }
 
 IN_PROC_BROWSER_TEST_P(WebAppInstallDialogCheckboxTest,
+                       VerifyWinCheckboxNotPresent) {
+  if (!IsWin()) {
+    GTEST_SKIP() << "Creating desktop shortcut and pinning to task bar only "
+                    "works for Windows";
+  }
+  WebAppInstallOptionsView* options_view = NavigateToAndGetOptionsView();
+  ASSERT_TRUE(options_view);
+
+  views::View* checkbox =
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          WebAppInstallOptionsView::kPinToTaskbarCheckboxId,
+          views::ElementTrackerViews::GetContextForWidget(widget_.get()));
+  EXPECT_FALSE(checkbox);
+
+  CompleteInstallationAndVerifyDialogAccepted();
+  EXPECT_EQ(dialog_install_info_->add_to_quick_launch_bar, false);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    /* prefix */,
+    WebAppInstallDialogCheckboxTest,
+    testing::Combine(testing::Values(InstallOsType::kCros, InstallOsType::kWin),
+                     testing::Values(InstallDialogType::kSimple,
+                                     InstallDialogType::kDetailed,
+                                     InstallDialogType::kDiy)),
+    [](const testing::TestParamInfo<WebAppInstallDialogTestParams>& info) {
+      std::string os_type = base::ToString(std::get<0>(info.param));
+      std::string dialog_type = base::ToString(std::get<1>(info.param));
+      return os_type + "_" + dialog_type;
+    });
+
+class WebAppInstallDialogCheckboxEnabledTest
+    : public WebAppInstallDialogCheckboxTest {
+ public:
+  WebAppInstallDialogCheckboxEnabledTest() {
+    feature_list_.InitAndEnableFeature(features::kWebAppInstallDialogWinPin);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(WebAppInstallDialogCheckboxEnabledTest,
                        VerifyWinCheckboxUnchecked) {
   if (!IsWin()) {
     GTEST_SKIP() << "Creating desktop shortcut and pinning to task bar only "
@@ -395,7 +443,7 @@ IN_PROC_BROWSER_TEST_P(WebAppInstallDialogCheckboxTest,
   EXPECT_EQ(dialog_install_info_->add_to_quick_launch_bar, false);
 }
 
-IN_PROC_BROWSER_TEST_P(WebAppInstallDialogCheckboxTest,
+IN_PROC_BROWSER_TEST_P(WebAppInstallDialogCheckboxEnabledTest,
                        VerifyWinCheckboxChecked) {
   if (!IsWin()) {
     GTEST_SKIP() << "Creating desktop shortcut and pinning to task bar only "
@@ -412,8 +460,8 @@ IN_PROC_BROWSER_TEST_P(WebAppInstallDialogCheckboxTest,
 
 INSTANTIATE_TEST_SUITE_P(
     /* prefix */,
-    WebAppInstallDialogCheckboxTest,
-    testing::Combine(testing::Values(InstallOsType::kCros, InstallOsType::kWin),
+    WebAppInstallDialogCheckboxEnabledTest,
+    testing::Combine(testing::Values(InstallOsType::kWin),
                      testing::Values(InstallDialogType::kSimple,
                                      InstallDialogType::kDetailed,
                                      InstallDialogType::kDiy)),

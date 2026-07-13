@@ -152,6 +152,37 @@ TEST_F(WaapUIMetricsServiceTest, OnReloadButtonInput) {
   histogram_tester.ExpectTotalCount("InitialWebUI.ReloadButton.InputCount", 2);
 }
 
+TEST_F(WaapUIMetricsServiceTest, RecordReloadButtonInteractionToReload) {
+  WaapUIMetricsService* service =
+      WaapUIMetricsServiceFactory::GetForProfile(profile());
+  ASSERT_TRUE(service);
+
+  base::HistogramTester histogram_tester;
+
+  const auto start_ticks = base::TimeTicks::Now();
+  const base::TimeDelta latency = base::Milliseconds(50);
+
+  // Test WebUI mouse release
+  service->RecordReloadButtonInteractionToReload(
+      start_ticks, start_ticks + latency,
+      WaapUIMetricsRecorder::ReloadButtonInputType::kMouseRelease);
+
+  histogram_tester.ExpectUniqueTimeSample(
+      "InitialWebUI.ReloadButton.InteractionToReload.MouseRelease", latency, 1);
+  histogram_tester.ExpectUniqueTimeSample(
+      "InitialWebUI.ReloadButton.InteractionToReload", latency, 1);
+
+  // Test Views key press
+  service->RecordReloadButtonInteractionToReload(
+      start_ticks, start_ticks + latency,
+      WaapUIMetricsRecorder::ReloadButtonInputType::kKeyPress);
+
+  histogram_tester.ExpectUniqueTimeSample(
+      "InitialWebUI.ReloadButton.InteractionToReload.KeyPress", latency, 1);
+  histogram_tester.ExpectUniqueTimeSample(
+      "InitialWebUI.ReloadButton.InteractionToReload", latency, 2);
+}
+
 // Tests that the OnReloadButtonInputToReload method records a histogram.
 TEST_F(WaapUIMetricsServiceTest, OnReloadButtonInputToReload) {
   WaapUIMetricsService* service =
@@ -233,11 +264,11 @@ TEST_F(WaapUIMetricsServiceTest, OnNewWindowBrowserWindowFirstPaint) {
 
   histogram_tester.ExpectUniqueTimeSample(
       "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.BrowserWindow."
-      "FirstPaint.FromConstructor",
+      "FirstPaint.FromConstructor2",
       kTestLatency, 1);
   histogram_tester.ExpectUniqueTimeSample(
       "InitialWebUI.NewWindow.SessionRestore.WithoutExistingWindow."
-      "BrowserWindow.FirstPaint.FromConstructor",
+      "BrowserWindow.FirstPaint.FromConstructor2",
       kTestLatency, 1);
 }
 
@@ -256,11 +287,11 @@ TEST_F(WaapUIMetricsServiceTest, OnNewWindowReloadButtonFirstPaint) {
 
   histogram_tester.ExpectUniqueTimeSample(
       "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.ReloadButton."
-      "FirstPaint.FromConstructor",
+      "FirstPaint.FromConstructor2",
       kTestLatency, 1);
   histogram_tester.ExpectUniqueTimeSample(
       "InitialWebUI.NewWindow.BrowserInitiated.WithoutExistingWindow."
-      "ReloadButton.FirstPaint.FromConstructor",
+      "ReloadButton.FirstPaint.FromConstructor2",
       kTestLatency, 1);
 }
 
@@ -279,11 +310,11 @@ TEST_F(WaapUIMetricsServiceTest, OnNewWindowReloadButtonFirstContentfulPaint) {
 
   histogram_tester.ExpectUniqueTimeSample(
       "InitialWebUI.NewWindow.AllSources.WithoutExistingWindow.ReloadButton."
-      "FirstContentfulPaint.FromConstructor",
+      "FirstContentfulPaint.FromConstructor2",
       kTestLatency, 1);
   histogram_tester.ExpectUniqueTimeSample(
       "InitialWebUI.NewWindow.BrowserInitiated.WithoutExistingWindow."
-      "ReloadButton.FirstContentfulPaint.FromConstructor",
+      "ReloadButton.FirstContentfulPaint.FromConstructor2",
       kTestLatency, 1);
 }
 

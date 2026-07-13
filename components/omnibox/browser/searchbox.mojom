@@ -115,7 +115,7 @@ struct TabInfo {
   mojo_base.mojom.TimeTicks last_active;
 };
 
-// Represents a file attachment who's upload was started browser-side (currently
+// Represents a file attachment whose upload was started browser-side (currently
 // an image or PDF only).
 struct FileAttachment {
   // A client-side unique identifier referring to a specific file upload. The
@@ -130,6 +130,12 @@ struct FileAttachment {
   string? image_data_url;
   // The error type if the upload failed.
   composebox_query.mojom.ContextUploadErrorType? error_type;
+  // The URL of the file icon, if available. This is currently only populated
+  // for Google Drive files via the OnePick 3P API in
+  // chrome-untrusted://drive-picker-host. The URL is validated to originate
+  // from a trusted Google domain by DrivePickerSanitizer in the trusted
+  // browser process before being populated here.
+  url.mojom.Url? icon_url;
 };
 
 // Represents a tab attachment chosen browser-side and communicated to WebUI.
@@ -205,6 +211,7 @@ struct SmartComposeStats {
 };
 
 struct AutocompleteResult {
+  int32 query_id;
   uint32 sequence_id;
   mojo_base.mojom.String16 input;
   // Map of suggestion group IDs to their respective info.
@@ -257,6 +264,22 @@ enum DriveUploadError {
   kMaxFilesExceeded,
 };
 
+// The Google Drive picker disclaimer/consent status.
+enum DriveDisclaimerStatus {
+  kNotAccepted = 0,
+  kAccepted = 1,
+  kRestricted = 2,
+};
+
+// This enum is mapped to third_party/omnibox_proto/suggest_inventory.proto.
+enum SuggestInventory {
+  kDefault = 0,
+  kTravel = 1,
+  kAimTakeover = 2,
+  kImageGenTakeover = 3,
+  kConversationStarters = 4,
+};
+
 // Information about a successfully processed Drive file.
 struct DriveFile {
   // The UnguessableToken acts as a secure, cross-process identifier. The WebUI
@@ -297,9 +320,17 @@ interface PageHandler {
 
   // Queries autocomplete matches from the browser. `cursor_position` is cursor
   // position in `input`.
-  QueryAutocomplete(mojo_base.mojom.String16 input,
+  QueryAutocomplete(int32 query_id,
+                    mojo_base.mojom.String16 input,
                     bool prevent_inline_autocomplete,
                     uint32 cursor_position);
+
+  // Queries autocomplete matches from the browser with preferred SuggestInventory.
+  QueryAutocompleteWithSuggestInventory(int32 query_id,
+                                        mojo_base.mojom.String16 input,
+                                        bool prevent_inline_autocomplete,
+                                        uint32 cursor_position,
+                                        SuggestInventory suggest_inventory);
 
   // Cancels the current autocomplete query. Clears the result set if
   // |clear_result| is true.
@@ -317,7 +348,8 @@ interface PageHandler {
                         bool alt_key,
                         bool ctrl_key,
                         bool meta_key,
-                        bool shift_key);
+                        bool shift_key,
+                        bool via_keyboard);
 
   // Sets the Smart Compose stats to be passed during the next navigation.
   SetSmartComposeStats(SmartComposeStats smart_compose_stats);
@@ -379,6 +411,10 @@ interface PageHandler {
   // Returns a data URL for the preview of the tab with the given ID.
   GetTabPreview(int32 tab_id) => (string? preview_data_url);
 
+  // Waits for the tab with the given ID to finish loading its favicon and
+  // returns a data URL for the favicon, or null if it fails/times out.
+  WaitForTabFaviconLoad(int32 tab_id) => (url.mojom.Url? favicon_data_url);
+
   // Returns information about the current input state.
   GetInputState() => (composebox_query.mojom.InputState? state);
 
@@ -415,6 +451,9 @@ interface PageHandler {
   DeleteContext(
       mojo_base.mojom.UnguessableToken token, bool from_automatic_chip);
 
+  // Notify handler of tab context deletion by tab ID.
+  DeleteTabContext(int32 tab_id);
+
   // Clears all files from cache.
   // `clear_auto_suggested_tabs` indicates whether the URLs of auto suggested
   // tabs should be blocked from being suggested again.
@@ -447,8 +486,8 @@ interface PageHandler {
   // Called when a user interacts with a model selection button explicitly.
   RecordModelSelectionAction(composebox_query.mojom.ModelMode model);
 
-  // Queries whether the AIM x Drive disclaimer should be shown.
-  ShouldShowDriveDisclaimer() => (bool should_show);
+  // Gets the Google Drive disclaimer and consent status.
+  GetDriveDisclaimerStatus() => (DriveDisclaimerStatus status);
 
   // Informs the browser that the user accepted the AIM x Drive disclaimer.
   OnDriveDisclaimerAccepted();
@@ -458,6 +497,16 @@ interface PageHandler {
 
   // Gets the page classification for the current context.
   GetPageClassification() => (string metricSource);
+
+  // Called to enable or disable Smart Tab Sharing for subsequent queries.
+  // This will trigger a callback to Page.UpdateSmartTabSharingActive()
+  // to notify all WebUI clients of the new active state.
+  [EnableIfNot=is_android]
+  SetSmartTabSharingActive(bool active);
+
+  // Called to retrieve the current Smart Tab Sharing state.
+  [EnableIfNot=is_android]
+  GetSmartTabSharingActive() => (bool active);
 };
 
 // WebUI-side handler for requests from the browser.
@@ -527,10 +576,14 @@ interface Page {
   // Notifies the UI to show or hide the AIM popup for omnibox.
   UpdateAimPopupEligibility(bool eligible);
 
+  // Notifies the UI that the Smart Tab Sharing active state has changed.
+  [EnableIfNot=is_android]
+  UpdateSmartTabSharingActive(bool active);
+
   // Notifies the size of the permission prompt and that it is
   // showing or being hidden.
-  OnEmbeddedPermissionPromptChanged(bool is_showing,
-                                    gfx.mojom.Size prompt_size);
+  OnPermissionPromptChanged(bool is_showing,
+                            gfx.mojom.Size prompt_size);
 
   // Sets the tab IDs that should be shown as selected before tabs are selected.
   SetRestoredTabIds(array<int32> ids);

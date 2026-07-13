@@ -16,14 +16,8 @@ const base::FeatureParam<bool>* GetPageActionsMigrationParam(
       return &features::kPageActionsMigrationIntentPicker;
     case PageActionIconType::kZoom:
       return &features::kPageActionsMigrationZoom;
-    case PageActionIconType::kCookieControls:
-      return &features::kPageActionsMigrationCookieControls;
     case PageActionIconType::kMandatoryReauth:
       return &features::kPageActionsMigrationAutofillMandatoryReauth;
-    case PageActionIconType::kSharingHub:
-      return &features::kPageActionsMigrationSharingHub;
-    case PageActionIconType::kAiMode:
-      return &features::kPageActionsMigrationAiMode;
     case PageActionIconType::kVirtualCardEnroll:
       return &features::kPageActionsMigrationVirtualCard;
     case PageActionIconType::kFilledCardInformation:
@@ -33,8 +27,6 @@ const base::FeatureParam<bool>* GetPageActionsMigrationParam(
     case PageActionIconType::kSaveIban:
     case PageActionIconType::kSaveCard:
       return &features::kPageActionsMigrationSavePayments;
-    case PageActionIconType::kLensOverlayHomework:
-      return &features::kPageActionsMigrationLensOverlayHomework;
     case PageActionIconType::kBookmarkStar:
       return &features::kPageActionsMigrationBookmarkStar;
     default:
@@ -49,8 +41,8 @@ bool IsPageActionMigrated(PageActionIconType page_action) {
     return false;
   }
 
-  // Page actions on the new framework that don't have an implementation on the legacy path
-  // and don't have a feature param.
+  // Page actions on the new framework that don't have an implementation on the
+  // legacy path and don't have a feature param.
   switch (page_action) {
     case PageActionIconType::kAnchoredContextualCue:
     case PageActionIconType::kCollaborationMessaging:
@@ -70,10 +62,15 @@ bool IsPageActionMigrated(PageActionIconType page_action) {
     case PageActionIconType::kPriceInsights:
     case PageActionIconType::kDiscounts:
     case PageActionIconType::kFederation:
+    case PageActionIconType::kCookieControls:
     case PageActionIconType::kManagePasswords:
     case PageActionIconType::kWebAuthnAmbientSignin:
     case PageActionIconType::kFileSystemAccess:
+    case PageActionIconType::kAiMode:
     case PageActionIconType::kAutofillPayment:
+    case PageActionIconType::kPaymentsChurnedUsers:
+    case PageActionIconType::kLensOverlayHomework:
+    case PageActionIconType::kFakePageActionForDebug:
       return true;
     default:
       break;

@@ -19,7 +19,6 @@
 #include "build/build_config.h"
 #include "components/viz/common/buildflags.h"
 #include "content/browser/bad_message.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/devtools/devtools_manager.h"
 #include "content/browser/devtools/devtools_renderer_channel.h"
 #include "content/browser/devtools/devtools_session.h"
@@ -29,6 +28,7 @@
 #include "content/browser/devtools/protocol/browser_handler.h"
 #include "content/browser/devtools/protocol/device_access_handler.h"
 #include "content/browser/devtools/protocol/device_orientation_handler.h"
+#include "content/browser/devtools/protocol/digital_credentials_handler.h"
 #include "content/browser/devtools/protocol/dom_handler.h"
 #include "content/browser/devtools/protocol/emulation_handler.h"
 #include "content/browser/devtools/protocol/fedcm_handler.h"
@@ -439,6 +439,7 @@ bool RenderFrameDevToolsAgentHost::AttachSession(DevToolsSession* session) {
   }
   session->CreateAndAddHandler<protocol::LogHandler>();
   session->CreateAndAddHandler<protocol::FedCmHandler>();
+  session->CreateAndAddHandler<protocol::DigitalCredentialsHandler>();
 #if !BUILDFLAG(IS_ANDROID)
   session->CreateAndAddHandler<protocol::WebAuthnHandler>();
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -783,8 +784,12 @@ std::string RenderFrameDevToolsAgentHost::GetParentId() {
   if (IsChildFrame()) {
     FrameTreeNode* frame_tree_node =
         GetFrameTreeNodeAncestor(frame_tree_node_->parent()->frame_tree_node());
-    return RenderFrameDevToolsAgentHost::GetOrCreateFor(frame_tree_node)
-        ->GetId();
+    // During teardown/disconnect of the parent frame, the parent's agent host
+    // may have been unmapped. Avoid recreating it here to prevent registering
+    // a duplicate agent host ID (which would cause a crash).
+    DevToolsAgentHostImpl* parent =
+        RenderFrameDevToolsAgentHost::GetFor(frame_tree_node);
+    return parent ? parent->GetId() : std::string();
   }
 
   WebContentsImpl* contents = static_cast<WebContentsImpl*>(web_contents());

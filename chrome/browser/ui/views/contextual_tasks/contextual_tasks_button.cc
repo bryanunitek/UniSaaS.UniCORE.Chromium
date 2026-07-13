@@ -7,7 +7,6 @@
 #include <string>
 
 #include "base/check_op.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
@@ -16,17 +15,17 @@
 #include "chrome/browser/contextual_tasks/contextual_tasks_panel_controller.h"
 #include "chrome/browser/contextual_tasks/entry_point_eligibility_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_actions.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/contextual_tasks/contextual_tasks_ephemeral_button_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
 #include "chrome/common/pref_names.h"
@@ -44,7 +43,6 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_owner.h"
@@ -59,9 +57,6 @@
 #include "ui/views/painter.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
-
-DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ContextualTasksButton,
-                                      kContextualTasksToolbarButton);
 
 namespace {
 
@@ -201,7 +196,8 @@ ContextualTasksButton::ContextualTasksButton(
       browser_window_interface_(browser_window_interface) {
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
-  SetProperty(views::kElementIdentifierKey, kContextualTasksToolbarButton);
+  SetProperty(views::kElementIdentifierKey,
+              kContextualTasksEphemeralToolbarButtonElementId);
   const std::u16string button_tooltip =
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       (contextual_tasks::kShowEntryPoint.Get() ==

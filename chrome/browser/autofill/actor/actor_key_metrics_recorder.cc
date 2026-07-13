@@ -9,6 +9,7 @@
 
 #include "base/containers/flat_set.h"
 #include "base/containers/map_util.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
@@ -89,6 +90,7 @@ void ActorKeyMetricsRecorder::OnFillOrPreviewForm(
     FieldGlobalId trigger_field_id,
     mojom::ActionPersistence action_persistence,
     const base::flat_set<FieldGlobalId>& filled_field_ids,
+    const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&,
     const FillingPayload& filling_payload) {
   if (!forms_to_fill_.contains(form_id)) {
     return;
@@ -225,8 +227,6 @@ void ActorKeyMetricsRecorder::RecordEditedAutofilledFieldAtSubmission(
     if (!WasFieldFilledByActor(form, field->global_id())) {
       continue;
     }
-    // TODO(crbug.com/393114125): After launching`kAutofillFixIsAutofilled` this
-    // should instead check that the last modifier is not `kAutofill`.
     AutofillMetrics::AutofilledFieldUserEditingStatusMetric editing_metric =
         field->last_modifier() == FieldModifier::kAutofill
             ? AutofillMetrics::AutofilledFieldUserEditingStatusMetric::

@@ -75,6 +75,10 @@ class VIEWS_EXPORT NativeViewHost : public View {
   // NatieView's size always equals this View's size.
   void SetNativeViewSize(const gfx::Size& size);
 
+  // Sets the external clip rect of the native view. Returns true if the clip
+  // rect changed.
+  bool SetNativeViewClipRect(const gfx::Rect& clip_rect);
+
   // Returns the container that contains this host's native view. Returns null
   // if there's no attached native view or it has no container.
   gfx::NativeView GetNativeViewContainer() const;
@@ -94,6 +98,19 @@ class VIEWS_EXPORT NativeViewHost : public View {
   // end. USE WITH CAUTION.
   void set_fast_resize(bool fast_resize) { fast_resize_ = fast_resize; }
   bool fast_resize() const { return fast_resize_; }
+
+  // Set whether the native view's layer should be managed by views.
+  // If set to true, NativeViewHost will manually manage the layer.
+  // If set to false, the native view's layer will be managed by its parent
+  // window's layer.
+  void SetLayerManagedByViews(bool managed);
+  bool layer_managed_by_views() const { return layer_managed_by_views_; }
+
+  // Set whether NativeViewHost should create a layer for views management.
+  // This only has effect when layer_managed_by_views() is true.
+  // If set to false, the host view must already have a layer.
+  void SetCreateLayer(bool create_layer);
+  bool create_layer() const { return create_layer_; }
 
   gfx::NativeView native_view() const { return native_view_; }
 
@@ -137,10 +154,6 @@ class VIEWS_EXPORT NativeViewHost : public View {
   // The attached native view. There is exactly one native_view_ attached.
   gfx::NativeView native_view_ = gfx::NativeView();
 
-  // A platform-specific wrapper that does the OS-level manipulation of the
-  // attached gfx::NativeView.
-  std::unique_ptr<NativeViewHostWrapper> native_wrapper_;
-
   // The actual size of the NativeView, or an empty size if no scaling of the
   // NativeView should occur.
   gfx::Size native_view_size_;
@@ -149,8 +162,22 @@ class VIEWS_EXPORT NativeViewHost : public View {
   // in the setter/accessor above.
   bool fast_resize_ = false;
 
+  // True if the native view's layer is managed by views.
+  bool layer_managed_by_views_;
+
+  // True if NativeViewHost should create a layer for views management.
+  bool create_layer_ = true;
+
   // The color to use for repainting the background when the view is clipped.
   std::optional<SkColor> background_color_when_clipped_;
+
+  // A platform-specific wrapper that does the OS-level manipulation of the
+  // attached gfx::NativeView.
+  // This must be declared last because its destructor (which destroys the
+  // wrapper) depends on other members of NativeViewHost (like
+  // `layer_managed_by_views_` and `native_view_`) which must not be destroyed
+  // yet.
+  std::unique_ptr<NativeViewHostWrapper> native_wrapper_;
 };
 
 }  // namespace views

@@ -88,13 +88,15 @@ class PasskeyTabHelper : public web::WebStateObserver,
   // Requests a passkey to be created given the provided request ID. Fetches the
   // shared keys list and calls the CompletePasskeyCreation callback.
   // TODO(crbug.com/460485333): Test passkey creation flow.
-  void StartPasskeyCreation(std::string request_id);
+  void StartPasskeyCreation(std::string request_id, bool did_complete_uv);
 
   // Requests that the passkey matching the provided credential ID be used for
   // passkey assertion given the provided request ID. Fetches the shared keys
   // list and calls the CompletePasskeyAssertion callback.
   // TODO(crbug.com/460485333): Test passkey assertion flow.
-  void StartPasskeyAssertion(std::string request_id, std::string credential_id);
+  void StartPasskeyAssertion(std::string request_id,
+                             std::string credential_id,
+                             bool did_complete_uv);
 
   // Utility function to defer the passkey request back to the renderer.
   void DeferToRenderer(IOSPasskeyClient::RequestInfo request_info,
@@ -121,8 +123,7 @@ class PasskeyTabHelper : public web::WebStateObserver,
   // Returns whether user verification should be performed for `request_id`.
   // It returns std::nullopt if the request is unknown.
   std::optional<bool> ShouldPerformUserVerification(
-      const std::string& request_id,
-      bool is_biometric_authentication_enabled) const;
+      const std::string& request_id) const;
 
   // Returns whether there is a pending remote validation for testing.
   bool HasPendingValidationForTesting() const;
@@ -170,7 +171,7 @@ class PasskeyTabHelper : public web::WebStateObserver,
   void CompletePasskeyCreation(RegistrationRequestParams params,
                                std::string client_data_json,
                                SharedKeyList shared_key_list,
-                               NSError* error);
+                               bool did_complete_uv);
 
   // Callback which uses the provided passkey for assertion given the provided
   // shared keys list and params. The parameters required to resolve the
@@ -179,7 +180,7 @@ class PasskeyTabHelper : public web::WebStateObserver,
                                 sync_pb::WebauthnCredentialSpecifics passkey,
                                 std::string client_data_json,
                                 SharedKeyList shared_key_list,
-                                NSError* error);
+                                bool did_complete_uv);
 
   // Starts remote validation for the given origin and RP ID. If validation
   // starts successfully, the loader is stored in `loaders_` with
@@ -219,9 +220,18 @@ class PasskeyTabHelper : public web::WebStateObserver,
   // Callback handling the user's decision from the interstitial.
   void OnInterstitialDecision(RegistrationRequestParams params, bool proceed);
 
+  // Callback handling the user's decision from the interstitial for a
+  // conditional create request.
+  void OnConditionalCreateInterstitialDecision(const std::string& request_id,
+                                               bool proceed);
+
   // Adds a passkey to the passkey model while enabling the passkey creation
   // infobar to be displayed if possible.
   void AddNewPasskey(sync_pb::WebauthnCredentialSpecifics& passkey);
+
+  PasskeyUserVerificationStatus DetermineUserVerificationStatus(
+      const PasskeyRequestParams& params,
+      bool did_complete_uv) const;
 
   // Returns information (Frame ID and Request Type) for a request identified by
   // `request_id`. Returns std::nullopt if the request is not found.

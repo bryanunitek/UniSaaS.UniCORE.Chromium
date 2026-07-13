@@ -13,7 +13,6 @@
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
@@ -34,7 +33,6 @@
 BrowserViewLayoutDelegateImpl::BrowserViewLayoutDelegateImpl(
     BrowserView& browser_view)
     : browser_view_(browser_view) {
-  if (base::FeatureList::IsEnabled(tabs::kHorizontalTabStripComboButton)) {
     PrefService* prefs = browser_view_->GetProfile()->GetPrefs();
     tab_search_pinned_to_tab_strip_ =
         prefs->GetBoolean(prefs::kTabSearchPinnedToTabstrip);
@@ -45,7 +43,6 @@ BrowserViewLayoutDelegateImpl::BrowserViewLayoutDelegateImpl(
         base::BindRepeating(
             &BrowserViewLayoutDelegateImpl::OnTabSearchPinnedStateChanged,
             base::Unretained(this)));
-  }
 }
 BrowserViewLayoutDelegateImpl::~BrowserViewLayoutDelegateImpl() = default;
 
@@ -153,7 +150,9 @@ bool BrowserViewLayoutDelegateImpl::IsActiveTabSplit() const {
   // when the multi contents view hasn't been fully setup and this
   // inconsistency would cause unnecessary re-layout of content view during
   // tab switch.
-  return browser_view_->browser()->tab_strip_model()->IsActiveTabSplit();
+  auto* const active_tab =
+      browser_view_->browser()->tab_strip_model()->GetActiveTab();
+  return active_tab && active_tab->IsSplit();
 }
 
 bool BrowserViewLayoutDelegateImpl::IsActiveTabAtLeadingWindowEdge() const {
@@ -161,11 +160,9 @@ bool BrowserViewLayoutDelegateImpl::IsActiveTabAtLeadingWindowEdge() const {
     bool has_leading_search_button =
         tabs::GetTabSearchPosition(browser_view_->browser()) ==
         tabs::TabSearchPosition::kLeadingHorizontalTabstrip;
-    if (base::FeatureList::IsEnabled(tabs::kHorizontalTabStripComboButton)) {
-      // Tab search button can be unpinned so including it in the determination
-      // of leading edge of horizontal tab strip.
-      has_leading_search_button &= tab_search_pinned_to_tab_strip_;
-    }
+    // Tab search button can be unpinned so including it in the determination
+    // of leading edge of horizontal tab strip.
+    has_leading_search_button &= tab_search_pinned_to_tab_strip_;
     if (!frame->CaptionButtonsOnLeadingEdge() && !has_leading_search_button) {
       return browser_view_->browser()->tab_strip_model()->IsTabInForeground(0);
     }

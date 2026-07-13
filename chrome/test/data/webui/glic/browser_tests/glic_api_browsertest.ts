@@ -1,8 +1,8 @@
 // Copyright 2025 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-import {FormFactor, HostCapability, InvocationSource, MetricUserInputReactionType, PanelStateKind, Platform, ResponseStopCause, ScrollToErrorReason, WebClientMode} from '/glic/glic_api/glic_api.js';
-import type {CancelActionsResult, FocusedTabData, GetPinCandidatesOptions, InvokeOptions, OpenPanelInfo, PageMetadata, PanelOpeningData, ScrollToError, TabData, UserConfirmationDialogRequest, UserProfileInfo} from '/glic/glic_api/glic_api.js';
+import {HostCapability, InvocationSource, MetricUserInputReactionType, PanelStateKind, Platform, ResponseStopCause, WebClientMode} from '/glic/glic_api/glic_api.js';
+import type {CancelActionsResult, FocusedTabData, InvokeOptions, OpenPanelInfo, PanelOpeningData, TabData, UserConfirmationDialogRequest, UserProfileInfo} from '/glic/glic_api/glic_api.js';
 
 import {ApiTestError, ApiTestFixtureBase, assertDefined, assertEquals, assertFalse, assertNotEquals, assertRejects, assertTrue, assertUndefined, checkDefined, mapObservable, observeSequence, readStream, runUntil, sleep, testMain, waitFor, WebClient} from './browser_test_base.js';
 import type {SequencedSubscriber} from './browser_test_base.js';
@@ -188,36 +188,6 @@ class ApiTests extends ApiTestFixtureBase {
     await observeSequence(this.host.canAttachPanel()).waitForValue(true);
   }
 
-  async testGetPanelStateAttached() {
-    assertDefined(this.host.getPanelState);
-    // getPanelState and notifyPanelWillOpen should signal the ATTACHED state.
-    const panelStates = observeSequence(this.host.getPanelState());
-    await panelStates.waitFor(state => state.kind === PanelStateKind.ATTACHED);
-    assertEquals(
-        PanelStateKind.ATTACHED,
-        this.client.panelOpenStateKind.getCurrentValue());
-    await sleep(100);
-    // It should remain in the attached state.
-    assertEquals(
-        PanelStateKind.ATTACHED,
-        this.host.getPanelState().getCurrentValue()?.kind);
-  }
-
-  async testGetPanelStateAttachedHidden() {
-    assertDefined(this.host.getPanelState);
-    // getPanelState and notifyPanelWillOpen should signal the ATTACHED state.
-    const panelStates = observeSequence(this.host.getPanelState());
-    await panelStates.waitFor(state => state.kind === PanelStateKind.ATTACHED);
-
-    // Open and select a second tab.
-    await this.advanceToNextStep();
-    await panelStates.waitFor(state => state.kind === PanelStateKind.HIDDEN);
-
-    // Select the first tab again.
-    await this.advanceToNextStep();
-    await panelStates.waitFor(state => state.kind === PanelStateKind.ATTACHED);
-  }
-
   async testDetachPanel() {
     assertDefined(this.host.getPanelState);
     assertDefined(this.host.detachPanel);
@@ -244,30 +214,6 @@ class ApiTests extends ApiTestFixtureBase {
     assertRejects((async () => {
       this.host.detachPanel?.();
     })());
-  }
-
-  async testCanAttachPanelSidePanel() {
-    assertDefined(this.host.getPanelState);
-    assertDefined(this.host.canAttachPanel);
-
-    const panelStates = observeSequence(this.host.getPanelState());
-    await panelStates.waitFor(state => state.kind === PanelStateKind.ATTACHED);
-
-    await observeSequence(this.host.canAttachPanel()).waitForValue(false);
-  }
-
-  async testCanAttachPanelDetached() {
-    assertDefined(this.host.getPanelState);
-    assertDefined(this.host.detachPanel);
-    assertDefined(this.host.canAttachPanel);
-
-    const panelStates = observeSequence(this.host.getPanelState());
-    await panelStates.waitFor(state => state.kind === PanelStateKind.ATTACHED);
-
-    this.host.detachPanel();
-    await panelStates.waitFor(state => state.kind === PanelStateKind.DETACHED);
-
-    await observeSequence(this.host.canAttachPanel()).waitForValue(true);
   }
 
   async testCanAttachPanelDetachedTabClosed() {
@@ -351,36 +297,7 @@ class ApiTests extends ApiTestFixtureBase {
   }
 
 
-  async testClosePanel() {
-    assertDefined(this.host.closePanel);
-
-    // Close the panel, and verify notifyPanelWasClosed is called.
-    const closedPromise = Promise.withResolvers<void>();
-    this.client.onNotifyPanelWasClosed = closedPromise.resolve;
-    await this.host.closePanel();
-    await waitFor(closedPromise.promise);
-  }
-
   async testErrorShownOnMojoPipeError() {}
-
-  async testShowProfilePicker() {
-    assertDefined(this.host.showProfilePicker);
-    this.host.showProfilePicker();
-    // There is a problem with InProcessBrowserTest::QuitBrowsers(). Opening the
-    // profile picker at the same time as exiting a test results in
-    // QuitBrowsers() never exiting. This sleep avoids this problem.
-    await sleep(500);
-  }
-
-  async testPanelActive() {
-    assertDefined(this.host.panelActive);
-    const activeSequence = observeSequence(this.host.panelActive());
-    assertDefined(this.host.closePanel);
-    await this.host.closePanel();
-    assertTrue(await activeSequence.next());
-    await this.advanceToNextStep();
-    assertFalse(await activeSequence.next());
-  }
 
   async testPanelActiveWithMicrophone() {
     await this.advanceToNextStep();
@@ -426,19 +343,6 @@ class ApiTests extends ApiTestFixtureBase {
     await this.advanceToNextStep();
   }
 
-
-  async testGetFocusedTabStateV2() {
-    assertDefined(this.host.getFocusedTabStateV2);
-    const sequence =
-        observeSequence<FocusedTabData>(this.host.getFocusedTabStateV2());
-    const focus = await sequence.next();
-    assertDefined(focus.hasFocus);
-    assertEquals(
-        new URL(focus.hasFocus.tabData.url).pathname,
-        '/glic/browser_tests/test.html', `url=${focus.hasFocus.tabData.url}`);
-    assertEquals('Test Page', focus.hasFocus.tabData.title);
-    assertFalse(!!focus.hasNoFocus);
-  }
 
   async testGetFocusedTabStateV2WithNavigation() {
     // Initial state.
@@ -814,15 +718,6 @@ class ApiTests extends ApiTestFixtureBase {
   }
 
 
-  async testGetFormFactor() {
-    assertDefined(this.host.getFormFactor);
-    const formFactor = this.host.getFormFactor();
-    assertDefined(formFactor);
-    // TODO: When this is migrated to android, update this test to check for
-    // the other form factors.
-    assertEquals(formFactor, FormFactor.DESKTOP);
-  }
-
   async testGetUserProfileInfo() {
     assertDefined(this.host.getUserProfileInfo);
     assertDefined(this.host.getPlatform);
@@ -981,70 +876,6 @@ class ApiTests extends ApiTestFixtureBase {
     metrics.onResponseStopped({cause: ResponseStopCause.USER});
     metrics.onSessionTerminated();
     metrics.onClosedCaptionsShown();
-  }
-
-  async testScrollToFindsText() {
-    assertDefined(this.host.scrollTo);
-    assertDefined(this.host.setTabContextPermissionState);
-    await this.host.setTabContextPermissionState(true);
-    await this.host.scrollTo({
-      selector: {exactText: {text: 'Test Page'}},
-      highlight: true,
-      documentId: this.testParams.documentId,
-    });
-  }
-
-  async testScrollToFindsTextNoTabContextPermission() {
-    assertDefined(this.host.scrollTo);
-    try {
-      await this.host.scrollTo({
-        selector: {exactText: {text: 'Abracadabra'}},
-        highlight: true,
-        documentId: this.testParams.documentId,
-      });
-    } catch (e) {
-      assertEquals(
-          ScrollToErrorReason.TAB_CONTEXT_PERMISSION_DISABLED,
-          (e as ScrollToError).reason);
-      return;
-    }
-    assertTrue(false, 'scrollTo should have thrown an error');
-  }
-
-  async testScrollToFailsWhenInactive() {
-    assertDefined(this.host.scrollTo);
-    assertDefined(this.host.closePanel);
-    await this.closePanelAndWaitUntilInactive();
-    try {
-      await this.host.scrollTo({
-        selector: {exactText: {text: 'Abracadabra'}},
-        highlight: true,
-        documentId: this.testParams.documentId,
-      });
-    } catch (e) {
-      assertEquals(
-          ScrollToErrorReason.NOT_SUPPORTED, (e as ScrollToError).reason);
-      return;
-    }
-    assertTrue(false, 'scrollTo should have thrown an error');
-  }
-
-  async testScrollToNoMatchFound() {
-    assertDefined(this.host.scrollTo);
-    assertDefined(this.host.setTabContextPermissionState);
-    await this.host.setTabContextPermissionState(true);
-    try {
-      await this.host.scrollTo({
-        selector: {exactText: {text: 'Abracadabra'}},
-        highlight: true,
-        documentId: this.testParams.documentId,
-      });
-    } catch (e) {
-      assertEquals(
-          ScrollToErrorReason.NO_MATCH_FOUND, (e as ScrollToError).reason);
-      return;
-    }
-    assertTrue(false, 'scrollTo should have thrown an error');
   }
 
   async testSetSyntheticExperimentState() {
@@ -1701,11 +1532,6 @@ class ApiTests extends ApiTestFixtureBase {
     }
   }
 
-  async testRemoveBlankInstanceOnClose() {
-    assertDefined(this.host.closePanel);
-    await this.host.closePanel();
-  }
-
   async testJournal() {
     assertDefined(this.host.getJournalHost);
     const journalHost = this.host.getJournalHost();
@@ -1753,84 +1579,6 @@ class ApiTests extends ApiTestFixtureBase {
             this.capabilitiesToString(Array.from(capabilities))}`);
   }
 
-  // Test getPinCandidates() in some different scenarios where there is a single
-  // browser tab.
-  async testGetPinCandidatesSingleTab() {
-    assertDefined(this.host.pinTabs);
-    assertDefined(this.host.getPinCandidates);
-    assertDefined(this.host.getHostCapabilities);
-
-    // Gets pinned candidates and asserts that their comma-separated titles
-    // equal `expected`.
-    const getCandidatesEquals =
-        async (options: GetPinCandidatesOptions, expected: string) => {
-      const sequence = observeSequence(this.host.getPinCandidates!(options));
-      const candidates = await sequence.next();
-      sequence.unsubscribe();
-      assertEquals(candidates.map(c => c.tabData.title).join(', '), expected);
-    };
-
-    await getCandidatesEquals({maxCandidates: 1}, 'Test Page');
-    await getCandidatesEquals({maxCandidates: 1, query: 'zxyzyz'}, 'Test Page');
-    await getCandidatesEquals(
-        {maxCandidates: 1, query: 'Test Page'}, 'Test Page');
-    await getCandidatesEquals({maxCandidates: 0}, '');
-
-
-    // Test some races.
-
-    // 1. Calling getPinCandidates a second time will reset the first
-    // observable. We should receive nothing from it.
-    let racedSequence =
-        observeSequence(this.host.getPinCandidates!({maxCandidates: 1}));
-    await getCandidatesEquals({maxCandidates: 1}, 'Test Page');
-    assertTrue(racedSequence.isEmpty());
-    racedSequence.unsubscribe();
-
-    // 2. Unsubscribing the obsolete observable should do nothing to the new
-    // one.
-    racedSequence =
-        observeSequence(this.host.getPinCandidates!({maxCandidates: 1}));
-    const racedSequence2 =
-        observeSequence(this.host.getPinCandidates!({maxCandidates: 1}));
-    racedSequence.unsubscribe();
-    assertEquals(1, (await racedSequence2.next()).length);
-
-    // Pin the current focus. A pinned tab isn't a valid candidate.
-    const focus =
-        await observeSequence(this.host.getFocusedTabStateV2!()).next();
-    // In multi-instance, only pinned tabs can be considered focused, but the
-    // candidate does reveal the active tab.
-    if (this.host.getHostCapabilities().has(HostCapability.MULTI_INSTANCE)) {
-      await this.host.pinTabs(
-          [checkDefined(focus.hasNoFocus?.tabFocusCandidateData?.tabId)]);
-    } else {
-      await this.host.pinTabs([checkDefined(focus.hasFocus?.tabData.tabId)]);
-    }
-    await getCandidatesEquals({maxCandidates: 1}, '');
-  }
-
-  async testGetPinCandidatesWithPanelClosed() {
-    assertDefined(this.host.pinTabs);
-    assertDefined(this.host.getPinCandidates);
-
-    const sequence =
-        observeSequence(this.host.getPinCandidates!({maxCandidates: 10}));
-    sequence.waitFor(tabs => tabs.length === 1);
-    this.host.closePanel!();
-
-    // Open a tab. The client should not receive any updates.
-    await this.advanceToNextStep();
-    await sleep(500);
-    while (!sequence.isEmpty()) {
-      assertEquals((await sequence.next()).length, 1);
-    }
-
-    // Show the panel again. The client should receive an update.
-    await this.advanceToNextStep();
-    sequence.waitFor(tabs => tabs.length === 2);
-  }
-
   async testGetModelQualityClientIdFeatureEnabled() {
     assertDefined(this.host.getHostCapabilities);
     const capabilities: Set<HostCapability> =
@@ -1849,225 +1597,6 @@ class ApiTests extends ApiTestFixtureBase {
     assertFalse(capabilities.has(HostCapability.GET_MODEL_QUALITY_CLIENT_ID));
 
     assertUndefined(this.host.getModelQualityClientId);
-  }
-
-  /**
-   * A basic test to verify that `getPageMetadata` correctly retrieves metadata
-   * for a given tab.
-   */
-  async testGetPageMetadata() {
-    assertDefined(this.host.getPageMetadata);
-    assertDefined(this.host.getFocusedTabStateV2);
-
-    const focus =
-        await observeSequence(this.host.getFocusedTabStateV2()).next();
-    const tabId = checkDefined(focus.hasFocus?.tabData.tabId);
-
-    const metadataObservable = this.host.getPageMetadata(tabId, ['author']);
-    assertDefined(metadataObservable);
-    const metadataSequence = observeSequence(metadataObservable);
-
-    const metadata: PageMetadata = await metadataSequence.next();
-
-    assertEquals(1, metadata.frameMetadata.length);
-    const authorTag =
-        metadata.frameMetadata[0]!.metaTags.find(tag => tag.name === 'author');
-    assertDefined(authorTag);
-    assertEquals('George', authorTag.content);
-  }
-
-  /**
-   * Ensures that subscribing to metadata for an invalid `tabId` does not
-   * result in any emissions.
-   */
-  async testGetPageMetadataInvalidTabId() {
-    assertDefined(this.host.getPageMetadata);
-
-    const metadataObservable =
-        this.host.getPageMetadata('invalid-tab-id', ['author']);
-    assertDefined(metadataObservable);
-    const metadataSequence = observeSequence(metadataObservable);
-
-    // The observable should not emit any values, and should complete.
-    await metadataSequence.completed;
-    assertTrue(metadataSequence.isEmpty());
-  }
-
-  /**
-   * Confirms that calling `getPageMetadata` with an empty array of meta tag
-   * names throws an error, as expected.
-   */
-  async testGetPageMetadataEmptyNames() {
-    assertDefined(this.host.getPageMetadata);
-    assertDefined(this.host.getFocusedTabStateV2);
-
-    const focus =
-        await observeSequence(this.host.getFocusedTabStateV2()).next();
-    const tabId = checkDefined(focus.hasFocus?.tabData.tabId);
-
-    try {
-      this.host.getPageMetadata(tabId, []);
-      assertTrue(false, 'Should have thrown an error');
-    } catch (e) {
-      assertEquals('names must not be empty', (e as Error).message);
-    }
-  }
-
-  /**
-   * Verifies that subsequent calls to `getPageMetadata` for the same `tabId`
-   * return the same `ObservableValue` instance, ignoring the new `names`
-   * parameter.
-   */
-  async testGetPageMetadataMultipleSubscriptions() {
-    assertDefined(this.host.getPageMetadata);
-    assertDefined(this.host.getFocusedTabStateV2);
-
-    const focus =
-        await observeSequence(this.host.getFocusedTabStateV2()).next();
-    const tabId = checkDefined(focus.hasFocus?.tabData.tabId);
-
-    const metadataObservable1 = this.host.getPageMetadata(tabId, ['author']);
-    assertDefined(metadataObservable1);
-
-    const metadataObservable2 =
-        this.host.getPageMetadata(tabId, ['description']);
-    assertDefined(metadataObservable2);
-
-    assertTrue(metadataObservable1 === metadataObservable2);
-
-    const metadataSequence = observeSequence(metadataObservable1);
-    const metadata: PageMetadata = await metadataSequence.next();
-    assertDefined(metadata);
-    assertEquals(1, metadata.frameMetadata.length);
-    assertEquals(1, metadata.frameMetadata[0]!.metaTags.length);
-    // Should be 'author', not 'description'.
-    assertEquals('author', metadata.frameMetadata[0]!.metaTags[0]!.name);
-  }
-
-  /**
-   * Tests that the `ObservableValue` returned by `getPageMetadata` emits new
-   * values when the page's metadata changes. This test uses corresponding
-   * C++ changes to modify the metadata.
-   */
-  async testGetPageMetadataUpdates() {
-    assertDefined(this.host.getPageMetadata);
-    assertDefined(this.host.getFocusedTabStateV2);
-
-    const focus =
-        await observeSequence(this.host.getFocusedTabStateV2()).next();
-    const tabId = checkDefined(focus.hasFocus?.tabData.tabId);
-
-    const metadataObservable = this.host.getPageMetadata(tabId, ['author']);
-    assertDefined(metadataObservable);
-    const metadataSequence = observeSequence(metadataObservable);
-
-    let metadata: PageMetadata = await metadataSequence.next();
-    assertDefined(metadata);
-    assertEquals(1, metadata.frameMetadata.length);
-    let authorTag =
-        metadata.frameMetadata[0]!.metaTags.find(tag => tag.name === 'author');
-    assertDefined(authorTag);
-    assertEquals('George', authorTag.content);
-
-    // C++ side will change the meta tag.
-    await this.advanceToNextStep();
-
-    metadata = await metadataSequence.next();
-    assertDefined(metadata);
-    assertEquals(1, metadata.frameMetadata.length);
-    authorTag =
-        metadata.frameMetadata[0]!.metaTags.find(tag => tag.name === 'author');
-    assertDefined(authorTag);
-    assertEquals('Ruth', authorTag.content);
-  }
-
-  /**
-   * Verifies that getPageMetadata emits new values when the tab navigates to a
-   * new page.
-   */
-  async testGetPageMetadataOnNavigation() {
-    assertDefined(this.host.getPageMetadata);
-    assertDefined(this.host.getFocusedTabStateV2);
-
-    const focus =
-        await observeSequence(this.host.getFocusedTabStateV2()).next();
-    const tabId = checkDefined(focus.hasFocus?.tabData.tabId);
-
-    const metadataObservable =
-        this.host.getPageMetadata(tabId, ['author', 'description']);
-    assertDefined(metadataObservable);
-    const metadataSequence = observeSequence(metadataObservable);
-
-    // The initial page has one meta tag.
-    let metadata: PageMetadata = await metadataSequence.next();
-    assertDefined(metadata);
-    assertEquals(1, metadata.frameMetadata.length);
-    assertEquals(1, metadata.frameMetadata[0]!.metaTags.length);
-    const authorTag =
-        metadata.frameMetadata[0]!.metaTags.find(tag => tag.name === 'author');
-    assertDefined(authorTag);
-    assertEquals('George', authorTag.content);
-
-    // The C++ side will navigate to a page with no meta tags.
-    await this.advanceToNextStep();
-
-    metadata = await metadataSequence.next();
-    assertDefined(metadata);
-    assertEquals(1, metadata.frameMetadata.length);
-    assertEquals(0, metadata.frameMetadata[0]!.metaTags.length);
-  }
-
-  /**
-   * Verifies that metadata updates are still received after a tab's
-   * WebContents has been discarded and recreated.
-   */
-  async testGetPageMetadataWebContentsChanged() {
-    assertDefined(this.host.getPageMetadata);
-    assertDefined(this.host.getFocusedTabStateV2);
-    assertDefined(this.host.createTab);
-
-    const focus =
-        await observeSequence(this.host.getFocusedTabStateV2()).next();
-    const tabId = checkDefined(focus.hasFocus?.tabData.tabId);
-
-    const metadataObservable = this.host.getPageMetadata(tabId, ['author']);
-    assertDefined(metadataObservable);
-    const metadataSequence = observeSequence(metadataObservable);
-
-    let metadata: PageMetadata = await metadataSequence.next();
-    assertDefined(metadata);
-    assertEquals(1, metadata.frameMetadata.length);
-    let authorTag =
-        metadata.frameMetadata[0]!.metaTags.find(tag => tag.name === 'author');
-    assertDefined(authorTag);
-    assertEquals('George', authorTag.content);
-
-    // Keep the browser alive by opening another tab.
-    await this.host.createTab(location.href, {openInBackground: true});
-
-    // C++ side will discard and reload the tab, then change the meta tag.
-    await this.advanceToNextStep();
-
-    // After a WebContents change, we might get intermediate updates (e.g.,
-    // empty metadata) before the final, updated value. We loop until we see
-    // the expected content.
-    while (true) {
-      metadata = await metadataSequence.next();
-      authorTag = metadata.frameMetadata?.[0]?.metaTags?.find(
-          tag => tag.name === 'author');
-      if (authorTag?.content === 'Ruth') {
-        break;
-      }
-      console.info(
-          `Ignoring intermediate metadata: ${JSON.stringify(metadata)}`);
-    }
-
-    assertDefined(metadata);
-    assertEquals(1, metadata.frameMetadata.length);
-    authorTag =
-        metadata.frameMetadata[0]!.metaTags.find(tag => tag.name === 'author');
-    assertDefined(authorTag);
-    assertEquals('Ruth', authorTag.content);
   }
 
   async testAdditionalContext() {

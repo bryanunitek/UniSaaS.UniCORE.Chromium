@@ -153,6 +153,8 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
     /** Developer callback which controls the behavior of ItemTouchHelper. */
     @NonNull Callback mCallback;
 
+    private final boolean mIsDragSweepingEnabled;
+
     /** Current mode. */
     private int mActionState = ACTION_STATE_IDLE;
 
@@ -364,6 +366,14 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
     /** Temporary rect instance that is used when we need to lookup Item decorations. */
     private Rect mTmpRect;
 
+    /**
+     * Temporary rect instances used during findSwapTargets to calculate bounding boxes without
+     * allocating new objects during drag animations.
+     */
+    private Rect mTmpRectSelectedBounds;
+
+    private Rect mTmpRectOtherBounds;
+
     /** When user started to drag scroll. Reset when we don't scroll */
     private long mDragScrollStartTimeInMs;
 
@@ -378,6 +388,7 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
      */
     public ItemTouchHelper2(@NonNull Callback callback) {
         mCallback = callback;
+        mIsDragSweepingEnabled = callback.isDragSweepingEnabled();
     }
 
     private static boolean hitTest(View child, float x, float y, float left, float top) {
@@ -478,6 +489,9 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
             getSelectedDxDy(mTmpPosition);
             dx = mTmpPosition[0];
             dy = mTmpPosition[1];
+            if (mCallback.shouldAllowDragPastLayout() && mSelected.itemView.getParent() == null) {
+                parent.getOverlay().add(mSelected.itemView);
+            }
         }
         mCallback.onDrawOver(c, parent, mSelected, mRecoverAnimations, mActionState, dx, dy);
     }
@@ -618,6 +632,9 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
                 removeChildDrawingOrderCallbackIfNecessary(prevSelected.itemView);
                 mCallback.clearView(mRecyclerView, prevSelected);
             }
+            if (mCallback.shouldAllowDragPastLayout()) {
+                mSelected.setIsRecyclable(true);
+            }
             mSelected = null;
         }
         if (selected != null) {
@@ -627,6 +644,9 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
             mSelectedStartX = selected.itemView.getLeft();
             mSelectedStartY = selected.itemView.getTop();
             mSelected = selected;
+            if (mCallback.shouldAllowDragPastLayout()) {
+                mSelected.setIsRecyclable(false);
+            }
 
             if (actionState == ACTION_STATE_DRAG) {
                 mSelected.itemView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
@@ -771,12 +791,31 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
             mDistances.clear();
         }
         final int margin = mCallback.getBoundingBoxMargin();
-        final int left = Math.round(mSelectedStartX + mDx) - margin;
-        final int top = Math.round(mSelectedStartY + mDy) - margin;
-        final int right = left + viewHolder.itemView.getWidth() + 2 * margin;
-        final int bottom = top + viewHolder.itemView.getHeight() + 2 * margin;
+        if (mTmpRectSelectedBounds == null) {
+            mTmpRectSelectedBounds = new Rect();
+            mTmpRectOtherBounds = new Rect();
+        }
+        mCallback.getBoundingBox(viewHolder, mTmpRectSelectedBounds);
+        Rect selectedBounds = mTmpRectSelectedBounds;
+        final int visualDx = Math.round(mSelectedStartX + mDx) - viewHolder.itemView.getLeft();
+        final int visualDy = Math.round(mSelectedStartY + mDy) - viewHolder.itemView.getTop();
+        final int left = selectedBounds.left + visualDx - margin;
+        final int top = selectedBounds.top + visualDy - margin;
+        final int right = selectedBounds.right + visualDx + margin;
+        final int bottom = selectedBounds.bottom + visualDy + margin;
         final int centerX = (left + right) / 2;
         final int centerY = (top + bottom) / 2;
+
+        final int layoutLeft = selectedBounds.left - margin;
+        final int layoutTop = selectedBounds.top - margin;
+        final int layoutRight = selectedBounds.right + margin;
+        final int layoutBottom = selectedBounds.bottom + margin;
+
+        final int sweepLeft = mIsDragSweepingEnabled ? Math.min(left, layoutLeft) : left;
+        final int sweepTop = mIsDragSweepingEnabled ? Math.min(top, layoutTop) : top;
+        final int sweepRight = mIsDragSweepingEnabled ? Math.max(right, layoutRight) : right;
+        final int sweepBottom = mIsDragSweepingEnabled ? Math.max(bottom, layoutBottom) : bottom;
+
         final RecyclerView.LayoutManager lm = mRecyclerView.getLayoutManager();
         final int childCount = lm.getChildCount();
         for (int i = 0; i < childCount; i++) {
@@ -784,17 +823,19 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
             if (other == viewHolder.itemView) {
                 continue; // myself!
             }
-            if (other.getBottom() < top
-                    || other.getTop() > bottom
-                    || other.getRight() < left
-                    || other.getLeft() > right) {
+            final ViewHolder otherVh = mRecyclerView.getChildViewHolder(other);
+            mCallback.getBoundingBox(otherVh, mTmpRectOtherBounds);
+            Rect otherBounds = mTmpRectOtherBounds;
+            if (otherBounds.bottom < sweepTop
+                    || otherBounds.top > sweepBottom
+                    || otherBounds.right < sweepLeft
+                    || otherBounds.left > sweepRight) {
                 continue;
             }
-            final ViewHolder otherVh = mRecyclerView.getChildViewHolder(other);
             if (mCallback.canDropOver(mRecyclerView, mSelected, otherVh)) {
                 // find the index to add
-                final int dx = Math.abs(centerX - (other.getLeft() + other.getRight()) / 2);
-                final int dy = Math.abs(centerY - (other.getTop() + other.getBottom()) / 2);
+                final int dx = Math.abs(centerX - (otherBounds.left + otherBounds.right) / 2);
+                final int dy = Math.abs(centerY - (otherBounds.top + otherBounds.bottom) / 2);
                 final int dist = dx * dx + dy * dy;
 
                 int pos = 0;
@@ -826,6 +867,9 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
         final float threshold = mCallback.getMoveThreshold(viewHolder);
         final int x = (int) (mSelectedStartX + mDx);
         final int y = (int) (mSelectedStartY + mDy);
+        if (mCallback.hasDragEscapedBounds(mRecyclerView, viewHolder, x, y, mDx, mDy)) {
+            return;
+        }
         if (Math.abs(y - viewHolder.itemView.getTop()) < viewHolder.itemView.getHeight() * threshold
                 && Math.abs(x - viewHolder.itemView.getLeft())
                         < viewHolder.itemView.getWidth() * threshold) {
@@ -861,7 +905,14 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
             return;
         }
         if (mSelected != null && holder == mSelected) {
-            select(null, ACTION_STATE_IDLE);
+            if (mCallback.shouldAllowDragPastLayout()) {
+                // Do nothing here during layout detach phase to prevent crashing the Recycler
+                // (Scrapped or attached views may not be recycled).
+                // Rendering continuity is maintained by adding the view to the overlay inside
+                // onDrawOver instead.
+            } else {
+                select(null, ACTION_STATE_IDLE);
+            }
         } else {
             endRecoverAnimation(holder, false); // this may push it into pending cleanup list.
             if (mPendingCleanup.remove(holder.itemView)) {
@@ -1596,6 +1647,23 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
                 @NonNull ViewHolder target);
 
         /**
+         * Called when the dragged view has moved past the drag threshold. The callback can use this
+         * to short-circuit swap logic if the item has escaped its logical boundaries (e.g. escaping
+         * a tab group).
+         *
+         * @return True if the callback handled the drag event and swapping should be skipped.
+         */
+        public boolean hasDragEscapedBounds(
+                @NonNull RecyclerView recyclerView,
+                @NonNull ViewHolder viewHolder,
+                int x,
+                int y,
+                float dx,
+                float dy) {
+            return false;
+        }
+
+        /**
          * Returns whether ItemTouchHelper should start a drag and drop operation if an item is long
          * pressed.
          *
@@ -1608,6 +1676,29 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
          */
         public boolean isLongPressDragEnabled() {
             return true;
+        }
+
+        /**
+         * Return true to enable drag sweeping.
+         *
+         * <p>Drag sweeping computes intersection using the union of the view's original layout
+         * bounds and its current dragged bounds. This prevents fast drags (like those from a mouse)
+         * from skipping intermediate swap targets.
+         *
+         * @return True if drag sweeping should be used. Default is false.
+         */
+        public boolean isDragSweepingEnabled() {
+            return false;
+        }
+
+        /**
+         * @return whether this callback allows a drag to continue without cancellation when the
+         *     structural view is detached by the LayoutManager (for example, scrolling into an
+         *     offscreen state). Allowing this ensures layout continuity by rendering the detached
+         *     view via the RecyclerView Overlay. Default is false.
+         */
+        public boolean shouldAllowDragPastLayout() {
+            return false;
         }
 
         /**
@@ -1635,6 +1726,22 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
         @SuppressWarnings("WeakerAccess")
         public int getBoundingBoxMargin() {
             return 0;
+        }
+
+        /**
+         * Returns the bounding box of the ViewHolder. By default, this is the layout bounds of the
+         * itemView. This can be overridden to provide a custom bounding box for collision detection
+         * during drag and drop operations (e.g. extending the bounds to include child items).
+         *
+         * @param viewHolder The ViewHolder to get the bounds for.
+         * @return The bounding box of the ViewHolder.
+         */
+        public void getBoundingBox(@NonNull ViewHolder viewHolder, @NonNull Rect outBounds) {
+            outBounds.set(
+                    viewHolder.itemView.getLeft(),
+                    viewHolder.itemView.getTop(),
+                    viewHolder.itemView.getRight(),
+                    viewHolder.itemView.getBottom());
         }
 
         /**
@@ -1746,18 +1853,24 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
                 @NonNull List<ViewHolder> dropTargets,
                 int curX,
                 int curY) {
-            int right = curX + selected.itemView.getWidth();
-            int bottom = curY + selected.itemView.getHeight();
             ViewHolder winner = null;
             int winnerScore = -1;
             final int dx = curX - selected.itemView.getLeft();
             final int dy = curY - selected.itemView.getTop();
+            Rect selectedBounds = new Rect();
+            getBoundingBox(selected, selectedBounds);
+            int right = selectedBounds.right + dx;
+            int bottom = selectedBounds.bottom + dy;
+            int left = selectedBounds.left + dx;
+            int top = selectedBounds.top + dy;
             final int targetsSize = dropTargets.size();
+            Rect targetBounds = new Rect();
             for (int i = 0; i < targetsSize; i++) {
                 final ViewHolder target = dropTargets.get(i);
+                getBoundingBox(target, targetBounds);
                 if (dx > 0) {
-                    int diff = target.itemView.getRight() - right;
-                    if (diff < 0 && target.itemView.getRight() > selected.itemView.getRight()) {
+                    int diff = targetBounds.right - right;
+                    if (diff < 0 && targetBounds.right > selectedBounds.right) {
                         final int score = Math.abs(diff);
                         if (score > winnerScore) {
                             winnerScore = score;
@@ -1766,8 +1879,8 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
                     }
                 }
                 if (dx < 0) {
-                    int diff = target.itemView.getLeft() - curX;
-                    if (diff > 0 && target.itemView.getLeft() < selected.itemView.getLeft()) {
+                    int diff = targetBounds.left - left;
+                    if (diff > 0 && targetBounds.left < selectedBounds.left) {
                         final int score = Math.abs(diff);
                         if (score > winnerScore) {
                             winnerScore = score;
@@ -1776,8 +1889,8 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
                     }
                 }
                 if (dy < 0) {
-                    int diff = target.itemView.getTop() - curY;
-                    if (diff > 0 && target.itemView.getTop() < selected.itemView.getTop()) {
+                    int diff = targetBounds.top - top;
+                    if (diff > 0 && targetBounds.top < selectedBounds.top) {
                         final int score = Math.abs(diff);
                         if (score > winnerScore) {
                             winnerScore = score;
@@ -1787,8 +1900,8 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
                 }
 
                 if (dy > 0) {
-                    int diff = target.itemView.getBottom() - bottom;
-                    if (diff < 0 && target.itemView.getBottom() > selected.itemView.getBottom()) {
+                    int diff = targetBounds.bottom - bottom;
+                    if (diff < 0 && targetBounds.bottom > selectedBounds.bottom) {
                         final int score = Math.abs(diff);
                         if (score > winnerScore) {
                             winnerScore = score;
@@ -1991,6 +2104,9 @@ public class ItemTouchHelper2 extends RecyclerView.ItemDecoration
          * @param viewHolder The View that was interacted by the user.
          */
         public void clearView(@NonNull RecyclerView recyclerView, @NonNull ViewHolder viewHolder) {
+            if (shouldAllowDragPastLayout()) {
+                recyclerView.getOverlay().remove(viewHolder.itemView);
+            }
             ItemTouchUIUtilImpl2.INSTANCE.clearView(viewHolder.itemView);
         }
 

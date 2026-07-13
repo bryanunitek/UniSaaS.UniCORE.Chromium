@@ -16,7 +16,7 @@ namespace webauthn {
 
 // Represents the code of an error returned when the user dismisses the GPM Pin
 // flow by clicking the "Cancel" button.
-// TODO(crbug.com/460485614): Define an enum and parse it in keychain provider.
+// TODO(crbug.com/530911220): Define an enum and parse it in keychain provider.
 static const NSInteger kErrorUserDismissedGPMPinFlow = -105;
 
 // Block type used for the completion of the primary action button tap in
@@ -42,12 +42,24 @@ enum class PasskeyWelcomeScreenPurpose {
   kReauthenticate,
 };
 
+// User verification statuses for passkey creation/assertion requests.
+enum class PasskeyUserVerificationStatus {
+  kNotRequired,
+  kRequired,
+  kCompleted,
+};
+
 // Helper types representing a key and a list of key respectively.
 using SharedKey = std::vector<uint8_t>;
 using SharedKeyList = std::vector<SharedKey>;
 
 // Callback to be called once keys are fetched.
 using KeysFetchedCallback = base::OnceCallback<void(SharedKeyList, NSError*)>;
+
+// Callback to be called once keys are fetched, including user verification
+// completion status.
+using FetchKeysCallback =
+    base::OnceCallback<void(SharedKeyList, bool did_complete_uv)>;
 
 }  // namespace webauthn
 

@@ -458,6 +458,18 @@ def _speedometer3_crossbench(estimated_runtime: int = 60,
                           flags=flags)
 
 
+@_register("speedometer3-turbolev.crossbench")
+def _speedometer3_turbolev_crossbench(estimated_runtime: int = 60,
+                                      flags: tuple[str, ...] = ()):
+  flags += ("--js-flags=--turbolev", )
+  return CrossbenchConfig(
+      "speedometer3-turbolev.crossbench",
+      "speedometer_3",
+      estimated_runtime=estimated_runtime,
+      flags=flags,
+  )
+
+
 @_register("speedometer3-turbolev_future.crossbench")
 def _speedometer3_turbolev_future_crossbench(estimated_runtime: int = 60,
                                              flags: tuple[str, ...] = ()):
@@ -468,6 +480,28 @@ def _speedometer3_turbolev_future_crossbench(estimated_runtime: int = 60,
       estimated_runtime=estimated_runtime,
       flags=flags,
   )
+
+
+@_register('speedometer_main.crossbench')
+def _speedometer_main_crossbench(estimated_runtime: int = 60,
+                                 flags: tuple[str, ...] = ()):
+  """The latest WIP speedometer version running all stories."""
+  return CrossbenchConfig('speedometer_main.crossbench',
+                          'speedometer_main',
+                          estimated_runtime=estimated_runtime,
+                          flags=('--detailed-metrics', *flags))
+
+
+@_register('speedometer_main.all.crossbench')
+def _speedometer_main_all_crossbench(estimated_runtime: int = 60,
+                                     flags: tuple[str, ...] = ()):
+  """The latest WIP speedometer version running all stories,
+  including experimental"""
+  return CrossbenchConfig('speedometer_main.all.crossbench',
+                          'speedometer_main',
+                          estimated_runtime=estimated_runtime,
+                          flags=('--stories=all', '--detailed-metrics', *flags))
+
 
 @_register('browser_startup.crossbench')
 def _browser_startup_crossbench(estimated_runtime: int = 60,
@@ -491,17 +525,9 @@ def _browser_startup_crossbench(estimated_runtime: int = 60,
                           'browser-startup',
                           estimated_runtime=estimated_runtime,
                           flags=(f'--enable-features={INITIAL_WEBUI_FEATURES}',
-                                 *flags))
+                                 *flags),
+                          repeat=10)
 
-
-@_register('speedometer_main.crossbench')
-def _speedometer_main_crossbench(estimated_runtime: int = 60,
-                                 flags: tuple[str, ...] = ()):
-  # The latest WIP speedometer version
-  return CrossbenchConfig('speedometer_main.crossbench',
-                          'speedometer_main',
-                          estimated_runtime=estimated_runtime,
-                          flags=('--detailed-metrics', *flags))
 
 
 @_register('speedometer3.a11y.crossbench')
@@ -551,6 +577,17 @@ def _motionmark1_3_crossbench(estimated_runtime: int = 360,
                           'motionmark_1.3',
                           estimated_runtime=estimated_runtime,
                           flags=flags)
+
+
+@_register('motionmark1.3-turbolev.crossbench')
+def _motionmark1_3_turbolev_crossbench(estimated_runtime: int = 360,
+                                       flags: tuple[str, ...] = ()):
+  flags += ('--js-flags=--turbolev', )
+  return CrossbenchConfig('motionmark1.3-turbolev.crossbench',
+                          'motionmark_1.3',
+                          estimated_runtime=estimated_runtime,
+                          flags=flags)
+
 
 
 @_register('motionmark_main.crossbench')
@@ -627,6 +664,16 @@ def _jetstream_main_crossbench(estimated_runtime: int = 180,
                           flags=flags)
 
 
+@_register('jetstream3-turbolev.crossbench')
+def _jetstream3_turbolev_crossbench(estimated_runtime: int = 180,
+                                    flags: tuple[str, ...] = ()):
+  flags += ('--js-flags=--turbolev', )
+  return CrossbenchConfig('jetstream3-turbolev.crossbench',
+                          'jetstream_3',
+                          estimated_runtime=estimated_runtime,
+                          flags=flags)
+
+
 @_register('jetstream3-turbolev_future.crossbench')
 def _jetstream3_turbolev_future_crossbench(estimated_runtime: int = 180,
                                            flags: tuple[str, ...] = ()):
@@ -690,6 +737,16 @@ def _crossbench_embedder(estimated_runtime: int = 900,
 def _crossbench_gma_embedder(estimated_runtime: int = 900,
                             flags: tuple[str, ...] = ()):
   return CrossbenchConfig('gma.embedder.crossbench',
+                          'embedder',
+                          estimated_runtime=estimated_runtime,
+                          flags=flags,
+                          auto_enable_field_trials=False)
+
+
+@_register('shell.embedder.crossbench')
+def _crossbench_shell_embedder(estimated_runtime: int = 900,
+                            flags: tuple[str, ...] = ()):
+  return CrossbenchConfig('shell.embedder.crossbench',
                           'embedder',
                           estimated_runtime=estimated_runtime,
                           flags=flags,
@@ -894,9 +951,10 @@ PLATFORM_INFO = {
         'platform_os': 'win',
         'is_fyi': False
     },
+    # TODO(crbug.com/525430279): Use all 8 bots to test the Canary image.
     'android-brya-kano-i5-8gb-perf': {
         'description': 'Brya SKU kano_12th_Gen_IntelR_CoreTM_i5_1235U_8GB',
-        'num_shards': 2,
+        'num_shards': 8,
         'platform_os': 'android',
         'is_fyi': False
     },
@@ -914,7 +972,7 @@ PLATFORM_INFO = {
     },
     'android-pixel4-perf': {
         'description': 'Android R',
-        'num_shards': 44,
+        'num_shards': 38,
         'platform_os': 'android',
         'is_fyi': False
     },
@@ -927,13 +985,13 @@ PLATFORM_INFO = {
     },
     'android-pixel4_webview-perf': {
         'description': 'Android R',
-        'num_shards': 23,
+        'num_shards': 19,
         'platform_os': 'android',
         'is_fyi': False
     },
     'android-pixel4_webview-perf-pgo': {
         'description': 'Android R',
-        'num_shards': 20,
+        'num_shards': 12,
         'platform_os': 'android',
         'is_fyi': False
     },

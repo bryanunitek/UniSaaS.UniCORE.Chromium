@@ -384,9 +384,24 @@ class AutofillDriver {
                                           FieldGlobalId token_field_id,
                                           const std::string& token) = 0;
 
+  // Notifies the renderer of a change in the email verification state (e.g.,
+  // loading spinner, verified icon, or reset to none) for `email_field_id`.
+  virtual void UpdateEmailVerificationState(
+      const FieldGlobalId& email_field_id,
+      mojom::EmailVerificationState state) = 0;
+
   // Scrolls the page containing the field corresponding to `field_id` until it
   // becomes visible on the user's display.
   virtual void ScrollFieldIntoView(FieldGlobalId field_id) = 0;
+
+  // Returns whether a value of type `filled_type` can be filled into `field`
+  // from a fill operation triggered on `trigger_origin`, according to the
+  // iframe security policy. (See `AutofillDriverRouter::IsSafeToFill()` for the
+  // policy.)
+  virtual bool IsSafeToFill(const FormFieldData& field,
+                            FieldType filled_type,
+                            const url::Origin& main_origin,
+                            const url::Origin& trigger_origin) const = 0;
 
  private:
   friend class AutofillDriverTestApi;

@@ -6,18 +6,23 @@ package org.chromium.chrome.browser.pdf;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
+import android.text.format.Formatter;
 import android.util.SparseArray;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 
 import androidx.annotation.VisibleForTesting;
+import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
@@ -26,6 +31,7 @@ import androidx.pdf.PdfDocument;
 import androidx.pdf.PdfDocument.PageInfo;
 import androidx.pdf.PdfPoint;
 import androidx.pdf.PdfSandboxHandle;
+import androidx.pdf.PdfWriteHandle;
 import androidx.pdf.SandboxedPdfLoader;
 import androidx.pdf.content.ExternalLink;
 import androidx.pdf.ink.EditablePdfViewerFragment;
@@ -35,7 +41,6 @@ import kotlin.coroutines.Continuation;
 import kotlin.coroutines.CoroutineContext;
 import kotlin.coroutines.EmptyCoroutineContext;
 
-import org.jetbrains.annotations.NotNull;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -44,6 +49,8 @@ import org.chromium.base.Log;
 import org.chromium.base.PackageUtils;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.pdf.PdfUtils.PdfLoadResult;
@@ -54,9 +61,20 @@ import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.base.MimeTypeUtils;
 import org.chromium.ui.base.PageTransition;
+import org.chromium.ui.modaldialog.DialogDismissalCause;
+import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
+import org.chromium.ui.modaldialog.ModalDialogManagerHolder;
+import org.chromium.ui.modaldialog.ModalDialogProperties;
+import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
 
+import java.io.File;
+import java.io.IOException;
+import java.lang.ref.WeakReference;
+import java.text.DateFormat;
+import java.util.Date;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -64,8 +82,8 @@ import java.util.function.Consumer;
 /**
  * The class responsible for setting up PdfPage.
  *
- * <p>Lint suppression for NewApi is added because we are using an EditablePdfViewerFragment and
- * inline pdf support is enabled via PdfUtils#shouldOpenPdfInline.
+ * <p>Lint suppression for NewApi is added because we are using EditablePdfViewerFragment and inline
+ * pdf support is enabled via PdfUtils#shouldOpenPdfInline.
  */
 @SuppressLint("NewApi")
 @NullMarked
@@ -81,6 +99,8 @@ public class PdfCoordinator
     // schemes such as javascript:, data:, file:, content:, intent:, chrome:, devtools:.
     private static final Set<String> ALLOWED_LINK_SCHEMES =
             Set.of("http", "https", "mailto", "tel", "ftp");
+    private static final float POINTS_PER_INCH = 72.0f;
+    private static final float MM_PER_INCH = 25.4f;
 
     static final String JSON_KEY_FILE_METADATA = "file_metadata";
     static final String JSON_KEY_FILE_URI = "file_uri";
@@ -130,14 +150,16 @@ public class PdfCoordinator
     private @Nullable PdfSandboxHandle mPdfSandboxHandle;
 
     /**
-     * Whether the pdf has been loaded, despite of success or failure. This is used to ensure we
-     * load the pdf at most once.
+     * Whether the pdf has been loaded, despite of success or failure, for the current mUri. This is
+     * used to ensure we load the pdf at most once. If mUri was updated, this is reset to false.
      */
     private boolean mIsPdfLoaded;
 
     boolean mIsInitialZoomPass = true;
 
     private int mFindInPageCount;
+
+    private boolean mPageNavAndEditVisible = true;
 
     @VisibleForTesting public ChromePdfViewerFragment mChromePdfViewerFragment;
 
@@ -198,6 +220,10 @@ public class PdfCoordinator
         if (fragment != null) {
             if (reuseFragment) {
                 mChromePdfViewerFragment = (ChromePdfViewerFragment) fragment;
+                mChromePdfViewerFragment.setDelegate(this);
+                if (mPdfFilePath == null) mPdfFilePath = mChromePdfViewerFragment.getFilePath();
+                String restoredFileName = mChromePdfViewerFragment.getFileName();
+                if (mTitle == null && restoredFileName != null) mTitle = restoredFileName;
             } else {
                 mFragmentManager.beginTransaction().remove(fragment).commitAllowingStateLoss();
             }
@@ -245,11 +271,25 @@ public class PdfCoordinator
     /** The class responsible for rendering pdf document. */
     public static class ChromePdfViewerFragment extends EditablePdfViewerFragment {
 
-        private static final String KEY_VIEW_TAG = "view_tag";
+        static final String KEY_VIEW_TAG = "view_tag";
+        static final String KEY_SAVED_PAGE_INDEX = "saved_page_index";
+        static final String KEY_SAVED_ZOOM = "saved_zoom";
+        static final String KEY_RESTORE_POSITION_PENDING = "restore_position_pending";
+        private static final String KEY_FILE_PATH = "file_path";
+        private static final String KEY_FILE_NAME = "file_name";
         private @Nullable PdfActionsDelegate mDelegate;
         private @Nullable PdfView mPdfView;
 
         @Nullable private String mViewTag;
+        private int mSavedPageIndex = -1;
+        private float mSavedZoom = -1f;
+        private boolean mRestorePositionPending;
+        private @Nullable View mToolBoxView;
+        private @Nullable ViewGroup mContainerView;
+        private int mOriginalIndex;
+        private boolean mShowToolBoxView = true;
+        @Nullable private String mFilePath;
+        @Nullable private String mFileName;
 
         public void setPdfViewForTesting(PdfView pdfView) {
             this.mPdfView = pdfView;
@@ -261,6 +301,9 @@ public class PdfCoordinator
             mPdfView = pdfView;
 
             if (getView() != null && mViewTag != null) getView().setTag(mViewTag);
+            if (PdfUtils.isInlinePdfV2Enabled()) {
+                pdfView.setFormFillingEnabled(!isEditModeEnabled());
+            }
             // TODO(crbug.com/498644542): call getPageCount() within onLoadDocumentSuccess()
             if (!PdfUtils.isInlinePdfV2Enabled() || mDelegate == null) {
                 return;
@@ -304,6 +347,14 @@ public class PdfCoordinator
             mDelegate = handler;
         }
 
+        public @Nullable PdfActionsDelegate getDelegate() {
+            return mDelegate;
+        }
+
+        public void setDelegate(PdfActionsDelegate delegate) {
+            if (mDelegate != delegate) mDelegate = delegate;
+        }
+
         /** Whether the pdf has been loaded successfully. */
         @VisibleForTesting public boolean mIsLoadDocumentSuccess;
 
@@ -317,18 +368,251 @@ public class PdfCoordinator
             mViewTag = tag;
         }
 
+        public void setFilePath(@Nullable String filePath) {
+            mFilePath = filePath;
+        }
+
+        public @Nullable String getFilePath() {
+            return mFilePath;
+        }
+
+        public void setFileName(@Nullable String fileName) {
+            mFileName = fileName;
+        }
+
+        public @Nullable String getFileName() {
+            return mFileName;
+        }
+
+        @Override
+        public void onAttach(Context context) {
+            ClassLoader classLoader = ChromePdfViewerFragment.class.getClassLoader();
+            Bundle arguments = getArguments();
+            if (arguments != null) {
+                arguments.setClassLoader(classLoader);
+            }
+            super.onAttach(context);
+        }
+
+        @Override
+        public void onCreate(@Nullable Bundle savedInstanceState) {
+            if (savedInstanceState != null) {
+                savedInstanceState.setClassLoader(ChromePdfViewerFragment.class.getClassLoader());
+            }
+            super.onCreate(savedInstanceState);
+        }
+
         @Override
         public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
+            Bundle state = savedInstanceState;
+            if (state == null) {
+                state = getArguments();
+            }
+            if (state != null) {
+                state.setClassLoader(ChromePdfViewerFragment.class.getClassLoader());
+                if (state.containsKey(KEY_VIEW_TAG)) {
+                    mViewTag = state.getString(KEY_VIEW_TAG, null);
+                }
+                mSavedPageIndex = state.getInt(KEY_SAVED_PAGE_INDEX, -1);
+                mSavedZoom = state.getFloat(KEY_SAVED_ZOOM, -1f);
+                mRestorePositionPending = state.getBoolean(KEY_RESTORE_POSITION_PENDING, false);
+            }
             super.onViewCreated(view, savedInstanceState);
             if (savedInstanceState != null) {
-                mViewTag = savedInstanceState.getString(KEY_VIEW_TAG, null);
                 if (getView() != null) getView().setTag(mViewTag);
+                mFilePath = savedInstanceState.getString(KEY_FILE_PATH, null);
+                mFileName = savedInstanceState.getString(KEY_FILE_NAME, null);
+            }
+            setUpToolBoxView(view);
+        }
+
+        @VisibleForTesting
+        void setUpToolBoxView(View view) {
+            mToolBoxView = view.findViewById(R.id.toolBoxView);
+            mContainerView = (ViewGroup) view;
+            if (mContainerView != null && mToolBoxView != null) {
+                mOriginalIndex = mContainerView.indexOfChild(mToolBoxView);
+            }
+            if (PdfUtils.isInlinePdfV2Enabled()) {
+                if (mDelegate != null) {
+                    setToolBoxViewVisibility(!mDelegate.isPageNavAndEditVisible());
+                } else {
+                    updateToolBoxView();
+                }
+            }
+        }
+
+        public void setToolBoxViewVisibility(boolean visible) {
+            if (mShowToolBoxView == visible) {
+                return;
+            }
+            mShowToolBoxView = visible;
+            updateToolBoxView();
+        }
+
+        private void updateToolBoxView() {
+            if (mContainerView == null || mToolBoxView == null) {
+                return;
+            }
+            boolean isCurrentlyAdded = mToolBoxView.getParent() != null;
+            if (mShowToolBoxView && !isCurrentlyAdded) {
+                int index = Math.min(mOriginalIndex, mContainerView.getChildCount());
+                mContainerView.addView(mToolBoxView, index);
+            } else if (!mShowToolBoxView && isCurrentlyAdded) {
+                mContainerView.removeView(mToolBoxView);
             }
         }
 
         @Override
+        public void onEnterEditMode() {
+            super.onEnterEditMode();
+            if (PdfUtils.isInlinePdfV2Enabled() && mPdfView != null) {
+                mPdfView.setFormFillingEnabled(false);
+            }
+            if (mDelegate != null) {
+                mDelegate.onEditModeChanged(true);
+            }
+        }
+
+        @Override
+        public void onExitEditMode() {
+            super.onExitEditMode();
+            if (PdfUtils.isInlinePdfV2Enabled() && mPdfView != null) {
+                mPdfView.setFormFillingEnabled(true);
+            }
+            if (mDelegate != null) {
+                mDelegate.onEditModeChanged(false);
+            }
+        }
+
+        private void cleanupWriteResources(
+                @Nullable ParcelFileDescriptor pfd, @Nullable PdfWriteHandle handle) {
+            // Can be null if we failed to open the file descriptor (e.g. invalid URI, null
+            // context, or IOException during open), or if we are only cleaning up the handle.
+            if (pfd != null) {
+                try {
+                    pfd.close();
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to close ParcelFileDescriptor", e);
+                }
+            }
+            // Can be null if we are only cleaning up the pfd (e.g. in the catch block of
+            // onApplyEditsSuccess to avoid double-closing the handle which is closed at the end of
+            // the method).
+            if (handle != null) {
+                try {
+                    handle.close();
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to close PdfWriteHandle", e);
+                }
+            }
+        }
+
+        @Override
+        public void onApplyEditsSuccess(PdfWriteHandle handle) {
+            Uri uri = getDocumentUri();
+
+            if (uri != null && getContext() != null) {
+                ParcelFileDescriptor pfd = null;
+                boolean success = false;
+                try {
+                    if (ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())) {
+                        pfd = getContext().getContentResolver().openFileDescriptor(uri, "w");
+                    } else if (ContentResolver.SCHEME_FILE.equals(uri.getScheme())) {
+                        String path = uri.getPath();
+                        if (path != null) {
+                            pfd =
+                                    ParcelFileDescriptor.open(
+                                            new File(path),
+                                            ParcelFileDescriptor.MODE_WRITE_ONLY
+                                                    | ParcelFileDescriptor.MODE_TRUNCATE);
+                        } else {
+                            Log.e(TAG, "File URI has null path: " + uri);
+                        }
+                    }
+
+                    if (pfd != null) {
+                        final ParcelFileDescriptor finalPfd = pfd;
+                        Continuation<kotlin.Unit> continuation =
+                                new Continuation<kotlin.Unit>() {
+                                    @Override
+                                    public CoroutineContext getContext() {
+                                        return EmptyCoroutineContext.INSTANCE;
+                                    }
+
+                                    @Override
+                                    public void resumeWith(Object result) {
+                                        if (result != kotlin.Unit.INSTANCE) {
+                                            Log.e(TAG, "Async PDF write failed: " + result);
+                                        }
+                                        PostTask.postTask(
+                                                TaskTraits.USER_BLOCKING_MAY_BLOCK,
+                                                () -> {
+                                                    cleanupWriteResources(finalPfd, handle);
+                                                    ThreadUtils.postOnUiThread(() -> finishExitingEditMode());
+                                                });
+                                    }
+                                };
+
+                        if (mPdfView != null) {
+                            mSavedPageIndex = mPdfView.getFirstVisiblePage();
+                            mSavedZoom = mPdfView.getZoom();
+                            mRestorePositionPending = true;
+                        }
+
+                        Object coroutineResult = handle.writeTo(pfd, continuation);
+
+                        if (coroutineResult
+                                != kotlin.coroutines.intrinsics.IntrinsicsKt
+                                        .getCOROUTINE_SUSPENDED()) {
+                            // Completed synchronously.
+                            PostTask.postTask(
+                                    TaskTraits.USER_BLOCKING_MAY_BLOCK,
+                                    () -> {
+                                        cleanupWriteResources(finalPfd, handle);
+                                        ThreadUtils.postOnUiThread(() -> finishExitingEditMode());
+                                    });
+                        }
+                        success = true;
+                        return;
+                    } else {
+                        Log.e(TAG, "Failed to open file descriptor for writing: " + uri);
+                    }
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to write PDF edits", e);
+                } finally {
+                    if (!success) {
+                        cleanupWriteResources(pfd, handle);
+                        setEditModeEnabled(false);
+                    }
+                }
+            } else {
+                Log.e(TAG, "Cannot write edits, uri or context is null. Uri: " + uri);
+                cleanupWriteResources(null, handle);
+                setEditModeEnabled(false);
+            }
+        }
+
+        private void finishExitingEditMode() {
+            setEditModeEnabled(false);
+        }
+
+        @Override
+        // TODO(crbug.com/527937210): Handle this error in a user-friendly way.
+        public void onApplyEditsFailed(Throwable error) {
+            Log.e(TAG, "Failed to apply PDF edits", error);
+            setEditModeEnabled(false);
+        }
+
+        @Override
         public void onSaveInstanceState(Bundle outState) {
+            super.onSaveInstanceState(outState);
             outState.putString(KEY_VIEW_TAG, mViewTag);
+            outState.putInt(KEY_SAVED_PAGE_INDEX, mSavedPageIndex);
+            outState.putFloat(KEY_SAVED_ZOOM, mSavedZoom);
+            outState.putBoolean(KEY_RESTORE_POSITION_PENDING, mRestorePositionPending);
+            outState.putString(KEY_FILE_PATH, mFilePath);
+            outState.putString(KEY_FILE_NAME, mFileName);
         }
 
         @Override
@@ -340,7 +624,22 @@ public class PdfCoordinator
         }
 
         @Override
-        public void onLoadDocumentSuccess() {
+        public void onLoadDocumentSuccess(PdfDocument pdfDocument) {
+            super.onLoadDocumentSuccess(pdfDocument);
+            if (PdfUtils.isInlinePdfV2Enabled() && mPdfView != null) {
+                mPdfView.setFormFillingEnabled(!isEditModeEnabled());
+            }
+            if (mRestorePositionPending && mPdfView != null) {
+                mRestorePositionPending = false;
+                if (mSavedZoom > 0) {
+                    final float zoom = mSavedZoom;
+                    mPdfView.post(() -> zoomTo(zoom));
+                }
+                if (mSavedPageIndex >= 0) {
+                    final int page = mSavedPageIndex;
+                    mPdfView.post(() -> scrollToPage(page));
+                }
+            }
             if (mDocumentLoadStartTimestamp <= 0) {
                 return;
             }
@@ -459,14 +758,13 @@ public class PdfCoordinator
             pdfDocument.getPageInfo(
                     pageIndex,
                     new Continuation<PageInfo>() {
-                        @NotNull
                         @Override
                         public CoroutineContext getContext() {
                             return EmptyCoroutineContext.INSTANCE;
                         }
 
                         @Override
-                        public void resumeWith(@NotNull Object result) {
+                        public void resumeWith(Object result) {
                             PageInfo pageInfo =
                                     result instanceof PageInfo ? (PageInfo) result : null;
                             assert pageInfo != null;
@@ -533,13 +831,15 @@ public class PdfCoordinator
         if (mChromePdfViewerFragment == null) {
             return;
         }
+        mPdfFragmentViewTracker.removeViewWithTag(mTabId);
+
         // Record abort when there is paired pdf load but no load success or error.
         if (mChromePdfViewerFragment.mDocumentLoadStartTimestamp > 0
                 && !mChromePdfViewerFragment.mIsLoadDocumentSuccess
                 && !mChromePdfViewerFragment.mIsLoadDocumentError) {
             PdfUtils.recordPdfLoadResultDetail(PdfLoadResult.ABORT);
         }
-        if (!mFragmentManager.isDestroyed()) {
+        if (!mFragmentManager.isDestroyed() && mChromePdfViewerFragment.getDelegate() == this) {
             mFragmentManager
                     .beginTransaction()
                     .remove(mChromePdfViewerFragment)
@@ -572,6 +872,11 @@ public class PdfCoordinator
         loadPdfFile();
     }
 
+    @Override
+    public void resetLoadState() {
+        mIsPdfLoaded = false;
+    }
+
     private void loadPdfFile() {
         if (mIsPdfLoaded) {
             return;
@@ -592,6 +897,22 @@ public class PdfCoordinator
         if (mUri == null) {
             return;
         }
+        int page = -1;
+        float zoom = -1f;
+        boolean pending = false;
+        if (mChromePdfViewerFragment != null) {
+            if (mChromePdfViewerFragment.mRestorePositionPending) {
+                page = mChromePdfViewerFragment.mSavedPageIndex;
+                zoom = mChromePdfViewerFragment.mSavedZoom;
+                pending = true;
+            } else if (mChromePdfViewerFragment.mPdfView != null) {
+                page = mChromePdfViewerFragment.mPdfView.getFirstVisiblePage();
+                zoom = mChromePdfViewerFragment.mPdfView.getZoom();
+                pending = true;
+            }
+        }
+
+        mIsPdfLoaded = false;
         // Remove current fragment.
         mFragmentManager
                 .beginTransaction()
@@ -602,6 +923,12 @@ public class PdfCoordinator
         // Create new fragment.
         mChromePdfViewerFragment = new ChromePdfViewerFragment(this);
 
+        Bundle args = new Bundle();
+        args.putInt(ChromePdfViewerFragment.KEY_SAVED_PAGE_INDEX, page);
+        args.putFloat(ChromePdfViewerFragment.KEY_SAVED_ZOOM, zoom);
+        args.putBoolean(ChromePdfViewerFragment.KEY_RESTORE_POSITION_PENDING, pending);
+        mChromePdfViewerFragment.setArguments(args);
+
         // Add new fragment and load document again.
         loadPdfInternal();
     }
@@ -611,10 +938,12 @@ public class PdfCoordinator
             if (sSkipLoadPdfForTesting) {
                 mIsPdfLoaded = true;
             } else {
-                FragmentTransaction transaction = mFragmentManager.beginTransaction();
-                transaction.add(mFragmentContainerViewId, mChromePdfViewerFragment, mTabId);
-                transaction.commitAllowingStateLoss();
-                mFragmentManager.executePendingTransactions();
+                if (!mChromePdfViewerFragment.isAdded()) {
+                    FragmentTransaction transaction = mFragmentManager.beginTransaction();
+                    transaction.add(mFragmentContainerViewId, mChromePdfViewerFragment, mTabId);
+                    transaction.commitAllowingStateLoss();
+                    mFragmentManager.executePendingTransactions();
+                }
                 PdfUtils.recordPdfLoad();
                 long currentTime = SystemClock.elapsedRealtime();
                 mChromePdfViewerFragment.mDocumentLoadStartTimestamp = currentTime;
@@ -625,7 +954,11 @@ public class PdfCoordinator
                 mProgressBar.setVisibility(View.GONE);
                 try {
                     mIsInitialZoomPass = true;
-                    mChromePdfViewerFragment.setDocumentUri(mUri);
+                    if (!mUri.equals(mChromePdfViewerFragment.getDocumentUri())) {
+                        mChromePdfViewerFragment.setDocumentUri(mUri);
+                        mChromePdfViewerFragment.setFilePath(mPdfFilePath);
+                        mChromePdfViewerFragment.setFileName(mTitle);
+                    }
                 } catch (IllegalArgumentException e) {
                     Log.e(TAG, "Load pdf fails due to invalid uri.", e);
                 } finally {
@@ -744,6 +1077,20 @@ public class PdfCoordinator
     }
 
     /**
+     * Sets the edit mode of the PDF toolbar.
+     *
+     * @param editMode Whether to enable edit mode.
+     */
+    @Override
+    public void setEditMode(boolean editMode) {
+        if (!editMode && mChromePdfViewerFragment.hasUnsavedChanges()) {
+            mChromePdfViewerFragment.applyDraftEdits();
+        } else {
+            mChromePdfViewerFragment.setEditModeEnabled(editMode);
+        }
+    }
+
+    /**
      * Toggles between "fit to page height" and "fit to page width" modes.
      *
      * @param fitToPageHeight Whether to fit to page height or fit to page width.
@@ -774,8 +1121,11 @@ public class PdfCoordinator
     }
 
     @Override
-    public void rotate() {
-        // TODO(crbug.com/501138999): Implement rotate action
+    public void onPageNavAndEditVisibilityChanged(boolean visible) {
+        mPageNavAndEditVisible = visible;
+        if (mChromePdfViewerFragment != null) {
+            mChromePdfViewerFragment.setToolBoxViewVisibility(!visible);
+        }
     }
 
     // Implementation of PdfActionsDelegate
@@ -827,6 +1177,18 @@ public class PdfCoordinator
     }
 
     @Override
+    public void onEditModeChanged(boolean editMode) {
+        if (mToolbarCoordinator != null) {
+            mToolbarCoordinator.setEditModeActive(editMode);
+        }
+    }
+
+    @Override
+    public boolean isPageNavAndEditVisible() {
+        return mPageNavAndEditVisible;
+    }
+
+    @Override
     public void onViewportChanged(int pageIndex, float zoomLevel) {
         assert mToolbarCoordinator != null;
         // AndroidX PDF Viewport is not initialized to 100% zoom on the initial pass. For PDF V2, we
@@ -851,4 +1213,152 @@ public class PdfCoordinator
         mToolbarCoordinator.onViewportChanged(pageIndex, zoomLevel);
     }
 
+
+
+    private String formatPageSize(PageInfo pageInfo) {
+        float widthInches = pageInfo.getWidth() / POINTS_PER_INCH;
+        float heightInches = pageInfo.getHeight() / POINTS_PER_INCH;
+        int widthMm = Math.round(widthInches * MM_PER_INCH);
+        int heightMm = Math.round(heightInches * MM_PER_INCH);
+
+        return String.format(
+                Locale.getDefault(),
+                "%.2f × %.2f in (%d × %d mm)",
+                widthInches,
+                heightInches,
+                widthMm,
+                heightMm);
+    }
+
+    private String formatFileSize(long bytes) {
+        return Formatter.formatFileSize(mActivity, bytes);
+    }
+
+    private String formatTimestamp(long timestamp) {
+        if (timestamp <= 0) {
+            return mActivity.getString(R.string.pdf_properties_value_unknown);
+        }
+        return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+                .format(new Date(timestamp));
+    }
+
+    @Override
+    public void showDocumentProperties() {
+        if (mChromePdfViewerFragment == null) return;
+        PdfView pdfView = mChromePdfViewerFragment.mPdfView;
+        if (pdfView == null || pdfView.getPdfDocument() == null) return;
+
+        Context appContext = mActivity.getApplicationContext();
+        Uri uri = mUri;
+        String title = mTitle;
+        String pdfFilePath = mPdfFilePath;
+        WeakReference<PdfCoordinator> weakSelf = new WeakReference<>(this);
+
+        mChromePdfViewerFragment.runWithPageInfo(
+                0,
+                pageInfo -> {
+                    // Fetch properties on a background thread to avoid UI thread block
+                    PostTask.postTask(
+                            TaskTraits.USER_VISIBLE,
+                            () -> {
+                                PdfDocumentPropertiesFetcher.DocProperties fileProps =
+                                        PdfDocumentPropertiesFetcher.getDocProperties(
+                                                appContext, uri, title, pdfFilePath);
+                                // Post back to UI thread to show dialog
+                                ThreadUtils.postOnUiThread(
+                                        () -> {
+                                            PdfCoordinator self = weakSelf.get();
+                                            if (self != null) {
+                                                self.displayPropertiesDialog(pageInfo, fileProps);
+                                            }
+                                        });
+                            });
+                });
+    }
+
+    private void displayPropertiesDialog(
+            PageInfo pageInfo, PdfDocumentPropertiesFetcher.DocProperties fileProps) {
+        if (mActivity == null || mActivity.isFinishing() || mActivity.isDestroyed()) return;
+        if (mChromePdfViewerFragment == null) return; // Abort if PdfCoordinator was destroyed
+
+        String fileName = fileProps.mFileName;
+        String fileSize = formatFileSize(fileProps.mFileSize);
+        String title = mTitle;
+        String created = formatTimestamp(fileProps.mCreationTime);
+        String modified = formatTimestamp(fileProps.mLastModified);
+
+        int pageCount = 0;
+        if (mChromePdfViewerFragment != null
+                && mChromePdfViewerFragment.mPdfView != null
+                && mChromePdfViewerFragment.mPdfView.getPdfDocument() != null) {
+            pageCount = mChromePdfViewerFragment.mPdfView.getPdfDocument().getPageCount();
+        }
+        String pageCountStr = String.valueOf(pageCount);
+        String pageSizeStr = formatPageSize(pageInfo);
+
+        View dialogView =
+                LayoutInflater.from(mActivity).inflate(R.layout.pdf_properties_dialog, null);
+
+        ((TextView) dialogView.findViewById(R.id.file_name_value)).setText(fileName);
+        ((TextView) dialogView.findViewById(R.id.file_size_value)).setText(fileSize);
+        ((TextView) dialogView.findViewById(R.id.title_value)).setText(title);
+        ((TextView) dialogView.findViewById(R.id.created_value)).setText(created);
+        ((TextView) dialogView.findViewById(R.id.modified_value)).setText(modified);
+        ((TextView) dialogView.findViewById(R.id.page_count_value)).setText(pageCountStr);
+        ((TextView) dialogView.findViewById(R.id.page_size_value)).setText(pageSizeStr);
+
+        if (mActivity instanceof ModalDialogManagerHolder) {
+            ModalDialogManager modalDialogManager =
+                    ((ModalDialogManagerHolder) mActivity).getModalDialogManager();
+            showModalDialog(modalDialogManager, dialogView);
+        } else {
+            showAlertDialog(dialogView);
+        }
+    }
+
+    private void showModalDialog(ModalDialogManager manager, View customView) {
+        ModalDialogProperties.Controller controller =
+                new ModalDialogProperties.Controller() {
+                    @Override
+                    public void onDismiss(
+                            PropertyModel model, @DialogDismissalCause int dismissalCause) {}
+
+                    @Override
+                    public void onClick(PropertyModel model, int buttonType) {
+                        if (buttonType == ModalDialogProperties.ButtonType.POSITIVE) {
+                            manager.dismissDialog(
+                                    model, DialogDismissalCause.POSITIVE_BUTTON_CLICKED);
+                        }
+                    }
+                };
+
+        PropertyModel model =
+                new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
+                        .with(ModalDialogProperties.CONTROLLER, controller)
+                        .with(ModalDialogProperties.CANCEL_ON_TOUCH_OUTSIDE, true)
+                        .with(ModalDialogProperties.CUSTOM_VIEW, customView)
+                        .with(ModalDialogProperties.WRAP_CUSTOM_VIEW_IN_SCROLLABLE, true)
+                        .with(
+                                ModalDialogProperties.TITLE,
+                                mActivity.getString(R.string.pdf_document_properties))
+                        .with(
+                                ModalDialogProperties.POSITIVE_BUTTON_TEXT,
+                                mActivity.getResources(),
+                                R.string.pdf_properties_close)
+                        .with(
+                                ModalDialogProperties.BUTTON_STYLES,
+                                ModalDialogProperties.ButtonStyles.PRIMARY_FILLED_NO_NEGATIVE)
+                        .build();
+
+        manager.showDialog(model, ModalDialogType.APP);
+    }
+
+    private void showAlertDialog(View dialogView) {
+        new AlertDialog.Builder(mActivity)
+                .setTitle(R.string.pdf_document_properties)
+                .setView(dialogView)
+                .setPositiveButton(
+                        R.string.pdf_properties_close, (dialog, which) -> dialog.dismiss())
+                .show();
+    }
 }

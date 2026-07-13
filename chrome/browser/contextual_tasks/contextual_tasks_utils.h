@@ -6,12 +6,14 @@
 #define CHROME_BROWSER_CONTEXTUAL_TASKS_CONTEXTUAL_TASKS_UTILS_H_
 
 #include "base/unguessable_token.h"
+#include "build/build_config.h"
 #include "components/contextual_search/contextual_search_context_controller.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/omnibox_proto/model_mode.pb.h"
 #include "third_party/omnibox_proto/tool_mode.pb.h"
 
 class Profile;
+class BrowserWindowInterface;
 
 namespace content {
 class WebContents;
@@ -92,6 +94,9 @@ void SendInjectedInputRemovedUpdate(
 // Returns true if the side panel should be used instead of the bottom sheet.
 bool ShouldShowSidePanel();
 
+// Returns true if running on Android mobile (phone form factor).
+bool IsAndroidMobileFormFactor();
+
 // Returns whether the provided URL is to a contextual tasks WebUI page.
 bool IsContextualTasksUrl(const GURL& url);
 
@@ -106,6 +111,12 @@ GURL GetContextualTasksDisplayURL(content::WebContents* web_contents);
 
 // Returns the effective pin state for the contextual tasks button.
 bool GetEffectivePinState(Profile* profile);
+
+#if !BUILDFLAG(IS_ANDROID)
+// Updates the visibility of the contextual tasks pinned toolbar ActionItem.
+void UpdatePinButtonVisibilityState(BrowserWindowInterface* browser_window,
+                                    bool eligible);
+#endif
 
 }  // namespace contextual_tasks
 

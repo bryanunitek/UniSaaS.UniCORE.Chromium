@@ -112,6 +112,10 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsTest, SitePermissionsSiteGroup) {
   RunTest("extensions/site_permissions_site_group_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(CrExtensionsTest, ManagerWebuiRefresh2026) {
+  RunTest("extensions/manager_webui_refresh_2026_test.js", "mocha.run()");
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Extension Sidebar Tests
 
@@ -409,6 +413,15 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
                        ManifestV2DeprecationPanel_TitleVisibility) {
   RunTestCase("ManifestV2DeprecationPanel_TitleVisibility");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest, PinnedToggle_Visibility) {
+  RunTestCase("PinnedToggle_Visibility");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
+                       PinnedToggle_StateAndInteraction) {
+  RunTestCase("PinnedToggle_StateAndInteraction");
 }
 
 ////////////////////////////////////////////////////////////////////////////////

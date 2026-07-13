@@ -26,22 +26,23 @@ import org.chromium.base.TraceEvent;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.EnsuresNonNullIf;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
 import org.chromium.chrome.browser.lifecycle.TopResumedActivityChangedObserver;
 import org.chromium.chrome.browser.omnibox.DeferredIMEWindowInsetApplicationCallback;
 import org.chromium.chrome.browser.omnibox.FuseboxSessionState;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
+import org.chromium.chrome.browser.omnibox.LocationBarEmbedderUiOverrides;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
-import org.chromium.chrome.browser.omnibox.UrlFocusChangeListener;
 import org.chromium.chrome.browser.omnibox.fusebox.ComposeboxQueryControllerBridge;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxAttachmentModelList;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxAttachmentModelList.FuseboxAttachmentChangeListener;
@@ -64,6 +65,7 @@ import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+import org.chromium.chrome.browser.ui.vertical_tabs.VerticalTabUtils;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolver;
 import org.chromium.components.metrics.OmniboxEventProtos.OmniboxEventProto.PageClassification;
 import org.chromium.components.omnibox.AutocompleteInput;
@@ -94,7 +96,6 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.modelutil.PropertyModelAnimatorFactory;
 import org.chromium.ui.mojom.WindowOpenDisposition;
 import org.chromium.url.GURL;
 
@@ -132,8 +133,6 @@ class AutocompleteMediator
     // Delay triggering the omnibox results upon key press to allow the location bar to repaint
     // with the new characters.
     private static final long OMNIBOX_SUGGESTION_START_DELAY_MS = 30;
-    // Delay recording ZPS suppression to allow subsequent suggestion updates to arrive.
-    private static final long ZPS_SUPPRESSION_METRIC_DEBOUNCE_MS = 100;
 
     @VisibleForTesting
     static final String KEYWORD_SPACE_TRIGGERING_ENABLED_PREF =
@@ -152,7 +151,7 @@ class AutocompleteMediator
     private final Callback<String> mBringTabGroupToFrontCallback;
     private final OmniboxActionDelegateImpl mOmniboxActionDelegate;
     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
-    private final SuggestionsListAnimationDriver mAnimationDriver;
+    private final SuggestionsListAnimation mAnimationDriver;
     private final WindowAndroid mWindowAndroid;
     private final DeferredIMEWindowInsetApplicationCallback
             mDeferredIMEWindowInsetApplicationCallback;
@@ -160,7 +159,7 @@ class AutocompleteMediator
     private @Nullable AutocompleteInput mAutocompleteInput;
     private @Nullable FuseboxSessionState mSessionState;
     private @Nullable FuseboxAttachmentModelList mFuseboxAttachmentModelList;
-    private final boolean mForcePhoneStyleOmnibox;
+    private final LocationBarEmbedderUiOverrides mUiOverrides;
     private final SettableNonNullObservableSupplier<Integer> mRoundSidesSupplier =
             ObservableSuppliers.createNonNull(RoundSides.TOP_AND_BOTTOM);
     private final Callback<@ControlsPosition Integer> mToolbarPositionChangedCallback =
@@ -172,6 +171,8 @@ class AutocompleteMediator
     private final Callback<Integer> mOnFuseboxStateChanged = this::onFuseboxStateChanged;
     private final Callback<String> mOnUserTextChanged = text -> onInputChanged();
     private final Callback<Boolean> mOnShouldAutocompleteChanged = state -> onInputChanged();
+    private final Callback<@AutocompleteState Integer> mOnAutocompleteStateChanged =
+            this::onAutocompleteStateChanged;
 
     private @Nullable AutocompleteController mAutocomplete;
     private @Nullable AutocompleteResult mAutocompleteResult;
@@ -192,11 +193,6 @@ class AutocompleteMediator
     // Set at the end of the Omnibox interaction to indicate whether the user selected an item
     // from the list (true) or left the Omnibox and suggestions list with no action taken (false).
     private boolean mOmniboxFocusResultedInNavigation;
-    // The value of the last ZPS suppress metric recorded for the current ZPS session.
-    // The value is reset to null for each new ZPS session.
-    private @Nullable Boolean mLastRecordedZpsSuppressionValue;
-    // Runnable to record the ZPS suppression metric. Used to debounce rapid updates.
-    private @Nullable Runnable mRecordZpsSuppressionRunnable;
 
     /**
      * The text shown in the URL bar (user text + inline autocomplete) after the most recent set of
@@ -239,7 +235,7 @@ class AutocompleteMediator
             WindowAndroid windowAndroid,
             DeferredIMEWindowInsetApplicationCallback deferredIMEWindowInsetApplicationCallback,
             FuseboxCoordinator fuseboxCoordinator,
-            boolean forcePhoneStyleOmnibox) {
+            LocationBarEmbedderUiOverrides uiOverrides) {
         mContext = context;
         mDelegate = delegate;
         mUrlBarEditingTextProvider = textProvider;
@@ -269,7 +265,7 @@ class AutocompleteMediator
         Activity activity = windowAndroid.getActivity().get();
         mActivityWindowFocused = (activity != null && activity.hasWindowFocus());
         mDeferredIMEWindowInsetApplicationCallback = deferredIMEWindowInsetApplicationCallback;
-        mForcePhoneStyleOmnibox = forcePhoneStyleOmnibox;
+        mUiOverrides = uiOverrides;
 
         var pm = context.getPackageManager();
         var dialIntent = new Intent(Intent.ACTION_DIAL);
@@ -277,7 +273,9 @@ class AutocompleteMediator
 
         mAnimationDriver = initializeAnimationDriver();
 
-        mFuseboxCoordinator.getFuseboxStateSupplier().addSyncObserver(mOnFuseboxStateChanged);
+        mFuseboxCoordinator
+                .getFuseboxStateSupplier()
+                .addSyncObserverAndCallIfNonNull(mOnFuseboxStateChanged);
 
         mDataProvider
                 .getToolbarPositionSupplier()
@@ -395,11 +393,12 @@ class AutocompleteMediator
      * @param brandedColorScheme The {@link @BrandedColorScheme}.
      */
     void updateVisualsForState(@BrandedColorScheme int brandedColorScheme) {
+        @FuseboxLayoutMode int fuseboxLayoutMode = getFuseboxLayoutMode();
         mDropdownViewInfoListManager.setBrandedColorScheme(brandedColorScheme);
+        mDropdownViewInfoListManager.setApplySideSpacing(
+                fuseboxLayoutMode != FuseboxLayoutMode.SUGGESTIONS_POPOVER);
         mListPropertyModel.set(SuggestionListProperties.COLOR_SCHEME, brandedColorScheme);
-        mListPropertyModel.set(
-                SuggestionListProperties.FUSEBOX_LAYOUT_MODE,
-                mFuseboxCoordinator.getFuseboxLayoutModeSupplier().get());
+        mListPropertyModel.set(SuggestionListProperties.FUSEBOX_LAYOUT_MODE, fuseboxLayoutMode);
         if (mOmniboxSuggestionsVisualStateObserver != null) {
             mOmniboxSuggestionsVisualStateObserver.onOmniboxSuggestionsBackgroundColorChanged(
                     OmniboxResourceProvider.getSuggestionsDropdownBackgroundColor(
@@ -407,27 +406,9 @@ class AutocompleteMediator
         }
     }
 
-    private boolean shouldSuppressZeroSuggest() {
-        boolean disableZps =
-                ChromeFeatureList.sOmniboxAutofocusOnIncognitoNtpNoZeroSuggest.getValue();
-
-        // Do not show zero suggest results when omnibox autofocus is active on the Incognito NTP.
-        // This suppresses all zero suggest requests before they are made, because it is unknown if
-        // any zero suggest results would have been shown.
-        if (disableZps && isOmniboxAutofocusOnIncognitoNtpActive()) {
-            recordZeroSuggestSuppressionMetric(true);
-            return true;
-        }
-        return false;
-    }
-
     /** Kicks off a zero-suggest request. */
     void startZeroSuggest() {
         if (!isInInputSession()) return;
-        if (shouldSuppressZeroSuggest()) {
-            clearSuggestions();
-            return;
-        }
 
         if (OmniboxFeatures.sServeJavaCachedZeroSuggest.isEnabled()) {
             // Serve suggestions anticipating higher latency from the server?
@@ -456,7 +437,6 @@ class AutocompleteMediator
      * @param input The AutocompleteInput for which to show cached suggestions.
      */
     public void serveCachedZeroSuggest(AutocompleteInput input) {
-        if (shouldSuppressZeroSuggest()) return;
         if (input == null || !input.isInCacheableContext()) {
             return;
         }
@@ -523,11 +503,7 @@ class AutocompleteMediator
 
             updateModel();
 
-            // Do not attach IME observer when omnibox autofocus feature enabled and Incognito NTP
-            // visible.
-            if (!isOmniboxAutofocusOnIncognitoNtpActive()) {
-                mDeferredIMEWindowInsetApplicationCallback.attach(mWindowAndroid);
-            }
+            mDeferredIMEWindowInsetApplicationCallback.attach(mWindowAndroid);
 
             dismissDeleteDialog(DialogDismissalCause.DISMISSED_BY_NATIVE);
 
@@ -562,9 +538,7 @@ class AutocompleteMediator
      */
     void endInput() {
         // Always terminate animation driver in case Cached Suggestions were shown.
-        if (mAnimationDriver.isAnimationEnabled()) {
-            mAnimationDriver.onOmniboxSessionStateChange(false);
-        }
+        mAnimationDriver.onOmniboxSessionStateChange(false);
 
         propagateOmniboxSessionStateChange(false);
 
@@ -611,44 +585,30 @@ class AutocompleteMediator
         setFuseboxAttachmentModelList(null);
     }
 
-    @Nullable Animator setupSuggestionsListShowAnimation() {
-        // The fade-in animation is performed in sync with a LocationBar fade. We set it up but
-        // don't start it or set its duration since that's the job of the caller.
-        if (shouldAnimateFuseboxPopover()) {
-            mListPropertyModel.set(SuggestionListProperties.ALPHA, 0.0f);
-            var animator =
-                    PropertyModelAnimatorFactory.ofFloat(
-                            mListPropertyModel, SuggestionListProperties.ALPHA, 1.0f);
-            animator.addListener(
-                    new AnimatorListenerAdapter() {
-                        @Override
-                        public void onAnimationStart(Animator animation) {
-                            propagateOmniboxSessionStateChange(true);
+    OmniboxAnimator setupSuggestionsListShowAnimation() {
+        OmniboxAnimator omniboxAnimator = mAnimationDriver.getAnimator();
+
+        omniboxAnimator.addListener(
+                new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationStart(Animator animation) {
+                        propagateOmniboxSessionStateChange(true);
+                        if (!shouldAnimateFuseboxPopover()) {
+                            if (mAutocompleteInput == null
+                                    || mAutocompleteInput.getAutocompleteState()
+                                            != AutocompleteState.STANDBY_NO_FOCUS) {
+                                mDelegate.setKeyboardVisibility(true, false);
+                            }
                         }
+                    }
 
-                        @Override
-                        public void onAnimationCancel(Animator animation) {
-                            propagateOmniboxSessionStateChange(true);
-                            mListPropertyModel.set(SuggestionListProperties.ALPHA, 1.0f);
-                        }
-                    });
-            return animator;
-        }
+                    @Override
+                    public void onAnimationCancel(Animator animation) {
+                        propagateOmniboxSessionStateChange(true);
+                    }
+                });
 
-        // If not performing the popover fade, we run our own animation that's not synced. We start
-        // it and it runs on its own cadence.
-        if (mAnimationDriver.isAnimationEnabled()) {
-            mAnimationDriver.onOmniboxSessionStateChange(true);
-            // Don't eagerly request the keyboard for STANDBY_NO_FOCUS, it's a fakebox entrypoint
-            // where the user isn't typing text.
-            if (mAutocompleteInput == null
-                    || mAutocompleteInput.getAutocompleteState()
-                            != AutocompleteState.STANDBY_NO_FOCUS) {
-                mDelegate.setKeyboardVisibility(true, false);
-            }
-        }
-
-        return null;
+        return omniboxAnimator;
     }
 
     private void setAutocompleteController(@Nullable AutocompleteController controller) {
@@ -679,6 +639,9 @@ class AutocompleteMediator
             mAutocompleteInput
                     .getShouldAllowUserTextAutocompletionSupplier()
                     .removeObserver(mOnShouldAutocompleteChanged);
+            mAutocompleteInput
+                    .getAutocompleteStateSupplier()
+                    .removeObserver(mOnAutocompleteStateChanged);
         }
         mAutocompleteInput = input;
         if (mAutocompleteInput != null) {
@@ -693,22 +656,10 @@ class AutocompleteMediator
                     .getShouldAllowUserTextAutocompletionSupplier()
                     .addSyncObserver(mOnShouldAutocompleteChanged);
             mAutocompleteInput.getUserTextSupplier().addSyncObserver(mOnUserTextChanged);
+            mAutocompleteInput
+                    .getAutocompleteStateSupplier()
+                    .addSyncObserver(mOnAutocompleteStateChanged);
         }
-    }
-
-    /**
-     * @see UrlFocusChangeListener#onUrlAnimationFinished(boolean)
-     */
-    void onUrlAnimationFinished() {
-        if (!isInInputSession()) {
-            return;
-        }
-        // mAnimationDriver has the responsibility of calling propagateOmniboxSessionStateChange if
-        // it's present and currently active.
-        if (mAnimationDriver.isAnimationEnabled()) {
-            return;
-        }
-        propagateOmniboxSessionStateChange(true);
     }
 
     /**
@@ -1124,8 +1075,6 @@ class AutocompleteMediator
      * retrieved even if the Omnibox content is not empty. This is relevant to Desktop mode Chrome,
      * where, if both physical keyboard and pointer device is attached, the Page URL should not be
      * cleared.
-     *
-     * @param isOnFocusContext whether Omnibox is currently gaining focus
      */
     public void onInputChanged() {
         if (!isInInputSession()) return;
@@ -1143,8 +1092,11 @@ class AutocompleteMediator
         mIgnoreOmniboxItemSelection = true;
         boolean isInZeroPrefixContext = mAutocompleteInput.isInZeroPrefixContext();
         boolean allowParking =
-                isInZeroPrefixContext || !OmniboxCapabilities.hasDesktopExperience(mContext);
+                isInZeroPrefixContext
+                        || !mAutocompleteInput.isConventionalRequestType()
+                        || !OmniboxCapabilities.hasDesktopExperience(mContext);
         mListPropertyModel.set(SuggestionListProperties.ALLOW_PARKING_AT_SENTINEL, allowParking);
+        mListPropertyModel.set(SuggestionListProperties.RESET_SELECTION, null);
         cancelAutocompleteRequests();
 
         // The user recently focused the Omnibox, began typing, or cleared the Omnibox.
@@ -1155,13 +1107,6 @@ class AutocompleteMediator
                 // User started typing.
                 mAutocomplete.resetSession();
                 mNewOmniboxEditSessionTimestamp = SystemClock.elapsedRealtime();
-            } else {
-                // Start a new ZPS session by resetting values.
-                mLastRecordedZpsSuppressionValue = null;
-                if (mRecordZpsSuppressionRunnable != null) {
-                    mHandler.removeCallbacks(mRecordZpsSuppressionRunnable);
-                    mRecordZpsSuppressionRunnable = null;
-                }
             }
         }
 
@@ -1382,6 +1327,12 @@ class AutocompleteMediator
         }
     }
 
+    private void onAutocompleteStateChanged(@AutocompleteState int state) {
+        if (state == AutocompleteState.ENABLED) {
+            onInputChanged();
+        }
+    }
+
     private void onSiteSearchDataChanged(@Nullable SiteSearchData siteSearchData) {
         mUrlBarEditingTextProvider.setSiteSearchChip(
                 siteSearchData != null ? siteSearchData.fullName : null);
@@ -1392,19 +1343,20 @@ class AutocompleteMediator
     }
 
     private void onFuseboxStateChanged(@FuseboxState int fuseboxState) {
-        boolean fuseboxOnTablet = mEmbedder.isTablet() && fuseboxState != FuseboxState.DISABLED;
-        boolean separatedFuseboxOnTablet =
-                fuseboxOnTablet && getFuseboxLayoutMode() == FuseboxLayoutMode.TOOLBAR;
-        mListPropertyModel.set(
-                SuggestionListProperties.ROUND_TOP_CORNERS, !separatedFuseboxOnTablet);
-        mListPropertyModel.set(
-                SuggestionListProperties.DRAW_OVER_ANCHOR, !separatedFuseboxOnTablet);
+        boolean suggestionsSeparated =
+                mEmbedder.isTablet()
+                        && (fuseboxState == FuseboxState.DISABLED
+                                || getFuseboxLayoutMode() == FuseboxLayoutMode.SUGGESTIONS_POPOVER);
+
+        mListPropertyModel.set(SuggestionListProperties.ROUND_TOP_CORNERS, suggestionsSeparated);
+        mListPropertyModel.set(SuggestionListProperties.DRAW_OVER_ANCHOR, suggestionsSeparated);
         mRoundSidesSupplier.set(calculateRoundSides());
     }
 
     boolean shouldAnimateFuseboxPopover() {
         return mFuseboxCoordinator.getFuseboxStateSupplier().get() != FuseboxState.DISABLED
-                && mEmbedder.isTablet();
+                && mEmbedder.isTablet()
+                && !OmniboxCapabilities.isDesktopPlatform();
     }
 
     private @FuseboxLayoutMode int getFuseboxLayoutMode() {
@@ -1449,7 +1401,12 @@ class AutocompleteMediator
                 // return.
             }
 
-            findMatchAndLoadUrl(urlText, eventTime, openInNewTab, openInNewWindow);
+            if (TextUtils.isEmpty(urlText)
+                    && mFuseboxCoordinator.getHasAttachmentsSupplier().get()) {
+                loadUrlAttachmentsOnly(eventTime, openInNewTab, openInNewWindow);
+            } else {
+                findMatchAndLoadUrl(urlText, eventTime, openInNewTab, openInNewWindow);
+            }
         }
     }
 
@@ -1570,6 +1527,22 @@ class AutocompleteMediator
         }
     }
 
+    private void loadUrlAttachmentsOnly(
+            long eventTime, boolean openInNewTab, boolean openInNewWindow) {
+        Callback<GURL> onUrlReady =
+                (finalUrl) -> {
+                    mDelegate.loadUrl(
+                            new OmniboxLoadUrlParams.Builder(
+                                            finalUrl.getSpec(), PageTransition.TYPED)
+                                    .setInputStartTimestamp(eventTime)
+                                    .setOpenInNewTab(openInNewTab)
+                                    .setOpenInNewWindow(openInNewWindow)
+                                    .build());
+                    mHandler.post(this::finishInteraction);
+                };
+        adjustGurlForRequestType(GURL.emptyGURL(), "", onUrlReady);
+    }
+
     /**
      * Potentially adjust the given URL based on the current request type (e.g. AIM mode, Image
      * Generation) and model picker flag, and invoke the callback with that URL.
@@ -1683,16 +1656,26 @@ class AutocompleteMediator
     /**
      * Sends a zero suggest request to the server in order to pre-populate the result cache.
      *
-     * @param webContents The WebContents for the current tab.
+     * <p>This call must be static to guarantee no dependency on AutocompleteMediator's internal
+     * state, specifically this method must not depend on mAutocomplete being available.
+     *
+     * @param profile The profile to prefetch ZPS for.
+     * @param dataProvider Context describing page to prefetch ZPS for.
      */
-    /* package */ void startPrefetch(@Nullable WebContents webContents) {
-        if (mAutocomplete != null) {
-            final AutocompleteInput input = new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP);
-            input.setPageClassification(mDataProvider.getPageClassification(true));
-            input.setPageUrl(mDataProvider.getCurrentGurl());
-            input.setPageTitle(mDataProvider.getTitle());
-            mAutocomplete.startPrefetch(webContents, input);
-        }
+    /* package */ static void startPrefetch(Profile profile, LocationBarDataProvider dataProvider) {
+        if (dataProvider.isLoading()) return;
+
+        var autocomplete = AutocompleteController.getForProfile(profile);
+        if (autocomplete == null) return;
+
+        AutocompleteInput input =
+                new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP)
+                        .setPageClassification(dataProvider.getPageClassification(true))
+                        .setPageUrl(dataProvider.getCurrentGurl())
+                        .setPageTitle(dataProvider.getTitle());
+        PostTask.postTask(
+                TaskTraits.UI_BEST_EFFORT,
+                () -> autocomplete.startPrefetch(dataProvider.getWebContents(), input));
     }
 
     /**
@@ -1717,6 +1700,22 @@ class AutocompleteMediator
         boolean wasActive = mListPropertyModel.get(SuggestionListProperties.OMNIBOX_SESSION_ACTIVE);
 
         if (isActive != wasActive) {
+            // Determine if a left margin should be applied to the suggestions list. It is the
+            // responsibility of the AutocompleteMediator to evaluate whether the current omnibox
+            // instance is for the main browser and whether Vertical Tabs is enabled. If enabled,
+            // it inflates a left side panel which shifts the main browser page, including the
+            // omnibox, by an offset amount. An edge case exists for Tab Search (which embeds an
+            // omnibox) when its entry point in the Vertical Tabs panel is clicked, causing it to
+            // inflate a floating container and overlay on top of Vertical Tabs when shown. This
+            // embedded omnibox is inflated via SearchActivity rather than ToolbarManager (main
+            // browser). Ensure that this use case does not have a left margin.
+            if (isActive) {
+                boolean applyMargin =
+                        mUiOverrides.isMainBrowserOmnibox()
+                                && VerticalTabUtils.isVerticalTabsEnabled(mContext);
+                mListPropertyModel.set(
+                        SuggestionListProperties.APPLY_MARGIN_FOR_LEFT_SIDE_BAR, applyMargin);
+            }
             mListPropertyModel.set(SuggestionListProperties.OMNIBOX_SESSION_ACTIVE, isActive);
             mIgnoreOmniboxItemSelection |= isActive;
             if (mOmniboxSuggestionsVisualStateObserver != null) {
@@ -1775,7 +1774,7 @@ class AutocompleteMediator
                         || getFuseboxLayoutMode() == FuseboxLayoutMode.SUGGESTIONS_POPOVER);
         mListPropertyModel.set(
                 SuggestionListProperties.IS_LARGE_SCREEN,
-                !mForcePhoneStyleOmnibox
+                !mUiOverrides.isForcedPhoneStyleOmnibox()
                         && DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext)
                         && mContext.getResources().getConfiguration().screenWidthDp
                                 >= DeviceFormFactor.MINIMUM_TABLET_WIDTH_DP);
@@ -1982,12 +1981,13 @@ class AutocompleteMediator
     }
 
     @VisibleForTesting
-    SuggestionsListAnimationDriver initializeAnimationDriver() {
-        return new UnsyncedSuggestionsListAnimationDriver(
+    SuggestionsListAnimation initializeAnimationDriver() {
+        return new UnsyncedSuggestionsListAnimation(
                 mListPropertyModel,
                 () -> propagateOmniboxSessionStateChange(mAutocompleteInput != null),
                 mDelegate::isToolbarBottomAnchored,
                 mEmbedder::getVerticalTranslationForAnimation,
+                this::shouldAnimateFuseboxPopover,
                 mContext);
     }
 
@@ -2013,7 +2013,7 @@ class AutocompleteMediator
     }
 
     /** Returns the current Animation Driver instance. */
-    SuggestionsListAnimationDriver getAnimationDriverForTesting() {
+    SuggestionsListAnimation getAnimationDriverForTesting() {
         return mAnimationDriver;
     }
 
@@ -2126,43 +2126,6 @@ class AutocompleteMediator
         // This is a best-effort action and may not always work (e.g. if Chrome gets killed or
         // swiped away before we manage to retrieve and persist the information).
         mAutocomplete.startZeroSuggest(mSessionState.getContextualTasksWebContents(), input);
-    }
-
-    /**
-     * Returns whether the Omnibox Autofocus on Incognito NTP feature is enabled and the Incognito
-     * NTP is currently visible.
-     *
-     * @return True if the feature is enabled and Incognito NTP is visible, false otherwise.
-     */
-    private boolean isOmniboxAutofocusOnIncognitoNtpActive() {
-        return ChromeFeatureList.sOmniboxAutofocusOnIncognitoNtp.isEnabled()
-                && mDataProvider.getNewTabPageDelegate().isIncognitoNewTabPageCurrentlyVisible();
-    }
-
-    /**
-     * Records metric about zero-prefix suggestions suppression on the Incognito NTP.
-     *
-     * @param suppressed Whether zero-prefix suggestions were suppressed.
-     */
-    private void recordZeroSuggestSuppressionMetric(boolean suppressed) {
-        // Do not record if a metric has already been recorded for current ZPS session.
-        if (mLastRecordedZpsSuppressionValue != null) {
-            return;
-        }
-
-        // Cancel any pending recording to reset the debounce timer.
-        if (mRecordZpsSuppressionRunnable != null) {
-            mHandler.removeCallbacks(mRecordZpsSuppressionRunnable);
-        }
-
-        mRecordZpsSuppressionRunnable =
-                () -> {
-                    OmniboxMetrics.recordZeroSuggestSuppressedOnIncognitoNtp(suppressed);
-                    mLastRecordedZpsSuppressionValue = suppressed;
-                    mRecordZpsSuppressionRunnable = null;
-                };
-
-        mHandler.postDelayed(mRecordZpsSuppressionRunnable, ZPS_SUPPRESSION_METRIC_DEBOUNCE_MS);
     }
 
     private void setFuseboxAttachmentModelList(

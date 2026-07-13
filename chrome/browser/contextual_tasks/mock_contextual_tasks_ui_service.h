@@ -41,6 +41,17 @@ class MockContextualTasksUiService : public ContextualTasksUiService {
               (BrowserWindowInterface * browser_window_interface,
                const std::optional<base::Uuid>& task_id),
               (override));
+  MOCK_METHOD(
+      void,
+      StartTaskUiInSidePanel,
+      (BrowserWindowInterface*,
+       tabs::TabInterface*,
+       const GURL&,
+       std::unique_ptr<contextual_search::ContextualSearchSessionHandle>,
+       bool,
+       omnibox::ChromeAimEntryPoint,
+       bool),
+      (override));
   MOCK_METHOD(GURL, GetDefaultAiPageUrl, (), (override));
   MOCK_METHOD(GURL,
               GetDefaultAiPageUrlForTask,
@@ -79,12 +90,23 @@ class MockContextualTasksUiService : public ContextualTasksUiService {
               (const GURL&, BrowserWindowInterface*),
               (override));
   MOCK_METHOD(bool, IsAiUrl, (const GURL&), (override));
+  MOCK_METHOD(bool, IsSearchResultsUrl, (const GURL&), (override));
+  MOCK_METHOD(bool, IsGoogleCaptchaUrl, (const GURL&), (override));
   MOCK_METHOD(bool, IsUrlForPrimaryAccount, (const GURL&), (override));
   MOCK_METHOD(bool, IsPendingErrorPage, (const base::Uuid&), (override));
   MOCK_METHOD(void,
               OpenFeedbackUi,
               (BrowserWindowInterface*, const GURL&),
               (override));
+  MOCK_METHOD(
+      void,
+      StartTaskUiInSidePanel,
+      (BrowserWindowInterface*,
+       tabs::TabInterface*,
+       const GURL&,
+       std::unique_ptr<contextual_search::ContextualSearchSessionHandle>,
+       omnibox::ChromeAimEntryPoint),
+      (override));
   MOCK_METHOD(ContextualTasksEligibilityManager*,
               GetEligibilityManager,
               (),

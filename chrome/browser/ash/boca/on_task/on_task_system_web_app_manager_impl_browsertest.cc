@@ -15,6 +15,7 @@
 #include "chrome/browser/ash/boca/on_task/locked_session_window_tracker_factory.h"
 #include "chrome/browser/ash/boca/on_task/on_task_locked_controller.h"
 #include "chrome/browser/ash/boca/on_task/on_task_locked_session_window_tracker.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
@@ -101,7 +102,10 @@ class OnTaskSystemWebAppManagerImplBrowserTest : public InProcessBrowserTest {
   }
 
   Browser* FindBocaSystemWebAppBrowser() {
-    return ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA);
+    ash::BrowserDelegate* delegate = ash::FindSystemWebAppBrowser(
+        profile(), ash::SystemWebAppType::BOCA, ash::BrowserType::kApp);
+    return delegate ? delegate->GetBrowser().GetBrowserForMigrationOnly()
+                    : nullptr;
   }
 
   Profile* profile() { return browser()->profile(); }
@@ -194,8 +198,8 @@ IN_PROC_BROWSER_TEST_F(OnTaskSystemWebAppManagerImplBrowserTest,
   EXPECT_TRUE(platform_util::IsBrowserLockedFullscreen(boca_app_browser));
   EXPECT_FALSE(chromeos::wm::CanFloatWindow(
       boca_app_browser->GetWindow()->GetNativeWindow()));
-  EXPECT_TRUE(boca_app_browser->window()->IsVisible());
-  EXPECT_TRUE(boca_app_browser->window()->IsToolbarVisible());
+  EXPECT_TRUE(boca_app_browser->GetWindow()->IsVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(boca_app_browser)->IsToolbarVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(OnTaskSystemWebAppManagerImplBrowserTest,
@@ -216,8 +220,8 @@ IN_PROC_BROWSER_TEST_F(OnTaskSystemWebAppManagerImplBrowserTest,
   EXPECT_TRUE(platform_util::IsBrowserLockedFullscreen(boca_app_browser));
   EXPECT_FALSE(chromeos::wm::CanFloatWindow(
       boca_app_browser->GetWindow()->GetNativeWindow()));
-  EXPECT_TRUE(boca_app_browser->window()->IsVisible());
-  EXPECT_TRUE(boca_app_browser->window()->IsToolbarVisible());
+  EXPECT_TRUE(boca_app_browser->GetWindow()->IsVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(boca_app_browser)->IsToolbarVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(OnTaskSystemWebAppManagerImplBrowserTest,
@@ -233,7 +237,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskSystemWebAppManagerImplBrowserTest,
   system_web_app_manager.SetPinStateForSystemWebAppWindow(
       /*pinned=*/true, boca_app_browser->session_id());
   ASSERT_TRUE(platform_util::IsBrowserLockedFullscreen(boca_app_browser));
-  ASSERT_TRUE(boca_app_browser->window()->IsVisible());
+  ASSERT_TRUE(boca_app_browser->GetWindow()->IsVisible());
 
   // Unpin the Boca app and verify result.
   system_web_app_manager.SetPinStateForSystemWebAppWindow(
@@ -292,7 +296,7 @@ IN_PROC_BROWSER_TEST_F(OnTaskSystemWebAppManagerImplBrowserTest,
   system_web_app_manager.SetPauseStateForSystemWebAppWindow(
       /*paused=*/true, boca_app_browser->session_id());
   ASSERT_TRUE(platform_util::IsBrowserLockedFullscreen(boca_app_browser));
-  EXPECT_TRUE(boca_app_browser->window()->IsVisible());
+  EXPECT_TRUE(boca_app_browser->GetWindow()->IsVisible());
   EXPECT_FALSE(chromeos::wm::CanFloatWindow(
       boca_app_browser->GetWindow()->GetNativeWindow()));
   EXPECT_FALSE(ImmersiveModeController::From(boca_app_browser)->IsEnabled());

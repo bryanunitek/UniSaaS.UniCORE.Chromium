@@ -45,29 +45,28 @@
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "ui/gfx/image/image.h"
 #include "url/gurl.h"
+
+namespace content::webid {
 
 using ::testing::_;
 using ::testing::ElementsAre;
 using ::testing::NiceMock;
 using ::testing::Return;
-using LoginState = content::IdentityRequestAccount::LoginState;
-
-namespace content::webid {
-
-using IdpClientMetadata = IdpNetworkRequestManager::ClientMetadata;
-using TokenResult = IdpNetworkRequestManager::TokenResult;
-using Endpoints = IdpNetworkRequestManager::Endpoints;
 using AccountsRequestCallback =
     IdpNetworkRequestManager::AccountsRequestCallback;
 using AccountsResponseInvalidReason =
     IdpNetworkRequestManager::AccountsResponseInvalidReason;
+using Endpoints = IdpNetworkRequestManager::Endpoints;
 using ErrorDialogType = IdpNetworkRequestManager::FedCmErrorDialogType;
 using ErrorUrlType = IdpNetworkRequestManager::FedCmErrorUrlType;
+using IdpClientMetadata = IdpNetworkRequestManager::ClientMetadata;
+using LoginState = IdentityRequestAccount::LoginState;
 using TokenResponseType = IdpNetworkRequestManager::FedCmTokenResponseType;
+using TokenResult = IdpNetworkRequestManager::TokenResult;
 
 namespace {
 
@@ -663,14 +662,17 @@ TEST_F(IdpNetworkRequestManagerTest, ComputeWebIdentitySubdomainWellKnownUrl) {
                 GURL("https://localhost:8000/test/"), kWellKnownPath));
 
   // Standard registrable-domain provider: subdomain prepended.
-  EXPECT_EQ("https://web-identity.google.com/.well-known/web-identity",
-            ComputeWebIdentitySubdomainWellKnownUrl(
-                GURL("https://www.google.com:8000/test/"), kWellKnownPath));
+  EXPECT_EQ(
+      "https://web-identity.well-known.google.com/.well-known/web-identity",
+      ComputeWebIdentitySubdomainWellKnownUrl(
+          GURL("https://www.google.com:8000/test/"), kWellKnownPath));
 
-  // Provider already on a subdomain still uses eTLD+1 with web-identity. label.
-  EXPECT_EQ("https://web-identity.example.com/.well-known/web-identity",
-            ComputeWebIdentitySubdomainWellKnownUrl(
-                GURL("https://idp.example.com/foo"), kWellKnownPath));
+  // Provider already on a subdomain still uses eTLD+1 with
+  // web-identity.well-known. label.
+  EXPECT_EQ(
+      "https://web-identity.well-known.example.com/.well-known/web-identity",
+      ComputeWebIdentitySubdomainWellKnownUrl(
+          GURL("https://idp.example.com/foo"), kWellKnownPath));
 
   // IP literal: no eTLD+1 -> nullopt.
   EXPECT_EQ(std::nullopt,
@@ -1914,10 +1916,10 @@ class IdpNetworkRequestManagerWebIdentitySubdomainTest
 
  protected:
   // The subdomain (preferred) and apex (fallback) URLs that the implementation
-  // computes for kTestIdpUrl ("https://idp.test"). The "web-identity" label is
-  // the spec-defined prefix; not arbitrary.
+  // computes for kTestIdpUrl ("https://idp.test"). The
+  // "web-identity.well-known" label is the spec-defined prefix; not arbitrary.
   static constexpr char kSubdomainWellKnownUrl[] =
-      "https://web-identity.idp.test/.well-known/web-identity";
+      "https://web-identity.well-known.idp.test/.well-known/web-identity";
 
   // Wires a response for the subdomain URL, then runs FetchWellKnown() through
   // the existing kTestIdpUrl helper. If `apex_data` is non-null, an apex

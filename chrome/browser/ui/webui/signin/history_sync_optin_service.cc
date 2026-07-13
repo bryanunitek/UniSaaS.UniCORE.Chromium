@@ -294,6 +294,7 @@ void HistorySyncOptinService::OnPrimaryAccountChanged(
     case signin_metrics::AccessPoint::kAgeMismatchSignout:
     case signin_metrics::AccessPoint::kIosGeminiButtonToolbar:
     case signin_metrics::AccessPoint::kOverflowMenu:
+    case signin_metrics::AccessPoint::kLevelUp:
       return;
   }
 
@@ -356,7 +357,5 @@ void HistorySyncOptinService::OnPrimaryAccountChanged(
 void HistorySyncOptinService::ShowErrorDialogWithMessage(int error_message_id) {
   BrowserWindowInterface* const browser =
       ProfileBrowserCollection::GetForProfile(profile_)->GetLastActiveBrowser();
-  signin_util::ShowErrorDialogWithMessage(
-      browser ? browser->GetBrowserForMigrationOnly() : nullptr,
-      error_message_id);
+  signin_util::ShowErrorDialogWithMessage(browser, error_message_id);
 }

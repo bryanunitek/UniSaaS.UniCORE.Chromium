@@ -48,12 +48,17 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAdAuctionSignals);
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(int,
                                                kAdAuctionSignalsMaxSizeBytes);
 
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAudioWorkletJSDenormalEnabler);
+
 // Avoids copying ResourceRequest::TrustedParams when possible.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAvoidTrustedParamsCopies);
 
 // Optimizes mixed content checks by moving InWhichFrameIsContentMixed below
 // fast-exits and caching flag state.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kOptimizeMixedContentChecks);
+
+// When enabled, caches the stripped outgoing referrer URL on Document.
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kCacheDocumentOutgoingReferrer);
 
 // Whether async touch moves are sent unthrottled to javascript handlers.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kUnthrottleAsyncTouchMoves);
@@ -110,6 +115,9 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAndroidDesktopUAPlatform);
 // If enabled, the user agent platform will be ChromeOS instead of Linux for
 // desktop Android devices, when kAndroidDesktopUAPlatform is disabled.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAndroidDesktopUASpoofAsChromeOS);
+
+// Gated prewarming of system fonts on Android to background threads.
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAndroidSystemFontPrewarming);
 #endif
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(
@@ -122,12 +130,6 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAudioWorkletThreadRealtimePeriodMac);
 #endif
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAudioWorkletThreadPool);
-
-BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(
-    kAutofillFixFieldsAssociatedWithNestedFormsByParser);
-
-BLINK_COMMON_EXPORT
-BASE_DECLARE_FEATURE(kAutofillSendUnidentifiedKeyAfterFill);
 
 // https://crbug.com/1472970
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAutoSpeculationRules);
@@ -294,6 +296,12 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kCreateImageBitmapOrientationNone);
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kDeclarativeCSSModulesUseDataURI);
 
+// Controls whether capture-early-failures is supported/used for Declarative
+// Performance Observers.
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
+    bool,
+    kDeclarativePerformanceObserverSupportCaptureEarlyFailures);
+
 // When enabled, dedicated workers and shared workers created from data: URLs
 // will have an opaque origin, as required by the HTML spec.
 // See https://crbug.com/40051700.
@@ -412,6 +420,9 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
 // Enables detecting JavaScript frameworks on worker load.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kDetectJSFrameworksOnWorker);
 
+// Enables detecting Chinese language variants in LanguageDetector.
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kDetectZhVariants);
+
 // Improves the signal-to-noise ratio of network error related messages in the
 // DevTools Console.
 // See http://crbug.com/40788570.
@@ -448,15 +459,6 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(
     kEnableDevtoolsDeepLinkViaExtensibilityApi);
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kEnforceNoopenerOnBlobURLNavigation);
-
-BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kEnableLazyLoadImageForInvisiblePage);
-enum class EnableLazyLoadImageForInvisiblePageType {
-  kAllInvisiblePage,
-  kPrerenderPage,
-};
-BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
-    EnableLazyLoadImageForInvisiblePageType,
-    kEnableLazyLoadImageForInvisiblePageTypeParam);
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(
     kEventTimingIgnorePresentationTimeFromUnexpectedFrameSource);
@@ -707,6 +709,9 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kForceHighPerformanceGPUForWebGL);
 // Gated visibility propagation from placeholder canvas to OffscreenCanvas.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kOffscreenCanvasPropagateVisibility);
 
+// Discard WebGL back buffer when page visibility is hidden.
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kWebGLDiscardBackBuffer);
+
 // When enabled, forces ICC profile parsing to use skcms instead of the Rust
 // moxcms parser. Acts as a kill-switch for the Rust ICC parser.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kForceSkcmsICCParsing);
@@ -778,6 +783,12 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kIndexedDBCompressValuesWithSnappy);
 BLINK_COMMON_EXPORT extern const base::FeatureParam<int>
     kIndexedDBCompressValuesWithSnappyCompressionThreshold;
 
+// Enables connection deduplication for IndexedDB
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kIndexedDBConnectionDeduplication);
+
+// Enables external memory accounting for IndexedDB databases.
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kIDBDatabaseExternalMemoryAccounting);
+
 // Always use `IsInlineScriptCacheEnabled()` rather than checking this feature
 // directly.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kInlineScriptCache);
@@ -796,6 +807,9 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(base::TimeDelta,
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
     bool,
     kInlineScriptCacheEnabledForDefaultHint);
+// Gating the migration of Android IME cursor anchor updates from Mojo IPC to
+// RenderFrameMetadata.
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kInputCursorAnchorInfoMigration);
 
 // This flag is used to set field parameters to choose predictor we use when
 // kResamplingInputEvents is disabled. It's used for gathering accuracy metrics
@@ -1438,6 +1452,10 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kMHTML_Improvements);
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kMixedContentAutoupgrade);
 
+// Kill switch for the dedicated MoveWindowTo / ResizeWindowTo IPCs; falls back
+// to SetWindowRect when disabled. https://crbug.com/512533947.
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kMoveResizeWindowToIPCs);
+
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kNavigationPredictor);
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
     int,
@@ -1472,6 +1490,9 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kPath2DPaintCache);
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kPaintHolding);
 
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(
+    kPopulateDOMNodeIdInFocusedNodeDetails);
+
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
     bool,
@@ -1481,8 +1502,6 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kDedicatedWorkerAblationStudyEnabled);
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(int,
                                                kDedicatedWorkerStartDelayInMs);
-
-BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kUpdatedDeviceMemoryLimitsFor2026);
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kUseAncestorRenderFrameForWorker);
 
@@ -1908,9 +1927,6 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kThreadedBodyLoader);
 // If enabled, the HTMLPreloadScanner will run on a worker thread.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kThreadedPreloadScanner);
 
-BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
-    bool,
-    kThrottleFrameRateOnInitialization);
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kThrottleInstallingServiceWorker);
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
@@ -1956,6 +1972,10 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
 
 // Feature flag for driving encoding with the Metronome by VSyncs.
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kVSyncEncoding);
+
+#if BUILDFLAG(IS_ANDROID)
+BLINK_COMMON_EXPORT bool IsVirtualKeyboardGeometryAndInsetFixesEnabled();
+#endif
 
 // Server-side kill switch for applying the local VisualViewport transform
 // (page scale + visual viewport location) when mapping visual rects into
@@ -2008,6 +2028,7 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kWebRtcIgnoreUnspecifiedColorSpace);
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kWebRtcUseMinMaxVEADimensions);
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kWebUSBTransferSizeLimit);
+BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kWebUSBWorldIsolatedCache);
 
 BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kWebviewAccelerateSmallCanvases);
 

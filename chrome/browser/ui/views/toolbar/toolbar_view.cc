@@ -56,14 +56,11 @@
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/page_action/page_action_properties_provider.h"
-#include "chrome/browser/ui/tab_search_feature.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_prefs.h"
 #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
-#include "chrome/browser/ui/toolbar/pinned_toolbar/tab_search_toolbar_button_controller.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
@@ -95,6 +92,7 @@
 #include "chrome/browser/ui/views/tabs/tab_strip_controller.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
 #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
+#include "chrome/browser/ui/views/toolbar/avatar_toolbar_button_interface.h"
 #include "chrome/browser/ui/views/toolbar/back_forward_button.h"
 #include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_coordinator.h"
@@ -262,7 +260,7 @@ ToolbarView::ToolbarView(Browser* browser, BrowserView* browser_view)
     : AnimationDelegateViews(this),
       browser_(browser),
       browser_view_(browser_view),
-      app_menu_icon_controller_(browser->profile(), this),
+      app_menu_icon_controller_(browser->GetProfile(), this),
       display_mode_(GetDisplayMode(browser)) {
   // WebApp type-browsers set their own ToolbarButtonProvider.
   if (!web_app::AppBrowserController::IsWebApp(browser)) {
@@ -291,7 +289,7 @@ ToolbarView::ToolbarView(Browser* browser, BrowserView* browser_view)
 
   // `glic_nudge_controller` will be null if feature is not enabled.
   if (glic_nudge_controller) {
-    glic_nudge_controller->SetToolbarDelegate(this);
+    glic_nudge_controller->SetVerticalTabsDelegate(this);
   }
 }
 
@@ -309,7 +307,7 @@ ToolbarView::~ToolbarView() {
   glic::GlicNudgeController* glic_nudge_controller =
       browser_->browser_window_features()->glic_nudge_controller();
   if (glic_nudge_controller) {
-    glic_nudge_controller->SetToolbarDelegate(/*delegate=*/nullptr);
+    glic_nudge_controller->SetVerticalTabsDelegate(/*delegate=*/nullptr);
   }
 }
 
@@ -332,7 +330,7 @@ void ToolbarView::Init() {
     webui_location_bar = std::make_unique<WebUILocationBar>(browser_, this);
   } else {
     location_bar_view = std::make_unique<LocationBarView>(
-        browser_, browser_->profile(), browser_->command_controller(), this,
+        browser_, browser_->GetProfile(), browser_->command_controller(), this,
         display_mode_ != DisplayMode::kNormal);
   }
 
@@ -390,14 +388,14 @@ void ToolbarView::Init() {
         browser, command, ui::DispositionFromEventFlags(event.flags()));
   };
 
-  PrefService* const prefs = browser_->profile()->GetPrefs();
+  PrefService* const prefs = browser_->GetProfile()->GetPrefs();
 
   std::unique_ptr<ExtensionsToolbarDesktop> extensions_container;
   std::unique_ptr<ToolbarDivider> toolbar_divider;
 
   // Do not create the extensions or browser actions container if it is a guest
   // profile (only regular and incognito profiles host extensions).
-  if (!browser_->profile()->IsGuestSession() &&
+  if (!browser_->GetProfile()->IsGuestSession() &&
       !features::IsWebUIExtensionsContainerEnabled()) {
     extensions_container = std::make_unique<ExtensionsToolbarDesktop>(browser_);
 
@@ -429,16 +427,13 @@ void ToolbarView::Init() {
     toolbar_webview_ = AddChildView(std::make_unique<WebUIToolbarWebView>(
         browser_, browser_->command_controller(),
         std::move(webui_location_bar)));
-
-    toolbar_webview_->SetProperty(views::kFlexBehaviorKey,
-                                  toolbar_webview_->GetFlexSpecification());
   }
 
   if (!features::IsWebUIReloadButtonEnabled() ||
       base::FeatureList::IsEnabled(
           features::kWebUIToolbarProcessOverheadExperiment)) {
     reload_ = AddChildView(std::make_unique<ReloadButton>(
-        browser_->profile(), browser_->command_controller(),
+        browser_->GetProfile(), browser_->command_controller(),
         InitialWebUIWindowMetricsManager::From(browser_)));
   }
 
@@ -509,24 +504,11 @@ void ToolbarView::Init() {
     pinned_toolbar_actions_ = toolbar_webview_->GetPinnedToolbarActions();
   }
 
-  if (!base::FeatureList::IsEnabled(tabs::kHorizontalTabStripComboButton) &&
-      features::HasTabSearchToolbarButton()) {
-    CHECK(!features::IsWebUIPinnedToolbarActionsEnabled())
-        << "WebUIPinnedToolbarActions does not support "
-           "CreatePermanentButtonFor, consider enabling "
-           "HorizontalTabStripComboButton";
-    tab_search_button_ =
-        pinned_toolbar_actions_container_->CreatePermanentButtonFor(
-            kActionTabSearch);
-    tab_search_button_->SetProperty(views::kElementIdentifierKey,
-                                    kTabSearchButtonElementId);
-  }
-
   if (IsChromeLabsEnabled()) {
-    UpdateChromeLabsNewBadgePrefs(browser_->profile());
+    UpdateChromeLabsNewBadgePrefs(browser_->GetProfile());
 
     const bool should_show_chrome_labs_ui =
-        ShouldShowChromeLabsUI(browser_->profile());
+        ShouldShowChromeLabsUI(browser_->GetProfile());
     if (should_show_chrome_labs_ui) {
       show_chrome_labs_button_.Init(
           chrome_labs_prefs::kBrowserLabsEnabledEnterprisePolicy, prefs,
@@ -548,12 +530,12 @@ void ToolbarView::Init() {
   if (!performance_manager::user_tuning::IsBatterySaverModeManagedByOS() &&
       !features::IsWebUIBatterySaverButtonEnabled()) {
     battery_saver_button_ =
-        AddChildView(std::make_unique<BatterySaverButton>(browser_view_));
+        AddChildView(std::make_unique<BatterySaverButton>(browser_));
   }
 
   if (!features::IsWebUIPerformanceInterventionButtonEnabled()) {
-    performance_intervention_button_ = AddChildView(
-        std::make_unique<PerformanceInterventionButton>(browser_view_));
+    performance_intervention_button_ =
+        AddChildView(std::make_unique<PerformanceInterventionButton>(browser_));
   }
 
   if (media_button) {
@@ -571,7 +553,7 @@ void ToolbarView::Init() {
       if (action_item) {
         action_item->SetVisible(true);
         action_item->SetEnabled(true);
-        PinnedToolbarActionsModel::Get(browser_->profile())
+        PinnedToolbarActionsModel::Get(browser_->GetProfile())
             ->UpdatePinnedState(kActionShowAiOverlayDialog, true);
       }
     }
@@ -596,21 +578,8 @@ void ToolbarView::Init() {
   if (!features::IsWebUIAvatarButtonEnabled()) {
     avatar_ =
         AddChildView(std::make_unique<AvatarToolbarButton>(browser_view_));
-    bool show_avatar_toolbar_button = true;
-#if BUILDFLAG(IS_CHROMEOS)
-    // ChromeOS only badges Incognito, Guest, and captive portal signin icons in
-    // the browser window.
-    show_avatar_toolbar_button =
-        browser_->profile()->IsIncognitoProfile() ||
-        browser_->profile()->IsGuestSession() ||
-        (browser_->profile()->IsOffTheRecord() &&
-         browser_->profile()->GetOTRProfileID().IsCaptivePortal());
-#else
-    // DevTools profiles are OffTheRecord, so hide it there.
-    show_avatar_toolbar_button = browser_->profile()->IsIncognitoProfile() ||
-                                 browser_->profile()->IsGuestSession() ||
-                                 browser_->profile()->IsRegularProfile();
-#endif
+    bool show_avatar_toolbar_button =
+        AvatarToolbarButtonInterface::CanShowForProfile(browser_->GetProfile());
     avatar_->SetVisible(show_avatar_toolbar_button);
   }
 
@@ -1177,11 +1146,13 @@ void ToolbarView::AnimationEnded(const gfx::Animation* animation) {
   if (animation->GetCurrentValue() == 0) {
     SetToolbarVisibility(false);
   }
-  browser()->window()->ToolbarSizeChanged(/*is_animating=*/false);
+  BrowserWindow::FromBrowser(browser())->ToolbarSizeChanged(
+      /*is_animating=*/false);
 }
 
 void ToolbarView::AnimationProgressed(const gfx::Animation* animation) {
-  browser()->window()->ToolbarSizeChanged(/*is_animating=*/true);
+  BrowserWindow::FromBrowser(browser())->ToolbarSizeChanged(
+      /*is_animating=*/true);
 }
 
 void ToolbarView::Update(WebContents* tab) {
@@ -1227,7 +1198,8 @@ void ToolbarView::UpdateCustomTabBarVisibility(bool visible, bool animate) {
   if (!animate) {
     size_animation_.Reset(visible ? 1.0 : 0.0);
     SetToolbarVisibility(visible);
-    browser()->window()->ToolbarSizeChanged(/*is_animating=*/false);
+    BrowserWindow::FromBrowser(browser())->ToolbarSizeChanged(
+        /*is_animating=*/false);
     return;
   }
 
@@ -1278,7 +1250,7 @@ void ToolbarView::ShowIntentPickerBubble(
   // At this point, we either have a highlighted_element or it's a ClickToCall
   // bubble which doesn't have a corresponding page action button to highlight.
   IntentPickerBubbleView::ShowBubble(
-      FindBubbleAnchor(std::nullopt), higlighted_element, bubble_type,
+      GetBubbleAnchor(std::nullopt), higlighted_element, bubble_type,
       GetWebContents(), std::move(app_info), show_stay_in_chrome,
       show_remember_selection, initiating_origin, std::move(callback));
 }
@@ -1289,7 +1261,7 @@ void ToolbarView::ShowBookmarkBubble(const GURL& url, bool already_bookmarked) {
     bookmark_star_icon = GetPageActionViewInterface(kActionBookmarkThisTab);
     CHECK(bookmark_star_icon);
   }
-  BookmarkBubbleView::ShowBubble(FindBubbleAnchor(std::nullopt),
+  BookmarkBubbleView::ShowBubble(GetBubbleAnchor(std::nullopt),
                                  GetWebContents(), bookmark_star_icon, browser_,
                                  url, already_bookmarked);
 }
@@ -1544,15 +1516,12 @@ void ToolbarView::InitLayout() {
       .SetCollapseMargins(true)
       .SetDefault(views::kMarginsKey, gfx::Insets::VH(0, default_margin));
 
+  // If the Views location bar is in use, set its properties here.
   if (location_bar_view_) {
     location_bar_view_->SetProperty(views::kFlexBehaviorKey,
                                     location_bar_flex_rule);
     location_bar_view_->SetProperty(views::kMarginsKey,
                                     gfx::Insets::VH(0, location_bar_margin));
-  } else {
-    // If the location bar is part of a WebView, make that stretchable.
-    toolbar_webview_->SetProperty(views::kFlexBehaviorKey,
-                                  location_bar_flex_rule);
   }
 
   if (extensions_container_) {
@@ -1622,6 +1591,14 @@ void ToolbarView::InitLayout() {
       PinnedToolbarActionsModel::Get(browser_view_->GetProfile()));
   overflow_button_->set_toolbar_controller(toolbar_controller_.get());
 
+  if (toolbar_webview_) {
+    toolbar_webview_->SetProperty(
+        views::kFlexBehaviorKey,
+        toolbar_webview_->GetFlexSpecification(
+            toolbar_controller_->webui_toolbar_button_flex_order(),
+            location_bar_flex_order));
+  }
+
   LayoutCommon();
 }
 
@@ -1660,8 +1637,8 @@ void ToolbarView::LayoutCommon() {
   // Extend buttons to the window edge if we're either in a maximized or
   // fullscreen window. This makes the buttons easier to hit, see Fitts' law.
   const bool extend_buttons_to_edge =
-      browser_->window() &&
-      (browser_->window()->IsMaximized() || browser_->window()->IsFullscreen());
+      browser_->GetWindow() && (browser_->GetWindow()->IsMaximized() ||
+                                browser_->GetWindow()->IsFullscreen());
   const int margin = extend_buttons_to_edge ? interior_margin.left() : 0;
   if (features::IsWebUIBackForwardButtonEnabled()) {
     toolbar_webview_->SetBackButtonLeadingMargin(margin);
@@ -1760,15 +1737,14 @@ gfx::Rect ToolbarView::GetFindBarBoundingBox(int contents_bottom) {
     return gfx::Rect();
   }
 
-  CHECK(location_bar_view_)
-      << "Alternate location bar impls need to handle this.";
+  CHECK(location_bar_);
 
-  if (!location_bar_view_->IsDrawn()) {
+  if (!location_bar_->IsDrawn()) {
     return gfx::Rect();
   }
 
-  gfx::Rect bounds = location_bar_view_->ConvertRectToWidget(
-      location_bar_view_->GetLocalBounds());
+  gfx::Rect bounds = views::View::ConvertRectFromScreen(
+      GetWidget()->GetRootView(), location_bar_->BoundsInScreen());
   return gfx::Rect(bounds.x(), bounds.bottom(), bounds.width(),
                    contents_bottom - bounds.bottom());
 }
@@ -1784,21 +1760,18 @@ views::AccessiblePaneView* ToolbarView::GetAsAccessiblePaneView() {
   return this;
 }
 
-views::BubbleAnchor ToolbarView::FindBubbleAnchor(
+views::BubbleAnchor ToolbarView::GetBubbleAnchor(
     std::optional<actions::ActionId> action_id) {
+  // If a pinned toolbar actions button exists for the action_id, return that.
   if (pinned_toolbar_actions_ && action_id.has_value() &&
       pinned_toolbar_actions_->IsActionPinnedOrPoppedOut(action_id.value())) {
     return pinned_toolbar_actions_->GetBubbleAnchor(action_id.value());
   }
 
-  return features::IsWebUILocationBarEnabled()
-             ? views::BubbleAnchor(location_bar_->GetAnchorOrNull())
-             : views::BubbleAnchor(location_bar_view_);
-}
-
-views::BubbleAnchor ToolbarView::GetBubbleAnchor(
-    std::optional<actions::ActionId> action_id) {
-  auto anchor = FindBubbleAnchor(action_id);
+  // Otherwise attempt to use the location bar.
+  auto anchor = features::IsWebUILocationBarEnabled()
+                    ? views::BubbleAnchor(location_bar_->GetAnchorOrNull())
+                    : views::BubbleAnchor(location_bar_view_);
   bool anchor_not_drawn;
   if (views::View* view = anchor.GetIfView()) {
     anchor_not_drawn = !view->IsDrawn();
@@ -1906,8 +1879,9 @@ void ToolbarView::OnChromeLabsPrefChanged() {
   actions::ActionItem* chrome_labs_action =
       pinned_toolbar_actions_container_->GetActionItemFor(
           kActionShowChromeLabs);
-  chrome_labs_action->SetVisible(show_chrome_labs_button_.GetValue() &&
-                                 ShouldShowChromeLabsUI(browser_->profile()));
+  chrome_labs_action->SetVisible(
+      show_chrome_labs_button_.GetValue() &&
+      ShouldShowChromeLabsUI(browser_->GetProfile()));
   GetViewAccessibility().AnnounceText(l10n_util::GetStringUTF16(
       chrome_labs_action->GetVisible()
           ? IDS_ACCESSIBLE_TEXT_CHROMELABS_BUTTON_ADDED_BY_ENTERPRISE_POLICY

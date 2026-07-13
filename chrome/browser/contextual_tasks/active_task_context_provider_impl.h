@@ -5,6 +5,9 @@
 #ifndef CHROME_BROWSER_CONTEXTUAL_TASKS_ACTIVE_TASK_CONTEXT_PROVIDER_IMPL_H_
 #define CHROME_BROWSER_CONTEXTUAL_TASKS_ACTIVE_TASK_CONTEXT_PROVIDER_IMPL_H_
 
+#include <map>
+#include <set>
+
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -19,6 +22,10 @@
 #include "content/public/browser/web_contents_observer.h"
 
 class BrowserWindowInterface;
+
+namespace contextual_search {
+class ContextualSearchSessionHandle;
+}
 
 namespace contextual_tasks {
 class ContextualTask;
@@ -78,8 +85,10 @@ class ActiveTaskContextProviderImpl : public ActiveTaskContextProvider,
   raw_ptr<BrowserWindowInterface> browser_window_;
   raw_ptr<ContextualTasksService> contextual_tasks_service_;
   raw_ptr<ContextualTasksPanelController> contextual_tasks_panel_controller_;
-  std::set<tabs::TabHandle> local_tab_underlines_;
+  std::map<tabs::TabHandle, std::set<tabs::TabHandle>> local_tab_underlines_;
   std::set<tabs::TabHandle> backend_context_tabs_;
+  base::WeakPtr<contextual_search::ContextualSearchSessionHandle>
+      session_handle_;
 
   // The task associated with the currently active tab.
   std::optional<base::Uuid> active_task_id_;

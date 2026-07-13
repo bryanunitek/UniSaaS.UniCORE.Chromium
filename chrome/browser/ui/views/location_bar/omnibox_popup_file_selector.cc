@@ -8,7 +8,6 @@
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/user_metrics.h"
 #include "base/strings/strcat.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -35,13 +34,12 @@
 #include "components/lens/lens_overlay_mime_type.h"
 #include "components/omnibox/browser/searchbox.mojom.h"
 #include "components/omnibox/common/input_state.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/omnibox/common/omnibox_metrics_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/mime_util.h"
-#include "ui/base/base_window.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
-#include "ui/shell_dialogs/select_file_dialog_factory.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 
 OmniboxPopupFileSelector::OmniboxPopupFileSelector(
@@ -49,6 +47,19 @@ OmniboxPopupFileSelector::OmniboxPopupFileSelector(
     : owning_window_(owning_window) {}
 
 OmniboxPopupFileSelector::~OmniboxPopupFileSelector() = default;
+
+std::optional<lens::ImageEncodingOptions>
+OmniboxPopupFileSelector::CreateImageEncodingOptions() {
+  // TODO(crbug.com/457815342): Use omnibox fieldtrial when available.
+  auto image_upload_config =
+      omnibox::FeatureConfig::Get().config.composebox().image_upload();
+  return lens::ImageEncodingOptions{
+      .enable_webp_encoding = image_upload_config.enable_webp_encoding(),
+      .max_size = image_upload_config.downscale_max_image_size(),
+      .max_height = image_upload_config.downscale_max_image_height(),
+      .max_width = image_upload_config.downscale_max_image_width(),
+      .compression_quality = image_upload_config.image_compression_quality()};
+}
 
 void OmniboxPopupFileSelector::OpenFileUploadDialog(
     content::WebContents* web_contents,
@@ -100,6 +111,15 @@ std::unique_ptr<FileData> ReadFileAndProcess(const base::FilePath& local_path) {
   return file_data;
 }
 
+bool IsImageFile(const base::FilePath& path) {
+  return path.MatchesExtension(FILE_PATH_LITERAL(".png")) ||
+         path.MatchesExtension(FILE_PATH_LITERAL(".jpg")) ||
+         path.MatchesExtension(FILE_PATH_LITERAL(".jpeg")) ||
+         path.MatchesExtension(FILE_PATH_LITERAL(".webp")) ||
+         path.MatchesExtension(FILE_PATH_LITERAL(".gif")) ||
+         path.MatchesExtension(FILE_PATH_LITERAL(".bmp"));
+}
+
 }  // namespace
 
 void OmniboxPopupFileSelector::FileSelected(const ui::SelectedFileInfo& file,
@@ -135,6 +155,7 @@ void OmniboxPopupFileSelector::MultiFilesSelected(
     max_files = kDefaultMaxNumFiles;
   }
 
+  bool has_posted_tasks = false;
   for (const auto& file : files) {
     if (valid_files_count >= max_files) {
       // To trigger the limit error banner on the WebUI frontend without reading
@@ -142,15 +163,25 @@ void OmniboxPopupFileSelector::MultiFilesSelected(
       // pushes a direct validation error to SearchboxContextData.
       // The frontend immediately displays the global limit error toast and
       // deletes this dummy context silently, rendering no failed chip.
+      contextual_search::ContextUploadErrorType error_type =
+          contextual_search::ContextUploadErrorType::
+              kBrowserProcessingMaxFilesExceededError;
+      if (is_image_ || IsImageFile(file.path())) {
+        error_type = contextual_search::ContextUploadErrorType::
+            kBrowserProcessingMaxImagesExceededError;
+      } else if (file.path().MatchesExtension(FILE_PATH_LITERAL(".pdf"))) {
+        error_type = contextual_search::ContextUploadErrorType::
+            kBrowserProcessingMaxPdfsExceededError;
+      }
       UpdateSearchboxContextData(
           lens::MimeType::kUnknown, /*image_data_url=*/"",
           file.path().BaseName().AsUTF8Unsafe(),
           /*mime_string=*/"application/octet-stream",
-          base::unexpected(contextual_search::ContextUploadErrorType::
-                               kBrowserProcessingMaxFilesExceededError));
+          base::unexpected(error_type));
       break;
     }
     valid_files_count++;
+    has_posted_tasks = true;
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce(&ReadFileAndProcess, file.path()),
@@ -158,11 +189,15 @@ void OmniboxPopupFileSelector::MultiFilesSelected(
                        weak_factory_.GetWeakPtr()));
   }
   file_dialog_.reset();
+
+  if (!has_posted_tasks) {
+    edit_model_->OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
+  }
 }
 
 void OmniboxPopupFileSelector::FileSelectionCanceled() {
   if (was_ai_mode_open_) {
-    edit_model_->OpenAiMode(/*via_keyboard=*/false, /*via_context_menu=*/true);
+    edit_model_->OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
   }
 }
 
@@ -186,7 +221,7 @@ void OmniboxPopupFileSelector::OnFileDataReady(
     UpdateSearchboxContextData(lens::MimeType::kUnknown, "", file_data->name,
                                file_data->mime_type,
                                base::ok(base::UnguessableToken::Create()));
-    edit_model_->OpenAiMode(false, /*via_context_menu=*/true);
+    edit_model_->OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
     return;
   }
 
@@ -224,7 +259,7 @@ void OmniboxPopupFileSelector::OnFileDataReady(
     }
   }
 
-  edit_model_->OpenAiMode(false, /*via_context_menu=*/true);
+  edit_model_->OpenAiMode(OmniboxEditModel::AimActivation::kContextMenu);
   const std::string prefix = was_ai_mode_open_
                                  ? kAimContextTypeHistogramPrefix
                                  : kClassicContextTypeHistogramPrefix;

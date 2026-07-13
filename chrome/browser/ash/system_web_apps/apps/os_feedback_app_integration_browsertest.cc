@@ -11,6 +11,7 @@
 #include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
@@ -48,8 +49,11 @@ class OSFeedbackAppIntegrationTest : public ash::SystemWebAppIntegrationTest {
   }
 
   Browser* FindFeedbackAppBrowser() {
-    return ash::FindSystemWebAppBrowser(browser()->profile(),
-                                        ash::SystemWebAppType::OS_FEEDBACK);
+    ash::BrowserDelegate* delegate = ash::FindSystemWebAppBrowser(
+        browser()->GetProfile(), ash::SystemWebAppType::OS_FEEDBACK,
+        ash::BrowserType::kApp);
+    return delegate ? delegate->GetBrowser().GetBrowserForMigrationOnly()
+                    : nullptr;
   }
 
   // Launch the Feedback SWA and wait for launching is completed.
@@ -170,7 +174,7 @@ IN_PROC_BROWSER_TEST_P(OSFeedbackAppIntegrationTest, DefaultWindowBounds) {
   int x = (work_area.width() - expected_width) / 2;
   int y = (work_area.height() - expected_height) / 2;
   EXPECT_EQ(gfx::Rect(x, y, expected_width, expected_height),
-            app_browser->window()->GetBounds());
+            app_browser->GetWindow()->GetBounds());
 }
 
 // Test that when the policy UserFeedbackAllowed is true, the Feedback App

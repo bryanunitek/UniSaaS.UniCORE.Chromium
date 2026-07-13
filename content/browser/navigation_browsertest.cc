@@ -38,11 +38,11 @@
 #include "components/ukm/test_ukm_recorder.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/browser/browser_url_handler_impl.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/navigation_state_keep_alive.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/spare_render_process_host_manager_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
@@ -642,8 +642,7 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest, BrowserInitiatedNavigations) {
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_FALSE(observer.last_initiator_origin().has_value());
     EXPECT_FALSE(observer.last_initiator_frame_token().has_value());
-    EXPECT_EQ(ChildProcessHost::kInvalidUniqueID,
-              observer.last_initiator_process_id());
+    EXPECT_FALSE(observer.last_initiator_process_id());
   }
 
   RenderFrameHost* initial_rfh = current_frame_host();
@@ -657,8 +656,7 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest, BrowserInitiatedNavigations) {
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_FALSE(observer.last_initiator_origin().has_value());
     EXPECT_FALSE(observer.last_initiator_frame_token().has_value());
-    EXPECT_EQ(ChildProcessHost::kInvalidUniqueID,
-              observer.last_initiator_process_id());
+    EXPECT_FALSE(observer.last_initiator_process_id());
   }
 
   RenderFrameHost* second_rfh = current_frame_host();
@@ -680,8 +678,7 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest, BrowserInitiatedNavigations) {
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_FALSE(observer.last_initiator_origin().has_value());
     EXPECT_FALSE(observer.last_initiator_frame_token().has_value());
-    EXPECT_EQ(ChildProcessHost::kInvalidUniqueID,
-              observer.last_initiator_process_id());
+    EXPECT_FALSE(observer.last_initiator_process_id());
   }
 
   // The RenderFrameHost should have changed.
@@ -705,8 +702,7 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
     EXPECT_TRUE(observer.last_navigation_succeeded());
     EXPECT_FALSE(observer.last_initiator_origin().has_value());
     EXPECT_FALSE(observer.last_initiator_frame_token().has_value());
-    EXPECT_EQ(ChildProcessHost::kInvalidUniqueID,
-              observer.last_initiator_process_id());
+    EXPECT_FALSE(observer.last_initiator_process_id());
   }
 
   RenderFrameHost* initial_rfh = current_frame_host();
@@ -732,13 +728,14 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
       EXPECT_NE(current_frame_host(), initial_rfh);
       EXPECT_EQ(initial_rfh_global_token.frame_token,
                 observer.last_initiator_frame_token().value());
+      // TODO(crbug.com/379869738): Remove GetUnsafeValue.
       EXPECT_EQ(initial_rfh_global_token.child_id,
-                observer.last_initiator_process_id());
+                observer.last_initiator_process_id().GetUnsafeValue());
     } else {
       EXPECT_EQ(current_frame_host(), initial_rfh);
       EXPECT_EQ(current_frame_host()->GetFrameToken(),
                 observer.last_initiator_frame_token().value());
-      EXPECT_EQ(current_frame_host()->GetProcess()->GetDeprecatedID(),
+      EXPECT_EQ(current_frame_host()->GetProcess()->GetID(),
                 observer.last_initiator_process_id());
     }
   }
@@ -786,8 +783,9 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
     EXPECT_TRUE(observer.last_initiator_frame_token().has_value());
     EXPECT_EQ(initial_rfh_global_token.frame_token,
               observer.last_initiator_frame_token().value());
+    // TODO(crbug.com/379869738): Remove GetUnsafeValue.
     EXPECT_EQ(initial_rfh_global_token.child_id,
-              observer.last_initiator_process_id());
+              observer.last_initiator_process_id().GetUnsafeValue());
   }
 
   // The RenderFrameHost should have changed unless strict SiteInstances (either
@@ -1338,8 +1336,9 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
     EXPECT_TRUE(observer.last_initiator_frame_token().has_value());
     EXPECT_EQ(initiator_global_token.frame_token,
               observer.last_initiator_frame_token().value());
+    // TODO(crbug.com/379869738): Remove GetUnsafeValue.
     EXPECT_EQ(initiator_global_token.child_id,
-              observer.last_initiator_process_id());
+              observer.last_initiator_process_id().GetUnsafeValue());
   }
 }
 
@@ -1374,8 +1373,9 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
     EXPECT_TRUE(observer.last_initiator_frame_token().has_value());
     EXPECT_EQ(initiator_global_token.frame_token,
               observer.last_initiator_frame_token().value());
+    // TODO(crbug.com/379869738): Remove GetUnsafeValue.
     EXPECT_EQ(initiator_global_token.child_id,
-              observer.last_initiator_process_id());
+              observer.last_initiator_process_id().GetUnsafeValue());
   }
 }
 
@@ -1412,8 +1412,9 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
     EXPECT_TRUE(observer.last_initiator_frame_token().has_value());
     EXPECT_EQ(initiator_global_token.frame_token,
               observer.last_initiator_frame_token().value());
+    // TODO(crbug.com/379869738): Remove GetUnsafeValue.
     EXPECT_EQ(initiator_global_token.child_id,
-              observer.last_initiator_process_id());
+              observer.last_initiator_process_id().GetUnsafeValue());
   }
 }
 
@@ -1488,8 +1489,9 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
     EXPECT_TRUE(observer.last_initiator_frame_token().has_value());
     EXPECT_EQ(initiator_global_token.frame_token,
               observer.last_initiator_frame_token().value());
+    // TODO(crbug.com/379869738): Remove GetUnsafeValue.
     EXPECT_EQ(initiator_global_token.child_id,
-              observer.last_initiator_process_id());
+              observer.last_initiator_process_id().GetUnsafeValue());
   }
 }
 
@@ -3745,7 +3747,7 @@ class GetEffectiveUrlClient : public ContentBrowserTestContentBrowserClient {
   }
 
   bool IsSuitableHost(RenderProcessHost* process_host,
-                      const GURL& site_url) override {
+                      const SecurityPrincipal& security_principal) override {
     if (!disallowed_process_id_) {
       return true;
     }
@@ -4095,24 +4097,17 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
             request->GetInitiatorFrameToken();
         EXPECT_TRUE(frame_token.has_value());
         EXPECT_EQ(initiator_global_token.frame_token, frame_token.value());
+        // TODO(crbug.com/379869738): Remove GetUnsafeValue.
         EXPECT_EQ(initiator_global_token.child_id,
-                  request->GetInitiatorProcessId());
+                  request->GetInitiatorProcessId().GetUnsafeValue());
 
         auto* initiator_rfh = RenderFrameHostImpl::FromFrameToken(
             request->GetInitiatorProcessId(), *frame_token);
         ASSERT_FALSE(initiator_rfh);
 
-        // Even if the initiator RenderFrameHost is gone, its policy container
-        // should still be around since the LocalFrame has not been destroyed
-        // yet.
-        PolicyContainerHost* initiator_policy_container =
-            RenderFrameHostImpl::GetPolicyContainerHost(
-                base::OptionalToPtr(frame_token),
-                request->GetInitiatorProcessId(),
-                web_contents()->GetPrimaryMainFrame()->GetStoragePartition());
-        ASSERT_TRUE(initiator_policy_container);
-        ASSERT_EQ(network::mojom::ReferrerPolicy::kAlways,
-                  initiator_policy_container->referrer_policy());
+        // Even if the initiator RenderFrameHost is gone, a valid initiator
+        // navigation state should have been passed to the navigation request.
+        EXPECT_NE(nullptr, request->GetInitiatorNavigationState());
 
         // Even if the initiator RenderFrameHost is gone, the navigation request
         // (to "about:blank") should have inherited its policy container.
@@ -4189,25 +4184,20 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest, FormSubmissionThenDeleteFrame) {
             request->GetInitiatorFrameToken();
         EXPECT_TRUE(frame_token.has_value());
         EXPECT_EQ(initiator_global_token.frame_token, frame_token.value());
+        // TODO(crbug.com/379869738): Remove GetUnsafeValue.
         EXPECT_EQ(initiator_global_token.child_id,
-                  request->GetInitiatorProcessId());
+                  request->GetInitiatorProcessId().GetUnsafeValue());
 
         auto* deleted_initiator_rfh = RenderFrameHostImpl::FromFrameToken(
             request->GetInitiatorProcessId(), frame_token.value());
         ASSERT_FALSE(deleted_initiator_rfh);
 
-        // Even if the initiator RenderFrameHost is gone, its policy container
-        // should still be around since the LocalFrame has not been destroyed
-        // yet.
-        PolicyContainerHost* initiator_policy_container =
-            RenderFrameHostImpl::GetPolicyContainerHost(
-                base::OptionalToPtr(frame_token),
-                request->GetInitiatorProcessId(),
-                web_contents()->GetPrimaryMainFrame()->GetStoragePartition());
-        ASSERT_TRUE(initiator_policy_container);
-        EXPECT_EQ(network::mojom::ReferrerPolicy::kAlways,
-                  initiator_policy_container->referrer_policy());
+        // Even if the initiator RenderFrameHost is gone, a valid initiator
+        // navigation state should have been passed to the navigation request.
+        EXPECT_NE(nullptr, request->GetInitiatorNavigationState());
 
+        // Even if the initiator RenderFrameHost is gone, the request should
+        // have inherited its policies.
         auto* initiator_policies =
             request->GetInitiatorPolicyContainerPolicies();
         ASSERT_TRUE(initiator_policies);
@@ -4298,24 +4288,21 @@ IN_PROC_BROWSER_TEST_F(NavigationBrowserTest,
             request->GetInitiatorFrameToken();
         EXPECT_TRUE(frame_token.has_value());
         EXPECT_EQ(initiator_global_token.frame_token, frame_token.value());
+        // TODO(crbug.com/379869738): Remove GetUnsafeValue.
         EXPECT_EQ(initiator_global_token.child_id,
-                  request->GetInitiatorProcessId());
+                  request->GetInitiatorProcessId().GetUnsafeValue());
 
         auto* deleted_initiator_rfh = RenderFrameHostImpl::FromFrameToken(
             request->GetInitiatorProcessId(), frame_token.value());
         ASSERT_FALSE(deleted_initiator_rfh);
 
-        // Even if the initiator RenderFrameHost is gone, its policy container
-        // should still be around since the LocalFrame has not been destroyed
-        // yet.
-        PolicyContainerHost* initiator_policy_container =
-            RenderFrameHostImpl::GetPolicyContainerHost(
-                base::OptionalToPtr(frame_token),
-                request->GetInitiatorProcessId(),
-                web_contents()->GetPrimaryMainFrame()->GetStoragePartition());
-        ASSERT_TRUE(initiator_policy_container);
-        EXPECT_EQ(network::mojom::ReferrerPolicy::kAlways,
-                  initiator_policy_container->referrer_policy());
+        // Even if the initiator RenderFrameHost is gone, a valid initiator
+        // navigation state should have been passed to the navigation request.
+        EXPECT_NE(nullptr, request->GetInitiatorNavigationState());
+
+        // Even if the initiator RenderFrameHost is gone, the request should
+        // have inherited its policies.
+        ASSERT_TRUE(request->GetInitiatorPolicyContainerPolicies());
         EXPECT_EQ(
             network::mojom::ReferrerPolicy::kAlways,
             request->GetInitiatorPolicyContainerPolicies()->referrer_policy);
@@ -4485,8 +4472,9 @@ IN_PROC_BROWSER_TEST_F(
             request->GetInitiatorFrameToken();
         EXPECT_TRUE(frame_token.has_value());
         EXPECT_EQ(initiator_global_token.frame_token, frame_token.value());
+        // TODO(crbug.com/379869738): Remove GetUnsafeValue.
         EXPECT_EQ(initiator_global_token.child_id,
-                  request->GetInitiatorProcessId());
+                  request->GetInitiatorProcessId().GetUnsafeValue());
 
         // This is the RenderFrameHost in the WebContents that was forced to
         // `Close()` in the interceptor, so it should be deleted.
@@ -4494,17 +4482,9 @@ IN_PROC_BROWSER_TEST_F(
             request->GetInitiatorProcessId(), frame_token.value());
         EXPECT_FALSE(initiator_rfh);
 
-        // Even if the initiator RenderFrameHost is gone, its
-        // PolicyContainerHost should still be around since the LocalFrame has
-        // not been destroyed yet.
-        PolicyContainerHost* initiator_policy_container =
-            RenderFrameHostImpl::GetPolicyContainerHost(
-                base::OptionalToPtr(frame_token),
-                request->GetInitiatorProcessId(),
-                web_contents()->GetPrimaryMainFrame()->GetStoragePartition());
-        ASSERT_TRUE(initiator_policy_container);
-        EXPECT_EQ(network::mojom::ReferrerPolicy::kAlways,
-                  initiator_policy_container->referrer_policy());
+        // Even if the initiator RenderFrameHost is gone, the request should
+        // have inherited its policies.
+        ASSERT_TRUE(request->GetInitiatorPolicyContainerPolicies());
         EXPECT_EQ(
             network::mojom::ReferrerPolicy::kAlways,
             request->GetInitiatorPolicyContainerPolicies()->referrer_policy);

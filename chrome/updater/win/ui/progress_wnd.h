@@ -83,6 +83,7 @@ class ProgressWnd : public CompleteWnd, public AppInstallProgress {
   FRIEND_TEST_ALL_PREFIXES(ProgressWndTest, OnWaitingToDownload);
   FRIEND_TEST_ALL_PREFIXES(ProgressWndTest, OnWaitingRetryDownload);
   FRIEND_TEST_ALL_PREFIXES(ProgressWndTest, OnPause);
+  FRIEND_TEST_ALL_PREFIXES(ProgressWndTest, OnDownloading);
   FRIEND_TEST_ALL_PREFIXES(ProgressWndTest, OnComplete);
   FRIEND_TEST_ALL_PREFIXES(ProgressWndTest, LaunchCmdLine);
   FRIEND_TEST_ALL_PREFIXES(ProgressWndTest, FlatButtonSubclass);
@@ -153,6 +154,7 @@ class ProgressWnd : public CompleteWnd, public AppInstallProgress {
   void HandleCancelRequest();
   void UpdateWindowRgn();
   void ApplyDpiScaling(int dpi);
+  int GetScaledCornerRadius() const;
 
   void DeterminePostInstallUrls(const ObserverCompletionInfo& info);
 
